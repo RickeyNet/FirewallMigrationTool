@@ -219,8 +219,8 @@ Examples:
     
     # Look through all converted port objects to find pairs
     # If we have both "SERVICE_TCP" and "SERVICE_UDP", then "SERVICE" was split
-    tcp_names = {obj['name'][:-4] for obj in port_objects if obj['name'].endswith('_TCP')}
-    udp_names = {obj['name'][:-4] for obj in port_objects if obj['name'].endswith('_UDP')}
+    tcp_names = {str(obj['name'])[:-4] for obj in port_objects if str(obj['name']).endswith('_TCP')}
+    udp_names = {str(obj['name'])[:-4] for obj in port_objects if str(obj['name']).endswith('_UDP')}
     split_services = tcp_names & udp_names  # Intersection of both sets
     
     if split_services:
