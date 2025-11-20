@@ -13,7 +13,21 @@
 #     fortigate_converter.py          <- This main script (run this one!)
 #     address_converter.py            <- Handles address object conversion
 #     address_group_converter.py      <- Handles address group conversion
+#     service_converter.py            <- Handles service port object conversion
+#     service_group_converter.py      <- Handles service port group conversion
+#     policy_converter.py             <- Handles firewall policy conversion
 #     your_fortigate_config.yaml      <- Your FortiGate configuration file
+
+# OUTPUT FILES:
+#     The script creates THREE separate JSON files:
+#     1. {basename}_addresses_objects.json    <- Network objects only
+#     2. {basename}_addresses_groups.json     <- Network groups only
+#     3. {basename}_services_objects.json     <- Port objects only
+#     4. {basename}_services_groups.json      <- Port groups only
+#     5. {basename}_access_rules.json         <- Firewall access rules
+#     6. {basename}_summary.json              <- Conversion summary statistics
+    
+#     This separation makes it easier to import into FTD in the correct order.
 
 # HOW TO RUN THIS SCRIPT:
 #     1. Save ALL THREE Python files in the same folder
@@ -27,6 +41,17 @@
 #     python fortigate_converter.py fortigate.yaml
 #     python fortigate_converter.py fortigate.yaml -o output.json --pretty
 
+# WHAT GETS CONVERTED:
+#      Address Objects (firewall_address)
+#      Address Groups (firewall_addrgrp)
+#      Service Port Objects (firewall_service_custom)
+#       - Automatically splits TCP and UDP into separate objects
+#      Service Port Groups (firewall_service_group)
+#       - Automatically expands split services in groups
+#      Firewall Policies (firewall_policy)
+#       - Converts to FTD access rules
+#       - Maps accept -> PERMIT, deny -> DENY
+#       - Handles interfaces as security zones
 
 import yaml
 import json
@@ -41,6 +66,7 @@ try:
     from address_group_converter import AddressGroupConverter
     from service_converter import ServiceConverter
     from service_group_converter import ServiceGroupConverter
+    from policy_converter import PolicyConverter
 except ImportError as e:
     print("\n" + "="*60)
     print("ERROR: Missing converter module files!")
@@ -51,7 +77,8 @@ except ImportError as e:
     print("  2. address_group_converter.py")
     print("  3. service_converter.py")
     print("  4. service_group_converter.py")
-    print("  5. fortigate_converter.py (this file)")
+    print("  5. policy_converter.py")
+    print("  6. fortigate_converter.py (this file)")
     print("\n" + "="*60)
     sys.exit(1)
 
@@ -66,9 +93,11 @@ def main():
     3. Initialize converter modules for each object type
     4. Convert address objects
     5. Convert address groups
-    6. Combine all converted objects into one JSON structure
-    7. Save the output JSON file
-    8. Display a summary of what was converted
+    6. Convert service port objects
+    7. Convert service port groups
+    8. Combine all converted objects into two JSON structures (addresses & services)
+    9. Save the output JSON files
+    10. Display a summary of what was converted
     
     Returns:
         0 on success, 1 on error
@@ -83,9 +112,9 @@ def main():
         epilog="""
 Examples:
   python fortigate_converter.py fortigate.yaml
-  python fortigate_converter.py fortigate.yaml -o output.json
+  python fortigate_converter.py fortigate.yaml -o my_config
   python fortigate_converter.py fortigate.yaml --pretty
-  python fortigate_converter.py C:\\configs\\fortigate.yaml -o C:\\output\\ftd.json --pretty
+  python fortigate_converter.py C:\\configs\\fortigate.yaml -o C:\\output\\ftd --pretty
         """
     )
     
@@ -93,7 +122,7 @@ Examples:
     parser.add_argument('input_file', 
                        help='Path to FortiGate YAML configuration file')
     
-    # Optional argument: Where to save the output JSON (default: ftd_config.json)
+    # OPTIONAL argument: Base name for output files (default: ftd_config)
     parser.add_argument('-o', '--output', 
                        help='Base name for output JSON files (default: ftd_config)',
                        default='ftd_config')
@@ -164,6 +193,9 @@ Examples:
     service_converter = ServiceConverter(fg_config)
     service_group_converter = ServiceGroupConverter(fg_config)
     
+    # Create converter instance for firewall policies
+    policy_converter = PolicyConverter(fg_config)
+    
     # ========================================================================
     # STEP 5: Convert address objects
     # ========================================================================
@@ -219,6 +251,7 @@ Examples:
     
     # Look through all converted port objects to find pairs
     # If we have both "SERVICE_TCP" and "SERVICE_UDP", then "SERVICE" was split
+    # Convert names to strings first to handle cases where they might be integers
     tcp_names = {str(obj['name'])[:-4] for obj in port_objects if str(obj['name']).endswith('_TCP')}
     udp_names = {str(obj['name'])[:-4] for obj in port_objects if str(obj['name']).endswith('_UDP')}
     split_services = tcp_names & udp_names  # Intersection of both sets
@@ -242,7 +275,26 @@ Examples:
     print(f"✓ Converted {len(port_groups)} port groups")
     
     # ========================================================================
-    # STEP 10: Organize converted objects into two separate structures
+    # STEP 10: Convert firewall policies to access rules
+    # ========================================================================
+    print("\n" + "-"*60)
+    print("Converting Firewall Policies...")
+    print("-"*60)
+    
+    # Update the policy converter with the list of split services
+    policy_converter.set_split_services(split_services)
+    
+    # Convert FortiGate policies to FTD access rules
+    access_rules = policy_converter.convert()
+    
+    # Get statistics about the conversion
+    policy_stats = policy_converter.get_statistics()
+    print(f"✓ Converted {policy_stats['total_rules']} access rules")
+    print(f"  - PERMIT rules: {policy_stats['permit_rules']}")
+    print(f"  - DENY rules: {policy_stats['deny_rules']}")
+    
+    # ========================================================================
+    # STEP 11: Organize converted objects into three separate structures
     # ========================================================================
     # ADDRESS-RELATED OBJECTS (network objects and groups)
     address_config = {
@@ -256,8 +308,13 @@ Examples:
         "port_groups": port_groups               # Port groups
     }
     
+    # POLICY-RELATED OBJECTS (access rules)
+    policy_config = {
+        "access_rules": access_rules             # Firewall access rules
+    }
+    
     # ========================================================================
-    # STEP 11: Write the output JSON files
+    # STEP 12: Write the output JSON files
     # ========================================================================
     print(f"\n" + "-"*60)
     print(f"Saving output files...")
@@ -267,8 +324,10 @@ Examples:
     # If user specified "ftd_config", we create:
     #   - ftd_config_addresses.json
     #   - ftd_config_services.json
+    #   - ftd_config_policies.json
     address_output = f"{args.output}_addresses.json"
     service_output = f"{args.output}_services.json"
+    policy_output = f"{args.output}_policies.json"
     
     try:
         # ====================================================================
@@ -291,13 +350,23 @@ Examples:
                 json.dump(service_config, f)
         print(f"✓ Service configuration saved to: {service_output}")
         
+        # ====================================================================
+        # Save policy configuration
+        # ====================================================================
+        with open(policy_output, 'w') as f:
+            if args.pretty:
+                json.dump(policy_config, f, indent=2)
+            else:
+                json.dump(policy_config, f)
+        print(f"✓ Policy configuration saved to: {policy_output}")
+        
     except IOError as e:
         print(f"\n✗ ERROR: Could not write output files!")
         print(f"  Details: {e}")
         return 1
     
     # ========================================================================
-    # STEP 12: Display final summary
+    # STEP 13: Display final summary
     # ========================================================================
     print("\n" + "="*60)
     print("CONVERSION COMPLETE")
@@ -310,16 +379,24 @@ Examples:
     print(f"    - TCP:            {service_stats['tcp_objects']}")
     print(f"    - UDP:            {service_stats['udp_objects']}")
     print(f"  Port Groups:        {len(port_groups)}")
+    print(f"\nFirewall Policies ({policy_output}):")
+    print(f"  Access Rules:       {policy_stats['total_rules']}")
+    print(f"    - PERMIT:         {policy_stats['permit_rules']}")
+    print(f"    - DENY:           {policy_stats['deny_rules']}")
     print("\nNext steps:")
     print("  1. Review the generated JSON files")
     print("  2. Test with a small subset first")
-    print("  3. Use FTD FDM API to import address objects first")
-    print("  4. Then import service objects")
-    print("  5. Finally import the groups (which reference the objects)")
-    print("  6. Verify the configuration in FTD")
+    print("  3. Import into FTD in this order:")
+    print("     a) Address objects (from _addresses.json)")
+    print("     b) Address groups (from _addresses.json)")
+    print("     c) Port objects (from _services.json)")
+    print("     d) Port groups (from _services.json)")
+    print("     e) Access rules (from _policies.json)")
+    print("  4. Verify the configuration in FTD")
     print("\n" + "="*60)
     
     return 0
+
 
 # =============================================================================
 # SCRIPT ENTRY POINT
