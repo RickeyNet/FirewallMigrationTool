@@ -62,7 +62,7 @@ class ServiceGroupConverter:
     """
     
     def __init__(self, fortigate_config: Dict[str, Any], 
-                 split_services: Set[str] = None):
+                 split_services: Set[str] = None): # pyright: ignore[reportArgumentType]
         """
         Initialize the converter with FortiGate configuration data.
         

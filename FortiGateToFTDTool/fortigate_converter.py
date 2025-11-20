@@ -1,37 +1,32 @@
+# FortiGate to Cisco FTD Configuration Converter - MAIN SCRIPT
+# =============================================================
+# This is the main script that orchestrates the conversion process.
+# It loads the YAML file, calls the converter modules, and saves the output.
 
+# This modular approach keeps the code organized and easier to maintain.
 
+# REQUIREMENTS:
+#     - Python 3.6 or higher
+#     - PyYAML library (install with: pip install pyyaml)
 
+# FILE STRUCTURE:
+#     fortigate_converter.py          <- This main script (run this one!)
+#     address_converter.py            <- Handles address object conversion
+#     address_group_converter.py      <- Handles address group conversion
+#     your_fortigate_config.yaml      <- Your FortiGate configuration file
 
-"""
-FortiGate to Cisco FTD Configuration Converter - MAIN SCRIPT
-=============================================================
-This is the main script that orchestrates the conversion process.
-It loads the YAML file, calls the converter modules, and saves the output.
-
-This modular approach keeps the code organized and easier to maintain.
-
-REQUIREMENTS:
-    - Python 3.6 or higher
-    - PyYAML library (install with: pip install pyyaml)
-
-FILE STRUCTURE:
-    fortigate_converter.py          <- This main script (run this one!)
-    address_converter.py            <- Handles address object conversion
-    address_group_converter.py      <- Handles address group conversion
-    your_fortigate_config.yaml      <- Your FortiGate configuration file
-
-HOW TO RUN THIS SCRIPT:
-    1. Save ALL THREE Python files in the same folder
-    2. Place your FortiGate YAML file in the SAME FOLDER
-    3. Open terminal/command prompt and navigate to the folder:
-       cd C:\path\to\your\folder
-    4. Run the main script:
-       python fortigate_converter.py your_fortigate_config.yaml
+# HOW TO RUN THIS SCRIPT:
+#     1. Save ALL THREE Python files in the same folder
+#     2. Place your FortiGate YAML file in the SAME FOLDER
+#     3. Open terminal/command prompt and navigate to the folder:
+#        cd C:\path\to\your\folder
+#     4. Run the main script:
+#        python fortigate_converter.py your_fortigate_config.yaml
     
-    EXAMPLES:
-    python fortigate_converter.py fortigate.yaml
-    python fortigate_converter.py fortigate.yaml -o output.json --pretty
-"""
+#     EXAMPLES:
+#     python fortigate_converter.py fortigate.yaml
+#     python fortigate_converter.py fortigate.yaml -o output.json --pretty
+
 
 import yaml
 import json
