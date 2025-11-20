@@ -1,32 +1,37 @@
-# FortiGate to Cisco FTD Configuration Converter - MAIN SCRIPT
-# =============================================================
-# This is the main script that orchestrates the conversion process.
-# It loads the YAML file, calls the converter modules, and saves the output.
 
-# This modular approach keeps the code organized and easier to maintain.
 
-# REQUIREMENTS:
-#     - Python 3.6 or higher
-#     - PyYAML library (install with: pip install pyyaml)
 
-# FILE STRUCTURE:
-#     fortigate_converter.py          <- This main script (run this one!)
-#     address_converter.py            <- Handles address object conversion
-#     address_group_converter.py      <- Handles address group conversion
-#     your_fortigate_config.yaml      <- Your FortiGate configuration file
 
-# HOW TO RUN THIS SCRIPT:
-#     1. Save ALL THREE Python files in the same folder
-#     2. Place your FortiGate YAML file in the SAME FOLDER
-#     3. Open terminal/command prompt and navigate to the folder:
-#        cd C:\path\to\your\folder
-#     4. Run the main script:
-#        python fortigate_converter.py your_fortigate_config.yaml
+"""
+FortiGate to Cisco FTD Configuration Converter - MAIN SCRIPT
+=============================================================
+This is the main script that orchestrates the conversion process.
+It loads the YAML file, calls the converter modules, and saves the output.
+
+This modular approach keeps the code organized and easier to maintain.
+
+REQUIREMENTS:
+    - Python 3.6 or higher
+    - PyYAML library (install with: pip install pyyaml)
+
+FILE STRUCTURE:
+    fortigate_converter.py          <- This main script (run this one!)
+    address_converter.py            <- Handles address object conversion
+    address_group_converter.py      <- Handles address group conversion
+    your_fortigate_config.yaml      <- Your FortiGate configuration file
+
+HOW TO RUN THIS SCRIPT:
+    1. Save ALL THREE Python files in the same folder
+    2. Place your FortiGate YAML file in the SAME FOLDER
+    3. Open terminal/command prompt and navigate to the folder:
+       cd C:\path\to\your\folder
+    4. Run the main script:
+       python fortigate_converter.py your_fortigate_config.yaml
     
-#     EXAMPLES:
-#     python fortigate_converter.py fortigate.yaml
-#     python fortigate_converter.py fortigate.yaml -o output.json --pretty
-#!/usr/bin/env python3
+    EXAMPLES:
+    python fortigate_converter.py fortigate.yaml
+    python fortigate_converter.py fortigate.yaml -o output.json --pretty
+"""
 
 import yaml
 import json
@@ -39,6 +44,8 @@ from pathlib import Path
 try:
     from address_converter import AddressConverter
     from address_group_converter import AddressGroupConverter
+    from service_converter import ServiceConverter
+    from service_group_converter import ServiceGroupConverter
 except ImportError as e:
     print("\n" + "="*60)
     print("ERROR: Missing converter module files!")
@@ -47,7 +54,9 @@ except ImportError as e:
     print("\nMake sure these files are in the same folder as this script:")
     print("  1. address_converter.py")
     print("  2. address_group_converter.py")
-    print("  3. fortigate_converter.py (this file)")
+    print("  3. service_converter.py")
+    print("  4. service_group_converter.py")
+    print("  5. fortigate_converter.py (this file)")
     print("\n" + "="*60)
     sys.exit(1)
 
@@ -89,10 +98,10 @@ Examples:
     parser.add_argument('input_file', 
                        help='Path to FortiGate YAML configuration file')
     
-    # OPTIONAL argument: Where to save the output JSON (default: ftd_config.json)
+    # Optional argument: Where to save the output JSON (default: ftd_config.json)
     parser.add_argument('-o', '--output', 
-                       help='Output JSON file path (default: ftd_config.json)',
-                       default='ftd_config.json')
+                       help='Base name for output JSON files (default: ftd_config)',
+                       default='ftd_config')
     
     # OPTIONAL flag: Make the JSON output human-readable with indentation
     parser.add_argument('-p', '--pretty', 
@@ -152,11 +161,13 @@ Examples:
     # Each converter module is responsible for one type of object
     print("\nInitializing converters...")
     
-    # Create an AddressConverter instance with the FortiGate config
+    # Create converter instances for address-related objects
     address_converter = AddressConverter(fg_config)
-    
-    # Create an AddressGroupConverter instance with the FortiGate config
     address_group_converter = AddressGroupConverter(fg_config)
+    
+    # Create converter instances for service-related objects
+    service_converter = ServiceConverter(fg_config)
+    service_group_converter = ServiceGroupConverter(fg_config)
     
     # ========================================================================
     # STEP 5: Convert address objects
@@ -185,65 +196,139 @@ Examples:
     print(f"✓ Converted {len(network_groups)} address groups")
     
     # ========================================================================
-    # STEP 7: Combine all converted objects into final structure
+    # STEP 7: Convert service port objects
     # ========================================================================
-    # This is the final JSON structure that will be saved to the output file
-    # It's organized by object type for easy API consumption
-    ftd_config = {
+    print("\n" + "-"*60)
+    print("Converting Service Port Objects...")
+    print("-"*60)
+    
+    # Convert FortiGate services to FTD port objects
+    # This handles splitting services with both TCP and UDP into separate objects
+    port_objects = service_converter.convert()
+    
+    # Get statistics about the conversion
+    service_stats = service_converter.get_statistics()
+    print(f"✓ Converted {service_stats['total_objects']} port objects")
+    print(f"  - TCP objects: {service_stats['tcp_objects']}")
+    print(f"  - UDP objects: {service_stats['udp_objects']}")
+    print(f"  - Services split into TCP+UDP: {service_stats['split_services']}")
+    if service_stats['skipped_services'] > 0:
+        print(f"  - Skipped (non-port protocols): {service_stats['skipped_services']}")
+    
+    # ========================================================================
+    # STEP 8: Identify split services for group processing
+    # ========================================================================
+    # Build a set of service names that were split into TCP and UDP
+    # This is needed so the group converter knows to expand these members
+    split_services = set()
+    
+    # Look through all converted port objects to find pairs
+    # If we have both "SERVICE_TCP" and "SERVICE_UDP", then "SERVICE" was split
+    tcp_names = {obj['name'][:-4] for obj in port_objects if obj['name'].endswith('_TCP')}
+    udp_names = {obj['name'][:-4] for obj in port_objects if obj['name'].endswith('_UDP')}
+    split_services = tcp_names & udp_names  # Intersection of both sets
+    
+    if split_services:
+        print(f"\n  Services split into TCP and UDP: {', '.join(sorted(split_services))}")
+    
+    # ========================================================================
+    # STEP 9: Convert service port groups
+    # ========================================================================
+    print("\n" + "-"*60)
+    print("Converting Service Port Groups...")
+    print("-"*60)
+    
+    # Update the service group converter with the list of split services
+    service_group_converter.set_split_services(split_services)
+    
+    # Convert FortiGate service groups to FTD port groups
+    port_groups = service_group_converter.convert()
+    
+    print(f"✓ Converted {len(port_groups)} port groups")
+    
+    # ========================================================================
+    # STEP 10: Organize converted objects into two separate structures
+    # ========================================================================
+    # ADDRESS-RELATED OBJECTS (network objects and groups)
+    address_config = {
         "network_objects": network_objects,      # Individual address objects
-        "network_groups": network_groups,        # Address groups
-        # Future object types can be added here:
-        # "port_objects": [],
-        # "port_groups": [],
-        # "access_policies": [],
+        "network_groups": network_groups         # Address groups
+    }
+    
+    # SERVICE-RELATED OBJECTS (port objects and groups)
+    service_config = {
+        "port_objects": port_objects,            # Individual port objects (TCP/UDP)
+        "port_groups": port_groups               # Port groups
     }
     
     # ========================================================================
-    # STEP 8: Write the output JSON file
+    # STEP 11: Write the output JSON files
     # ========================================================================
     print(f"\n" + "-"*60)
-    print(f"Saving output to: {args.output}")
+    print(f"Saving output files...")
     print("-"*60)
     
+    # Generate output filenames based on the base name provided
+    # If user specified "ftd_config", we create:
+    #   - ftd_config_addresses.json
+    #   - ftd_config_services.json
+    address_output = f"{args.output}_addresses.json"
+    service_output = f"{args.output}_services.json"
+    
     try:
-        # Open the output file in write mode
-        with open(args.output, 'w') as f:
+        # ====================================================================
+        # Save address configuration
+        # ====================================================================
+        with open(address_output, 'w') as f:
             if args.pretty:
-                # Pretty print: Add indentation and newlines for readability
-                # indent=2 means each level is indented by 2 spaces
-                json.dump(ftd_config, f, indent=2)
+                json.dump(address_config, f, indent=2)
             else:
-                # Compact format: No extra whitespace, smaller file size
-                json.dump(ftd_config, f)
+                json.dump(address_config, f)
+        print(f"✓ Address configuration saved to: {address_output}")
         
-        print("✓ JSON file created successfully")
+        # ====================================================================
+        # Save service configuration
+        # ====================================================================
+        with open(service_output, 'w') as f:
+            if args.pretty:
+                json.dump(service_config, f, indent=2)
+            else:
+                json.dump(service_config, f)
+        print(f"✓ Service configuration saved to: {service_output}")
         
     except IOError as e:
-        # This error occurs if we can't write to the output file
-        # (e.g., no permission, disk full, invalid path)
-        print(f"\n✗ ERROR: Could not write output file!")
+        print(f"\n✗ ERROR: Could not write output files!")
         print(f"  Details: {e}")
         return 1
     
     # ========================================================================
-    # STEP 9: Display final summary
+    # STEP 12: Display final summary
     # ========================================================================
     print("\n" + "="*60)
     print("CONVERSION COMPLETE")
     print("="*60)
-    print(f"\nSummary:")
+    print(f"\nAddress-Related Objects ({address_output}):")
     print(f"  Network Objects:    {len(network_objects)}")
     print(f"  Network Groups:     {len(network_groups)}")
-    print(f"\nOutput saved to: {args.output}")
+    print(f"\nService-Related Objects ({service_output}):")
+    print(f"  Port Objects:       {service_stats['total_objects']}")
+    print(f"    - TCP:            {service_stats['tcp_objects']}")
+    print(f"    - UDP:            {service_stats['udp_objects']}")
+    print(f"  Port Groups:        {len(port_groups)}")
     print("\nNext steps:")
-    print("  1. Review the generated JSON file")
+    print("  1. Review the generated JSON files")
     print("  2. Test with a small subset first")
-    print("  3. Use FTD FDM API to import the objects")
-    print("  4. Verify the configuration in FTD")
+    print("  3. Use FTD FDM API to import address objects first")
+    print("  4. Then import service objects")
+    print("  5. Finally import the groups (which reference the objects)")
+    print("  6. Verify the configuration in FTD")
     print("\n" + "="*60)
     
     return 0
 
+# =============================================================================
+# SCRIPT ENTRY POINT
+# =============================================================================
 
 # This is the entry point of the script
 # When you run "python fortigate_converter.py", execution starts here
