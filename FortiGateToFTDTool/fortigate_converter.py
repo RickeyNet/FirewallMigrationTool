@@ -294,24 +294,11 @@ Examples:
     print(f"  - DENY rules: {policy_stats['deny_rules']}")
     
     # ========================================================================
-    # STEP 11: Organize converted objects into three separate structures
+    # STEP 11: Prepare individual data structures for separate files
     # ========================================================================
-    # ADDRESS-RELATED OBJECTS (network objects and groups)
-    address_config = {
-        "network_objects": network_objects,      # Individual address objects
-        "network_groups": network_groups         # Address groups
-    }
+    # Each object type gets its own file for easier, sequential import
+    # No need to wrap in containers - each file contains just the array
     
-    # SERVICE-RELATED OBJECTS (port objects and groups)
-    service_config = {
-        "port_objects": port_objects,            # Individual port objects (TCP/UDP)
-        "port_groups": port_groups               # Port groups
-    }
-    
-    # POLICY-RELATED OBJECTS (access rules)
-    policy_config = {
-        "access_rules": access_rules             # Firewall access rules
-    }
     
     # ========================================================================
     # STEP 12: Write the output JSON files
@@ -321,44 +308,89 @@ Examples:
     print("-"*60)
     
     # Generate output filenames based on the base name provided
-    # If user specified "ftd_config", we create:
-    #   - ftd_config_addresses.json
-    #   - ftd_config_services.json
-    #   - ftd_config_policies.json
-    address_output = f"{args.output}_addresses.json"
-    service_output = f"{args.output}_services.json"
-    policy_output = f"{args.output}_policies.json"
+    # If user specified "ftd_config", we create 6 separate files
+    address_objects_output = f"{args.output}_address_objects.json"
+    address_groups_output = f"{args.output}_address_groups.json"
+    service_objects_output = f"{args.output}_service_objects.json"
+    service_groups_output = f"{args.output}_service_groups.json"
+    access_rules_output = f"{args.output}_access_rules.json"
+    summary_output = f"{args.output}_summary.json"
     
     try:
         # ====================================================================
-        # Save address configuration
+        # Save address objects
         # ====================================================================
-        with open(address_output, 'w') as f:
+        with open(address_objects_output, 'w') as f:
             if args.pretty:
-                json.dump(address_config, f, indent=2)
+                json.dump(network_objects, f, indent=2)
             else:
-                json.dump(address_config, f)
-        print(f"✓ Address configuration saved to: {address_output}")
+                json.dump(network_objects, f)
+        print(f"✓ Address objects saved to: {address_objects_output}")
+
+        # ====================================================================
+        # Save address groups
+        # ====================================================================
+        with open(address_groups_output, 'w') as f:
+            if args.pretty:
+                json.dump(network_groups, f, indent=2)
+            else:
+                json.dump(network_groups, f)
+        print(f"✓ Address groups saved to: {address_groups_output}")
         
         # ====================================================================
-        # Save service configuration
+        # Save service port objects
         # ====================================================================
-        with open(service_output, 'w') as f:
+        with open(service_objects_output, 'w') as f:
             if args.pretty:
-                json.dump(service_config, f, indent=2)
+                json.dump(port_objects, f, indent=2)
             else:
-                json.dump(service_config, f)
-        print(f"✓ Service configuration saved to: {service_output}")
+                json.dump(port_objects, f)
+        print(f"✓ Service objects saved to: {service_objects_output}")
+
+        # ====================================================================
+        # Save service port groups
+        # ====================================================================
+        with open(service_groups_output, 'w') as f:
+            if args.pretty:
+                json.dump(port_groups, f, indent=2)
+            else:
+                json.dump(port_groups, f)
+        print(f"✓ Service groups saved to: {service_groups_output}")
         
         # ====================================================================
-        # Save policy configuration
+        # Save access rules
         # ====================================================================
-        with open(policy_output, 'w') as f:
+        with open(access_rules_output, 'w') as f:
             if args.pretty:
-                json.dump(policy_config, f, indent=2)
+                json.dump(access_rules, f, indent=2)
             else:
-                json.dump(policy_config, f)
-        print(f"✓ Policy configuration saved to: {policy_output}")
+                json.dump(access_rules, f)
+        print(f"✓ Access rules saved to: {access_rules_output}")
+
+        # ====================================================================
+        # Save summary statistics
+        # ====================================================================
+        summary = {
+            "conversion_summary": {
+                "address_objects": len(network_objects),
+                "address_groups": len(network_groups),
+                "service_objects": {
+                    "total": service_stats['total_objects'],
+                    "tcp": service_stats['tcp_objects'],
+                    "udp": service_stats['udp_objects'],
+                    "split": service_stats['split_services']
+                },
+                "service_groups": len(port_groups),
+                "access_rules": {
+                    "total": policy_stats['total_rules'],
+                    "permit": policy_stats['permit_rules'],
+                    "deny": policy_stats['deny_rules']
+                }
+            }
+        }
+        with open(summary_output, 'w') as f:
+            json.dump(summary, f, indent=2)
+        print(f"✓ Summary saved to: {summary_output}")
         
     except IOError as e:
         print(f"\n✗ ERROR: Could not write output files!")
