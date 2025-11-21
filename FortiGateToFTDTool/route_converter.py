@@ -59,7 +59,7 @@ from typing import Dict, List, Any, Tuple
 class RouteConverter:
     """
     Converter class for transforming FortiGate static routes to FTD route entries.
-
+    
     This class is responsible for:
     1. Reading the 'router_static' section from FortiGate YAML
     2. Extracting route information (destination, gateway, interface, metric)
@@ -68,30 +68,30 @@ class RouteConverter:
     5. Converting to FTD's staticrouteentry format
     6. Handling special cases (blackhole routes, default routes)
     """
-
+    
     def __init__(self, fortigate_config: Dict[str, Any]):
         """
         Initialize the converter with FortiGate configuration data.
-
+        
         Args:
             fortigate_config: Dictionary containing the complete parsed FortiGate YAML
-                                Expected to have a 'router_static' key with route data
+                             Expected to have a 'router_static' key with route data
         """
         # Store the entire FortiGate configuration
         self.fg_config = fortigate_config
-
+        
         # This will store the converted FTD static routes
         self.ftd_static_routes = []
-
+        
         # Track statistics
         self.converted_count = 0
         self.blackhole_count = 0
         self.skipped_count = 0
-
-    def conver(self) -> list[Dict]:
+    
+    def convert(self) -> List[Dict]:
         """
         Main conversion method - converts all FortiGate static routes to FTD format.
-
+        
         CONVERSION PROCESS:
         1. Extract the 'router_static' list from FortiGate config
         2. Loop through each route entry
@@ -103,18 +103,18 @@ class RouteConverter:
         8. Extract metric/distance
         9. Create FTD staticrouteentry structure
         10. Return the complete list of converted routes
-
-        returns:
+        
+        Returns:
             List of dictionaries, each representing an FTD static route entry
         """
         # ====================================================================
         # STEP 1: Extract static routes from FortiGate configuration
         # ====================================================================
         routes = self.fg_config.get('router_static', [])
-
+        
         if not routes:
             print("Warning: No static routes found in FortiGate configuration")
-            print(" Expected key: 'router_static'")
+            print("  Expected key: 'router_static'")
             return []
         
         # This list will accumulate all converted routes
@@ -140,7 +140,7 @@ class RouteConverter:
                 self.blackhole_count += 1
                 print(f"  Skipped: Route [{route_id}] - Blackhole route")
                 continue
-
+            
             # ================================================================
             # STEP 2C: Extract destination network
             # ================================================================
@@ -149,7 +149,7 @@ class RouteConverter:
                 print(f"  Skipped: Route [{route_id}] - No destination specified")
                 self.skipped_count += 1
                 continue
-
+            
             # Convert destination to CIDR format
             dst_network = self._format_destination(dst)
             dst_name = self._create_network_name(dst)
@@ -162,7 +162,7 @@ class RouteConverter:
                 print(f"  Skipped: Route [{route_id}] - No gateway specified")
                 self.skipped_count += 1
                 continue
-
+            
             # Create a name for the gateway object
             gateway_name = self._create_gateway_name(gateway_ip, properties)
             
@@ -212,16 +212,16 @@ class RouteConverter:
             # Add the converted route to our result list
             static_routes.append(ftd_route)
             self.converted_count += 1
-
+            
             # ================================================================
             # STEP 2I: Print conversion details for user feedback
             # ================================================================
-            print(f" Converted: [{route_id}] {route_name}")
+            print(f"  Converted: [{route_id}] {route_name}")
             print(f"    Destination: {dst_name} ({dst_network})")
             print(f"    Gateway: {gateway_name}")
             print(f"    Interface: {interface_name}")
             print(f"    Metric: {metric}")
-
+        
         # ====================================================================
         # STEP 3: Store results and return
         # ====================================================================

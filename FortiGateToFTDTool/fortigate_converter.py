@@ -16,16 +16,18 @@
 #     service_converter.py            <- Handles service port object conversion
 #     service_group_converter.py      <- Handles service port group conversion
 #     policy_converter.py             <- Handles firewall policy conversion
+#     route_converter.py              <- Handles static route conversion
 #     your_fortigate_config.yaml      <- Your FortiGate configuration file
 
 # OUTPUT FILES:
-#     The script creates THREE separate JSON files:
-#     1. {basename}_addresses_objects.json    <- Network objects only
-#     2. {basename}_addresses_groups.json     <- Network groups only
-#     3. {basename}_services_objects.json     <- Port objects only
-#     4. {basename}_services_groups.json      <- Port groups only
-#     5. {basename}_access_rules.json         <- Firewall access rules
-#     6. {basename}_summary.json              <- Conversion summary statistics
+#     The script creates SEVEN separate JSON files for easier import:
+#     1. {basename}_address_objects.json    <- Network objects only
+#     2. {basename}_address_groups.json     <- Network groups only
+#     3. {basename}_service_objects.json    <- Port objects only
+#     4. {basename}_service_groups.json     <- Port groups only
+#     5. {basename}_access_rules.json       <- Firewall access rules
+#     6. {basename}_static_routes.json      <- Static routes
+#     7. {basename}_summary.json            <- Conversion summary statistics
     
 #     This separation makes it easier to import into FTD in the correct order.
 
@@ -52,6 +54,12 @@
 #       - Converts to FTD access rules
 #       - Maps accept -> PERMIT, deny -> DENY
 #       - Handles interfaces as security zones
+#       Static Routes (router_static)
+#       - Converts to FTD static route entries
+#       - Creates network object references for destinations and gateways
+#       - Skips blackhole routes
+
+
 
 import yaml
 import json
@@ -67,6 +75,7 @@ try:
     from service_converter import ServiceConverter
     from service_group_converter import ServiceGroupConverter
     from policy_converter import PolicyConverter
+    from route_converter import RouteConverter
 except ImportError as e:
     print("\n" + "="*60)
     print("ERROR: Missing converter module files!")
@@ -78,7 +87,8 @@ except ImportError as e:
     print("  3. service_converter.py")
     print("  4. service_group_converter.py")
     print("  5. policy_converter.py")
-    print("  6. fortigate_converter.py (this file)")
+    print("  6. route_converter.py")
+    print("  7. fortigate_converter.py (this file)")
     print("\n" + "="*60)
     sys.exit(1)
 
@@ -95,9 +105,10 @@ def main():
     5. Convert address groups
     6. Convert service port objects
     7. Convert service port groups
-    8. Combine all converted objects into two JSON structures (addresses & services)
-    9. Save the output JSON files
-    10. Display a summary of what was converted
+    8. Convert firewall policies
+    9. Convert static routes
+    10. Save each object type to its own JSON file
+    11. Display a summary of what was converted
     
     Returns:
         0 on success, 1 on error
@@ -195,6 +206,9 @@ Examples:
     
     # Create converter instance for firewall policies
     policy_converter = PolicyConverter(fg_config)
+    
+    # Create converter instance for static routes
+    route_converter = RouteConverter(fg_config)
     
     # ========================================================================
     # STEP 5: Convert address objects
@@ -294,26 +308,44 @@ Examples:
     print(f"  - DENY rules: {policy_stats['deny_rules']}")
     
     # ========================================================================
-    # STEP 11: Prepare individual data structures for separate files
+    # STEP 11: Convert static routes
+    # ========================================================================
+    print("\n" + "-"*60)
+    print("Converting Static Routes...")
+    print("-"*60)
+    
+    # Convert FortiGate static routes to FTD route entries
+    static_routes = route_converter.convert()
+    
+    # Get statistics about the conversion
+    route_stats = route_converter.get_statistics()
+    print(f"✓ Converted {route_stats['total_routes']} static routes")
+    if route_stats['blackhole_skipped'] > 0:
+        print(f"  - Blackhole routes skipped: {route_stats['blackhole_skipped']}")
+    if route_stats['other_skipped'] > 0:
+        print(f"  - Other routes skipped: {route_stats['other_skipped']}")
+    
+    # ========================================================================
+    # STEP 12: Prepare individual data structures for separate files
     # ========================================================================
     # Each object type gets its own file for easier, sequential import
     # No need to wrap in containers - each file contains just the array
     
-    
     # ========================================================================
-    # STEP 12: Write the output JSON files
+    # STEP 13: Write the output JSON files
     # ========================================================================
     print(f"\n" + "-"*60)
     print(f"Saving output files...")
     print("-"*60)
     
     # Generate output filenames based on the base name provided
-    # If user specified "ftd_config", we create 6 separate files
+    # If user specified "ftd_config", we create 7 separate files
     address_objects_output = f"{args.output}_address_objects.json"
     address_groups_output = f"{args.output}_address_groups.json"
     service_objects_output = f"{args.output}_service_objects.json"
     service_groups_output = f"{args.output}_service_groups.json"
     access_rules_output = f"{args.output}_access_rules.json"
+    static_routes_output = f"{args.output}_static_routes.json"
     summary_output = f"{args.output}_summary.json"
     
     try:
@@ -326,7 +358,7 @@ Examples:
             else:
                 json.dump(network_objects, f)
         print(f"✓ Address objects saved to: {address_objects_output}")
-
+        
         # ====================================================================
         # Save address groups
         # ====================================================================
@@ -346,7 +378,7 @@ Examples:
             else:
                 json.dump(port_objects, f)
         print(f"✓ Service objects saved to: {service_objects_output}")
-
+        
         # ====================================================================
         # Save service port groups
         # ====================================================================
@@ -366,7 +398,17 @@ Examples:
             else:
                 json.dump(access_rules, f)
         print(f"✓ Access rules saved to: {access_rules_output}")
-
+        
+        # ====================================================================
+        # Save static routes
+        # ====================================================================
+        with open(static_routes_output, 'w') as f:
+            if args.pretty:
+                json.dump(static_routes, f, indent=2)
+            else:
+                json.dump(static_routes, f)
+        print(f"✓ Static routes saved to: {static_routes_output}")
+        
         # ====================================================================
         # Save summary statistics
         # ====================================================================
@@ -385,6 +427,12 @@ Examples:
                     "total": policy_stats['total_rules'],
                     "permit": policy_stats['permit_rules'],
                     "deny": policy_stats['deny_rules']
+                },
+                "static_routes": {
+                    "total": route_stats['total_routes'],
+                    "converted": route_stats['converted'],
+                    "blackhole_skipped": route_stats['blackhole_skipped'],
+                    "other_skipped": route_stats['other_skipped']
                 }
             }
         }
@@ -398,38 +446,41 @@ Examples:
         return 1
     
     # ========================================================================
-    # STEP 13: Display final summary
+    # STEP 14: Display final summary
     # ========================================================================
     print("\n" + "="*60)
     print("CONVERSION COMPLETE")
     print("="*60)
     print(f"\nOutput Files Created:")
-    print(f"    1. {address_objects_output}")
-    print(f"      - Network Objects: {len(network_objects)}")
+    print(f"  1. {address_objects_output}")
+    print(f"     - Network Objects: {len(network_objects)}")
     print(f"\n  2. {address_groups_output}")
-    print(f"      - Network Groups: {len(network_groups)}")
+    print(f"     - Network Groups: {len(network_groups)}")
     print(f"\n  3. {service_objects_output}")
-    print(f"      - Port Objects: {service_stats['total_objects']}")
-    print(f"        (TCP: {service_stats['tcp_objects']}, UDP: {service_stats['udp_objects']})")
+    print(f"     - Port Objects: {service_stats['total_objects']}")
+    print(f"       (TCP: {service_stats['tcp_objects']}, UDP: {service_stats['udp_objects']})")
+    print(f"\n  4. {service_groups_output}")
+    print(f"     - Port Groups: {len(port_groups)}")
     print(f"\n  5. {access_rules_output}")
-    print(f"      -Port Groups: {len(port_groups)}")
-    print(f"\n  5. {access_rules_output}")
-    print(f"      - Access Rules: {policy_stats['total_rules']}")
-    print(f"        (PERMIT: {policy_stats['permit_rules']}, DENY: {policy_stats['deny_rules']})")
-    print(f"\n  6. {summary_output}")
-    print(f"      - Conversion statistics")
+    print(f"     - Access Rules: {policy_stats['total_rules']}")
+    print(f"       (PERMIT: {policy_stats['permit_rules']}, DENY: {policy_stats['deny_rules']})")
+    print(f"\n  6. {static_routes_output}")
+    print(f"     - Static Routes: {route_stats['total_routes']}")
+    print(f"       (Converted: {route_stats['converted']}, Skipped: {route_stats['blackhole_skipped'] + route_stats['other_skipped']})")
+    print(f"\n  7. {summary_output}")
+    print(f"     - Conversion statistics")
     print("\n" + "="*60)
     print("IMPORT ORDER FOR FTD FDM API:")
     print("="*60)
-    print("     1. Import address objects first")
-    print("     2. Import address groups second")
-    print("     3. Import service objects third")
-    print("     4. Import service groups fourth")
-    print("     5. Import access rules last")
+    print("  1. Import address objects first")
+    print("  2. Import address groups second")
+    print("  3. Import service objects third")
+    print("  4. Import service groups fourth")
+    print("  5. Import static routes fifth")
+    print("  6. Import access rules last")
     print("\nThis order ensures referenced objects exist before importing")
     print("objects that reference them.")
     print("\n" + "="*60)
-
     
     return 0
 
