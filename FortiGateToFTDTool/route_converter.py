@@ -52,3 +52,76 @@ IMPORTANT NOTES:
     - Blackhole routes are skipped (or handled specially)
     - Default routes (0.0.0.0/0) are converted to "any-ipv4" reference
 """
+
+from typing import Dict, List, Any, Tuple
+
+
+class RouteConverter:
+    """
+    Converter class for transforming FortiGate static routes to FTD route entries.
+
+    This class is responsible for:
+    1. Reading the 'router_static' section from FortiGate YAML
+    2. Extracting route information (destination, gateway, interface, metric)
+    3. Converting IP addresses to network object references
+    4. Mapping FortiGate interfaces to FTD interfaces
+    5. Converting to FTD's staticrouteentry format
+    6. Handling special cases (blackhole routes, default routes)
+    """
+
+    def __init__(self, fortigate_config: Dict[str, Any]):
+        """
+        Initialize the converter with FortiGate configuration data.
+
+        Args:
+            fortigate_config: Dictionary containing the complete parsed FortiGate YAML
+                                Expected to have a 'router_static' key with route data
+        """
+        # Store the entire FortiGate configuration
+        self.fg_config = fortigate_config
+
+        # This will store the converted FTD static routes
+        self.ftd_static_routes = []
+
+        # Track statistics
+        self.converted_count = 0
+        self.blackhole_count = 0
+        self.skipped_count = 0
+
+    def conver(self) -> list[Dict]:
+        """
+        Main conversion method - converts all FortiGate static routes to FTD format.
+
+        CONVERSION PROCESS:
+        1. Extract the 'router_static' list from FortiGate config
+        2. Loop through each route entry
+        3. Extract the route ID and properties
+        4. Check if it's a blackhole route (skip or handle specially)
+        5. Extract destination network and convert to CIDR
+        6. Extract gateway IP
+        7. Extract interface name
+        8. Extract metric/distance
+        9. Create FTD staticrouteentry structure
+        10. Return the complete list of converted routes
+
+        returns:
+            List of dictionaries, each representing an FTD static route entry
+        """
+        # ====================================================================
+        # STEP 1: Extract static routes from FortiGate configuration
+        # ====================================================================
+        routes = self.fg_config.get('router_static', [])
+
+        if not routes:
+            print("Warning: No static routes found in FortiGate configuration")
+            print(" Expected key: 'router_static'")
+            return []
+        
+        # This list will accumulate all converted routes
+        static_routes = []
+        
+        # ====================================================================
+        # STEP 2: Process each FortiGate static route
+        # ====================================================================
+        for route_dict in routes:
+            
