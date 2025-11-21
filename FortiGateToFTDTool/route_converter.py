@@ -213,4 +213,216 @@ class RouteConverter:
             static_routes.append(ftd_route)
             self.converted_count += 1
 
-            # STEP 2I:
+            # ================================================================
+            # STEP 2I: Print conversion details for user feedback
+            # ================================================================
+            print(f" Converted: [{route_id}] {route_name}")
+            print(f"    Destination: {dst_name} ({dst_network})")
+            print(f"    Gateway: {gateway_name}")
+            print(f"    Interface: {interface_name}")
+            print(f"    Metric: {metric}")
+
+        # ====================================================================
+        # STEP 3: Store results and return
+        # ====================================================================
+        self.ftd_static_routes = static_routes
+        return static_routes
+    
+    def _format_destination(self, dst: List) -> str:
+        """
+        Convert FortiGate destination format to CIDR notation.
+        
+        FortiGate format: [IP, NETMASK]
+        FTD format: IP/CIDR
+        
+        Args:
+            dst: List containing [IP_address, netmask]
+            
+        Returns:
+            String in CIDR format (e.g., "10.0.20.0/24")
+        """
+        if len(dst) < 2:
+            return ""
+        
+        ip_addr = str(dst[0])
+        netmask = str(dst[1])
+        
+        # Convert netmask to CIDR notation
+        cidr = self._netmask_to_cidr(netmask)
+        
+        return f"{ip_addr}/{cidr}"
+    
+    def _netmask_to_cidr(self, netmask: str) -> int:
+        """
+        Convert subnet mask to CIDR prefix length.
+        
+        This is the same method used in the address converter.
+        
+        Args:
+            netmask: Subnet mask in dotted decimal format (e.g., "255.255.255.0")
+            
+        Returns:
+            Integer representing CIDR prefix length (e.g., 24)
+        """
+        try:
+            # Split the netmask into individual octets
+            octets = netmask.split('.')
+            
+            # Convert each octet to binary and concatenate
+            binary_str = ''
+            for octet in octets:
+                # Convert to binary and pad to 8 bits
+                binary_octet = bin(int(octet))[2:].zfill(8)
+                binary_str += binary_octet
+            
+            # Count the number of '1' bits
+            cidr_prefix = binary_str.count('1')
+            
+            return cidr_prefix
+            
+        except Exception as e:
+            # If conversion fails, default to /32
+            print(f"    Warning: Could not convert netmask '{netmask}' to CIDR")
+            return 32
+    
+    def _create_network_name(self, dst: List) -> str:
+        """
+        Create a descriptive name for the destination network.
+        
+        This name will be used to reference the network object in FTD.
+        You may need to ensure this matches the actual network object
+        names you've already imported into FTD.
+        
+        Args:
+            dst: List containing [IP_address, netmask]
+            
+        Returns:
+            String name for the network (e.g., "Net_10.0.20.0_24")
+        """
+        if len(dst) < 2:
+            return "Unknown_Network"
+        
+        ip_addr = str(dst[0])
+        netmask = str(dst[1])
+        cidr = self._netmask_to_cidr(netmask)
+        
+        # Check if this is a default route (0.0.0.0/0)
+        if ip_addr == "0.0.0.0" and cidr == 0:
+            return "any-ipv4"
+        
+        # Create a sanitized name
+        # Replace dots with underscores for the IP
+        ip_safe = ip_addr.replace('.', '_')
+        
+        return f"Net_{ip_safe}_{cidr}"
+    
+    def _create_gateway_name(self, gateway_ip: str, properties: Dict) -> str:
+        """
+        Create a descriptive name for the gateway.
+        
+        This name will be used to reference the gateway object in FTD.
+        You may want to use the comment field or create a standardized name.
+        
+        Args:
+            gateway_ip: Gateway IP address as string
+            properties: Route properties dictionary (for comment field)
+            
+        Returns:
+            String name for the gateway (e.g., "Gateway_10.0.222.18")
+        """
+        # Option 1: Use comment if available and descriptive
+        comment = properties.get('comment', '')
+        if comment and not any(char.isdigit() for char in comment):
+            # If comment doesn't contain numbers, it might be a good name
+            return f"{comment}_Gateway"
+        
+        # Option 2: Create name from IP address
+        # Replace dots with underscores
+        ip_safe = gateway_ip.replace('.', '_')
+        
+        return f"Gateway_{ip_safe}"
+    
+    def get_statistics(self) -> Dict[str, int]:
+        """
+        Get conversion statistics for reporting.
+        
+        Returns:
+            Dictionary with counts of converted, blackhole, and skipped routes
+        """
+        return {
+            "total_routes": len(self.ftd_static_routes),
+            "converted": self.converted_count,
+            "blackhole_skipped": self.blackhole_count,
+            "other_skipped": self.skipped_count
+        }
+
+
+# =============================================================================
+# TESTING CODE (for standalone testing of this module)
+# =============================================================================
+
+if __name__ == '__main__':
+    """
+    This code only runs when you execute this file directly.
+    It's useful for testing the converter without running the main script.
+    
+    To test this module standalone:
+        python route_converter.py
+    """
+    
+    # Sample FortiGate configuration for testing
+    test_config = {
+        'router_static': [
+            {
+                64: {
+                    'dst': ['10.0.20.0', '255.255.255.0'],
+                    'gateway': '10.0.222.18',
+                    'distance': 1,
+                    'device': 'port2',
+                    'comment': 'P5 Bear'
+                }
+            },
+            {
+                88: {
+                    'dst': ['10.0.0.0', '255.252.0.0'],
+                    'blackhole': 'enable',
+                    'vrf': 0
+                }
+            },
+            {
+                118: {
+                    'dst': ['10.0.22.0', '255.255.255.0'],
+                    'gateway': '15.0.2.130',
+                    'device': '20_Bull'
+                }
+            },
+            {
+                122: {
+                    'dst': ['10.0.0.0', '255.0.0.0'],
+                    'blackhole': 'enable',
+                    'vrf': 0
+                }
+            }
+        ]
+    }
+    
+    # Create converter instance
+    converter = RouteConverter(test_config)
+    
+    # Run conversion
+    print("Testing Route Converter...")
+    print("="*60)
+    result = converter.convert()
+    
+    # Display results
+    print("\nConversion Results:")
+    print("="*60)
+    import json
+    print(json.dumps(result, indent=2))
+    
+    # Display statistics
+    print("\nStatistics:")
+    print("="*60)
+    stats = converter.get_statistics()
+    for key, value in stats.items():
+        print(f"  {key}: {value}")
