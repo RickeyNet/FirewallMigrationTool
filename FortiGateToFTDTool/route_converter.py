@@ -209,4 +209,8 @@ class RouteConverter:
                 "type": "staticrouteentry"
             }
             
-            
+            # Add the converted route to our result list
+            static_routes.append(ftd_route)
+            self.converted_count += 1
+
+            # STEP 2I:
