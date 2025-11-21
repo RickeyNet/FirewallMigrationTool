@@ -124,4 +124,89 @@ class RouteConverter:
         # STEP 2: Process each FortiGate static route
         # ====================================================================
         for route_dict in routes:
+            # ================================================================
+            # STEP 2A: Extract the route ID and properties
+            # ================================================================
+            # Each route looks like: {64: {dst: ..., gateway: ...}}
+            # The route ID is the key (e.g., 64)
+            route_id = list(route_dict.keys())[0]
+            properties = route_dict[route_id]
+            
+            # ================================================================
+            # STEP 2B: Check if this is a blackhole route
+            # ================================================================
+            # Blackhole routes drop traffic - they may not be needed in FTD
+            if properties.get('blackhole') == 'enable':
+                self.blackhole_count += 1
+                print(f"  Skipped: Route [{route_id}] - Blackhole route")
+                continue
+
+            # ================================================================
+            # STEP 2C: Extract destination network
+            # ================================================================
+            dst = properties.get('dst', [])
+            if not dst or len(dst) < 2:
+                print(f"  Skipped: Route [{route_id}] - No destination specified")
+                self.skipped_count += 1
+                continue
+
+            # Convert destination to CIDR format
+            dst_network = self._format_destination(dst)
+            dst_name = self._create_network_name(dst)
+            
+            # ================================================================
+            # STEP 2D: Extract gateway
+            # ================================================================
+            gateway_ip = properties.get('gateway', None)
+            if not gateway_ip:
+                print(f"  Skipped: Route [{route_id}] - No gateway specified")
+                self.skipped_count += 1
+                continue
+
+            # Create a name for the gateway object
+            gateway_name = self._create_gateway_name(gateway_ip, properties)
+            
+            # ================================================================
+            # STEP 2E: Extract interface/device
+            # ================================================================
+            interface_name = properties.get('device', 'unknown')
+            
+            # ================================================================
+            # STEP 2F: Extract metric/distance
+            # ================================================================
+            metric = properties.get('distance', 1)  # Default to 1 if not specified
+            
+            # ================================================================
+            # STEP 2G: Extract comment for route name
+            # ================================================================
+            comment = properties.get('comment', '')
+            if comment:
+                route_name = comment
+            else:
+                route_name = f"Route_{route_id}_{dst_name}"
+            
+            # ================================================================
+            # STEP 2H: Create the FTD static route entry structure
+            # ================================================================
+            ftd_route = {
+                "name": route_name,
+                "iface": {
+                    "name": interface_name,
+                    "type": "physicalinterface"  # Assume physical, could also be subinterface
+                },
+                "networks": [
+                    {
+                        "name": dst_name,
+                        "type": "networkobject"
+                    }
+                ],
+                "gateway": {
+                    "name": gateway_name,
+                    "type": "networkobject"
+                },
+                "metricValue": metric,
+                "ipType": "IPv4",  # Assume IPv4 for now
+                "type": "staticrouteentry"
+            }
+            
             
