@@ -42,11 +42,11 @@ import argparse
 import sys
 import time
 import getpass
+import urllib3
 from typing import Dict, List, Optional, Tuple
-from urllib3.exceptions import InsecureRequestWarning
 
 # Disable SSL warnings for self-signed certificates
-requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 class FTDAPIClient:
