@@ -97,6 +97,8 @@ class AddressConverter:
         # STEP 2: Process each FortiGate address object
         # ====================================================================
         # Each address in the list looks like: {'OBJECT_NAME': {properties}}
+        # Process each FortiGate address object
+        # Each address in the list looks like: {'OBJECT_NAME': {properties}}
         for addr_dict in addresses:
             # ================================================================
             # STEP 2A: Extract the object name
@@ -114,20 +116,51 @@ class AddressConverter:
             properties = addr_dict[object_name]
             
             # ================================================================
-            # STEP 2C: Determine the address type (HOST, NETWORK, RANGE)
+            # STEP 2C: Validate the object name
+            # ================================================================
+            # Skip objects with invalid names
+            
+            # Check 1: Skip if name is "none" (case-insensitive)
+            if object_name.lower() == 'none':
+                print(f"  Skipped: {object_name} (name is 'none')")
+                continue
+            
+            # Check 2: Skip if name is just an IP address (contains only digits, dots, colons)
+            # Valid names should have letters or underscores
+            if self._is_ip_address(object_name):
+                print(f"  Skipped: {object_name} (name is just an IP address)")
+                continue
+            
+            # ================================================================
+            # STEP 2D: Determine the address type (HOST, NETWORK, RANGE)
             # ================================================================
             # This method analyzes the properties to determine what kind of address this is
             address_type = self._determine_address_type(properties)
             
             # ================================================================
-            # STEP 2D: Extract and format the address value
+            # STEP 2E: Extract and format the address value
             # ================================================================
             # This method extracts the actual IP/network/range and formats it for FTD
             # Examples: "10.0.0.0/24", "192.168.1.10-192.168.1.20", "10.0.0.1/32"
             address_value = self._extract_address_value(properties)
             
             # ================================================================
-            # STEP 2E: Create the FTD network object structure
+            # STEP 2F: Validate the address value
+            # ================================================================
+            # Skip objects with empty or invalid values
+            
+            # Check 3: Skip if value is empty or just whitespace
+            if not address_value or address_value.strip() == '':
+                print(f"  Skipped: {object_name} (empty value)")
+                continue
+            
+            # Check 4: Skip if value is malformed (no valid IP format)
+            if not self._is_valid_address_value(address_value):
+                print(f"  Skipped: {object_name} (invalid value: {address_value})")
+                continue
+            
+            # ================================================================
+            # STEP 2G: Create the FTD network object structure
             # ================================================================
             # This is the final format that FTD FDM API expects
             ftd_object = {
@@ -142,7 +175,7 @@ class AddressConverter:
             network_objects.append(ftd_object)
             
             # ================================================================
-            # STEP 2F: Print conversion details for user feedback
+            # STEP 2H: Print conversion details for user feedback
             # ================================================================
             # This helps users see what's being converted in real-time
             print(f"  Converted: {object_name} -> {address_type} ({address_value})")
@@ -342,6 +375,103 @@ class AddressConverter:
             print(f"  Warning: Could not convert netmask '{netmask}' to CIDR (Error: {e})")
             print(f"    Defaulting to /32 (single host)")
             return 32
+    
+    def _is_ip_address(self, name: str) -> bool:
+        """
+        Check if a string looks like an IP address rather than a proper object name.
+        
+        Valid object names should contain letters, not just numbers and dots/colons.
+        Examples that should be rejected:
+        - "192.168.1.1"
+        - "10.0.0.0"
+        - "2001:db8::1"
+        
+        Args:
+            name: The object name to check
+            
+        Returns:
+            True if the name looks like an IP address, False otherwise
+        """
+        # Remove dots, colons, and digits
+        # If nothing is left, it was probably just an IP
+        remaining = name.replace('.', '').replace(':', '').replace('-', '')
+        
+        # If all digits, it's an IP address
+        if remaining.isdigit():
+            return True
+        
+        # If very short and mostly numbers, probably an IP
+        if len(remaining) == 0 or (len(remaining) < 3 and remaining.isdigit()):
+            return True
+        
+        return False
+    
+    def _is_valid_address_value(self, value: str) -> bool:
+        """
+        Validate that an address value is properly formatted.
+        
+        Valid formats:
+        - IP with CIDR: "10.0.0.0/24"
+        - IP range: "10.0.0.1-10.0.0.10"
+        - Single IP with /32: "10.0.0.1/32"
+        
+        Invalid formats:
+        - Empty string: ""
+        - Just a slash: "/"
+        - Malformed: "/24" or "10.0.0.0/"
+        
+        Args:
+            value: The address value to validate
+            
+        Returns:
+            True if valid, False otherwise
+        """
+        if not value or value.strip() == '':
+            return False
+        
+        # Check for CIDR notation (IP/prefix)
+        if '/' in value:
+            parts = value.split('/')
+            if len(parts) != 2:
+                return False
+            
+            ip_part = parts[0].strip()
+            cidr_part = parts[1].strip()
+            
+            # IP part should not be empty
+            if not ip_part:
+                return False
+            
+            # CIDR part should be a number
+            if not cidr_part.isdigit():
+                return False
+            
+            # CIDR should be 0-32 for IPv4
+            cidr_num = int(cidr_part)
+            if cidr_num < 0 or cidr_num > 32:
+                return False
+            
+            # IP should have at least one dot (IPv4)
+            if '.' not in ip_part:
+                return False
+        
+        # Check for range notation (IP1-IP2)
+        elif '-' in value:
+            parts = value.split('-')
+            if len(parts) != 2:
+                return False
+            
+            # Both parts should look like IPs
+            for part in parts:
+                if not part.strip() or '.' not in part:
+                    return False
+        
+        # Single value should at least have a dot (IPv4)
+        else:
+            if '.' not in value:
+                return False
+        
+        return True
     
     def get_object_count(self) -> int:
         """
