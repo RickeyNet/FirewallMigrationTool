@@ -69,16 +69,26 @@ class RouteConverter:
     6. Handling special cases (blackhole routes, default routes)
     """
     
-    def __init__(self, fortigate_config: Dict[str, Any]):
+    def __init__(self, fortigate_config: Dict[str, Any], network_objects: List[Dict] = None): # pyright: ignore[reportArgumentType]
         """
         Initialize the converter with FortiGate configuration data.
         
         Args:
             fortigate_config: Dictionary containing the complete parsed FortiGate YAML
                              Expected to have a 'router_static' key with route data
+            network_objects: List of already-converted FTD network objects
+                           Used to match route destinations/gateways to existing objects
         """
         # Store the entire FortiGate configuration
         self.fg_config = fortigate_config
+        
+        # Store the list of network objects for lookup
+        self.network_objects = network_objects or []
+        
+        # Build a lookup dictionary: IP/CIDR -> object name
+        # This allows us to quickly find the object name for a given IP
+        self.ip_to_name = {}
+        self._build_ip_lookup()
         
         # This will store the converted FTD static routes
         self.ftd_static_routes = []
@@ -87,6 +97,38 @@ class RouteConverter:
         self.converted_count = 0
         self.blackhole_count = 0
         self.skipped_count = 0
+        self.unmatched_count = 0  # Track routes with no matching address object
+
+    def _build_ip_lookup(self):
+        """
+        Build a lookup dictionary mapping IP addresses/CIDRs to object names.
+        
+        This allows us to find the correct address object name when we have
+        a destination or gateway IP from the route.
+        
+        The lookup handles:
+        - Exact IP matches (e.g., 10.0.20.5 -> "Server1")
+        - Network matches (e.g., 10.0.20.0/24 -> "Bull_net")
+        - Gateway IPs that are hosts (/32)
+        """
+        for obj in self.network_objects:
+            # Get the object name
+            name = obj.get('name', '')
+            
+            # Get the value (IP or network in CIDR format)
+            value = obj.get('value', '')
+            
+            if value and name:
+                # Store in lookup: "10.0.20.0/24" -> "Bull_net"
+                self.ip_to_name[value] = name
+                
+                # Also store without CIDR for host addresses
+                # "10.0.20.5/32" -> also indexed as "10.0.20.5"
+                if '/' in value:
+                    ip_only = value.split('/')[0]
+                    # Only add if not already present (prefer the CIDR version)
+                    if ip_only not in self.ip_to_name:
+                        self.ip_to_name[ip_only] = name
     
     def convert(self) -> List[Dict]:
         """
@@ -287,17 +329,16 @@ class RouteConverter:
     
     def _create_network_name(self, dst: List) -> str:
         """
-        Create a descriptive name for the destination network.
+        Find the actual address object name for the destination network.
         
-        This name will be used to reference the network object in FTD.
-        You may need to ensure this matches the actual network object
-        names you've already imported into FTD.
+        This method looks up the destination IP/network in our address objects
+        to find the real object name that exists in FTD.
         
         Args:
             dst: List containing [IP_address, netmask]
             
         Returns:
-            String name for the network (e.g., "Net_10.0.20.0_24")
+            String name of the matching address object, or a generated name if no match
         """
         if len(dst) < 2:
             return "Unknown_Network"
@@ -310,37 +351,56 @@ class RouteConverter:
         if ip_addr == "0.0.0.0" and cidr == 0:
             return "any-ipv4"
         
-        # Create a sanitized name
-        # Replace dots with underscores for the IP
-        ip_safe = ip_addr.replace('.', '_')
+        # Format as CIDR for lookup
+        cidr_notation = f"{ip_addr}/{cidr}"
         
-        return f"Net_{ip_safe}_{cidr}"
+        # Try to find the address object by exact CIDR match
+        if cidr_notation in self.ip_to_name:
+            return self.ip_to_name[cidr_notation]
+        
+        # Try to find by IP only (for host addresses)
+        if ip_addr in self.ip_to_name:
+            return self.ip_to_name[ip_addr]
+        
+        # No match found - generate a name and warn the user
+        self.unmatched_count += 1
+        generated_name = f"Net_{ip_addr.replace('.', '_')}_{cidr}"
+        print(f"    Warning: No address object found for {cidr_notation}, using generated name: {generated_name}")
+        
+        return generated_name
     
     def _create_gateway_name(self, gateway_ip: str, properties: Dict) -> str:
         """
-        Create a descriptive name for the gateway.
+        Find the actual address object name for the gateway IP.
         
-        This name will be used to reference the gateway object in FTD.
-        You may want to use the comment field or create a standardized name.
+        This method looks up the gateway IP in our address objects
+        to find the real object name that exists in FTD.
         
         Args:
             gateway_ip: Gateway IP address as string
             properties: Route properties dictionary (for comment field)
             
         Returns:
-            String name for the gateway (e.g., "Gateway_10.0.222.18")
+            String name of the matching address object, or a generated name if no match
         """
-        # Option 1: Use comment if available and descriptive
-        comment = properties.get('comment', '')
-        if comment and not any(char.isdigit() for char in comment):
-            # If comment doesn't contain numbers, it might be a good name
-            return f"{comment}_Gateway"
+        # Try to find the address object by IP
+        # Gateways are usually host addresses (/32)
         
-        # Option 2: Create name from IP address
-        # Replace dots with underscores
-        ip_safe = gateway_ip.replace('.', '_')
+        # First try with /32 CIDR notation
+        gateway_cidr = f"{gateway_ip}/32"
+        if gateway_cidr in self.ip_to_name:
+            return self.ip_to_name[gateway_cidr]
         
-        return f"Gateway_{ip_safe}"
+        # Try without CIDR
+        if gateway_ip in self.ip_to_name:
+            return self.ip_to_name[gateway_ip]
+        
+        # No match found - generate a name and warn the user
+        self.unmatched_count += 1
+        generated_name = f"Gateway_{gateway_ip.replace('.', '_')}"
+        print(f"    Warning: No address object found for gateway {gateway_ip}, using generated name: {generated_name}")
+        
+        return generated_name
     
     def get_statistics(self) -> Dict[str, int]:
         """
@@ -353,7 +413,8 @@ class RouteConverter:
             "total_routes": len(self.ftd_static_routes),
             "converted": self.converted_count,
             "blackhole_skipped": self.blackhole_count,
-            "other_skipped": self.skipped_count
+            "other_skipped": self.skipped_count,
+            "unmatched_objects": self.unmatched_count
         }
 
 

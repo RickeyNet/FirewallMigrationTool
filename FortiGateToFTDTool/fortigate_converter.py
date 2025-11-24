@@ -207,8 +207,7 @@ Examples:
     # Create converter instance for firewall policies
     policy_converter = PolicyConverter(fg_config)
     
-    # Create converter instance for static routes
-    route_converter = RouteConverter(fg_config)
+    # Note: Route converter will be initialized later after address objects are converted
     
     # ========================================================================
     # STEP 5: Convert address objects
@@ -222,6 +221,13 @@ Examples:
     network_objects = address_converter.convert()
     
     print(f"✓ Converted {len(network_objects)} address objects")
+    
+    # ========================================================================
+    # STEP 5B: Initialize route converter with address objects
+    # ========================================================================
+    # Now that we have the address objects, we can initialize the route converter
+    # The route converter needs these to map route destinations/gateways to actual object names
+    route_converter = RouteConverter(fg_config, network_objects)
     
     # ========================================================================
     # STEP 6: Convert address groups
