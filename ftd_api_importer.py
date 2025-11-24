@@ -674,9 +674,20 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Import everything (all files)
   python ftd_api_importer.py --host 192.168.1.1 --username admin --password MyPass123
-  python ftd_api_importer.py --host 192.168.1.1 -u admin -p MyPass123 --base ftd_config
-  python ftd_api_importer.py --host 192.168.1.1 -u admin --deploy
+  
+  # Import only address objects
+  python ftd_api_importer.py --host 192.168.1.1 -u admin --only-address-objects
+  
+  # Import only service objects and groups
+  python ftd_api_importer.py --host 192.168.1.1 -u admin --only-service-objects --only-service-groups
+  
+  # Import a specific file
+  python ftd_api_importer.py --host 192.168.1.1 -u admin --file my_addresses.json --type address-objects
+  
+  # Import and deploy
+  python ftd_api_importer.py --host 192.168.1.1 -u admin --only-routes --deploy
         """
     )
     
@@ -693,7 +704,33 @@ Examples:
     parser.add_argument('--skip-verify', action='store_true', default=True,
                        help='Skip SSL certificate verification (default: True)')
     
+    # Selective import options - allows importing only specific object types
+    parser.add_argument('--only-address-objects', action='store_true',
+                       help='Import only address objects')
+    parser.add_argument('--only-address-groups', action='store_true',
+                       help='Import only address groups')
+    parser.add_argument('--only-service-objects', action='store_true',
+                       help='Import only service objects')
+    parser.add_argument('--only-service-groups', action='store_true',
+                       help='Import only service groups')
+    parser.add_argument('--only-routes', action='store_true',
+                       help='Import only static routes')
+    parser.add_argument('--only-rules', action='store_true',
+                       help='Import only access rules')
+    
+    # Alternative: specify a single file directly
+    parser.add_argument('--file', 
+                       help='Import a specific JSON file (overrides --base and --only flags)')
+    parser.add_argument('--type',
+                       choices=['address-objects', 'address-groups', 'service-objects', 
+                               'service-groups', 'routes', 'rules'],
+                       help='Type of objects in the file (required with --file)')
+    
     args = parser.parse_args()
+    
+    # Validate --file requires --type
+    if args.file and not args.type:
+        parser.error("--file requires --type to be specified")
     
     # Prompt for password if not provided
     if not args.password:
@@ -712,35 +749,99 @@ Examples:
         print("\n✗ Authentication failed. Exiting.")
         return 1
     
-    # Import in the correct order
+    # Determine what to import
     print(f"\n{'='*60}")
     print("Starting Import Process")
     print(f"{'='*60}")
-    print("\nImport Order:")
-    print("  1. Address Objects")
-    print("  2. Address Groups")
-    print("  3. Service Objects")
-    print("  4. Service Groups")
-    print("  5. Static Routes")
-    print("  6. Access Rules")
     
-    # Step 1: Import address objects
-    import_address_objects(client, f"{args.base}_address_objects.json")
+    # Check if specific file is provided
+    if args.file:
+        print(f"\nImporting single file: {args.file}")
+        print(f"Object type: {args.type}")
+        
+        # Import based on type
+        if args.type == 'address-objects':
+            import_address_objects(client, args.file)
+        elif args.type == 'address-groups':
+            import_address_groups(client, args.file)
+        elif args.type == 'service-objects':
+            import_service_objects(client, args.file)
+        elif args.type == 'service-groups':
+            import_service_groups(client, args.file)
+        elif args.type == 'routes':
+            import_static_routes(client, args.file)
+        elif args.type == 'rules':
+            import_access_rules(client, args.file)
     
-    # Step 2: Import address groups
-    import_address_groups(client, f"{args.base}_address_groups.json")
+    # Check if any --only flags are set
+    elif any([args.only_address_objects, args.only_address_groups, 
+              args.only_service_objects, args.only_service_groups,
+              args.only_routes, args.only_rules]):
+        
+        print("\nSelective Import Mode:")
+        imported_any = False
+        
+        if args.only_address_objects:
+            print("  - Address Objects")
+            import_address_objects(client, f"{args.base}_address_objects.json")
+            imported_any = True
+        
+        if args.only_address_groups:
+            print("  - Address Groups")
+            import_address_groups(client, f"{args.base}_address_groups.json")
+            imported_any = True
+        
+        if args.only_service_objects:
+            print("  - Service Objects")
+            import_service_objects(client, f"{args.base}_service_objects.json")
+            imported_any = True
+        
+        if args.only_service_groups:
+            print("  - Service Groups")
+            import_service_groups(client, f"{args.base}_service_groups.json")
+            imported_any = True
+        
+        if args.only_routes:
+            print("  - Static Routes")
+            import_static_routes(client, f"{args.base}_static_routes.json")
+            imported_any = True
+        
+        if args.only_rules:
+            print("  - Access Rules")
+            import_access_rules(client, f"{args.base}_access_rules.json")
+            imported_any = True
+        
+        if not imported_any:
+            print("\n✗ No import flags specified. Nothing to import.")
+            return 1
     
-    # Step 3: Import service objects
-    import_service_objects(client, f"{args.base}_service_objects.json")
-    
-    # Step 4: Import service groups
-    import_service_groups(client, f"{args.base}_service_groups.json")
-    
-    # Step 5: Import static routes
-    import_static_routes(client, f"{args.base}_static_routes.json")
-    
-    # Step 6: Import access rules
-    import_access_rules(client, f"{args.base}_access_rules.json")
+    # Default: Import everything in order
+    else:
+        print("\nFull Import Mode - All objects in order:")
+        print("  1. Address Objects")
+        print("  2. Address Groups")
+        print("  3. Service Objects")
+        print("  4. Service Groups")
+        print("  5. Static Routes")
+        print("  6. Access Rules")
+        
+        # Step 1: Import address objects
+        import_address_objects(client, f"{args.base}_address_objects.json")
+        
+        # Step 2: Import address groups
+        import_address_groups(client, f"{args.base}_address_groups.json")
+        
+        # Step 3: Import service objects
+        import_service_objects(client, f"{args.base}_service_objects.json")
+        
+        # Step 4: Import service groups
+        import_service_groups(client, f"{args.base}_service_groups.json")
+        
+        # Step 5: Import static routes
+        import_static_routes(client, f"{args.base}_static_routes.json")
+        
+        # Step 6: Import access rules
+        import_access_rules(client, f"{args.base}_access_rules.json")
     
     # Print statistics
     client.print_statistics()
