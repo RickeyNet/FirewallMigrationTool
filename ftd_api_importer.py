@@ -42,11 +42,11 @@ import argparse
 import sys
 import time
 import getpass
-import urllib3
 from typing import Dict, List, Optional, Tuple
+from urllib3.exceptions import InsecureRequestWarning
 
 # Disable SSL warnings for self-signed certificates
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
 
 
 class FTDAPIClient:
@@ -90,16 +90,22 @@ class FTDAPIClient:
         self.stats = {
             "address_objects_created": 0,
             "address_objects_failed": 0,
+            "address_objects_skipped": 0,
             "address_groups_created": 0,
             "address_groups_failed": 0,
+            "address_groups_skipped": 0,
             "port_objects_created": 0,
             "port_objects_failed": 0,
+            "port_objects_skipped": 0,
             "port_groups_created": 0,
             "port_groups_failed": 0,
+            "port_groups_skipped": 0,
             "routes_created": 0,
             "routes_failed": 0,
+            "routes_skipped": 0,
             "rules_created": 0,
-            "rules_failed": 0
+            "rules_failed": 0,
+            "rules_skipped": 0
         }
     
     def authenticate(self) -> bool:
@@ -170,7 +176,7 @@ class FTDAPIClient:
             obj: Dictionary containing network object data
             
         Returns:
-            Tuple of (success: bool, object_id: str or None)
+            Tuple of (success: bool, object_id: str or error message)
         """
         endpoint = f"{self.base_url}/object/networks"
         
@@ -181,6 +187,18 @@ class FTDAPIClient:
                 created_obj = response.json()
                 self.stats["address_objects_created"] += 1
                 return True, created_obj.get("id")
+            elif response.status_code == 422:
+                # 422 Unprocessable Entity - usually means object already exists
+                error_data = response.json()
+                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
+                
+                # Check if it's a duplicate/already exists error
+                if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
+                    self.stats["address_objects_skipped"] += 1
+                    return True, f"SKIPPED: {error_msg}"  # Return True to indicate it's not a failure
+                else:
+                    self.stats["address_objects_failed"] += 1
+                    return False, error_msg
             else:
                 self.stats["address_objects_failed"] += 1
                 error_msg = response.text
@@ -198,7 +216,7 @@ class FTDAPIClient:
             group: Dictionary containing network group data
             
         Returns:
-            Tuple of (success: bool, object_id: str or None)
+            Tuple of (success: bool, object_id: str or error message)
         """
         endpoint = f"{self.base_url}/object/networkgroups"
         
@@ -209,6 +227,16 @@ class FTDAPIClient:
                 created_obj = response.json()
                 self.stats["address_groups_created"] += 1
                 return True, created_obj.get("id")
+            elif response.status_code == 422:
+                error_data = response.json()
+                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
+                
+                if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
+                    self.stats["address_groups_skipped"] += 1
+                    return True, f"SKIPPED: {error_msg}"
+                else:
+                    self.stats["address_groups_failed"] += 1
+                    return False, error_msg
             else:
                 self.stats["address_groups_failed"] += 1
                 error_msg = response.text
@@ -226,7 +254,7 @@ class FTDAPIClient:
             obj: Dictionary containing port object data
             
         Returns:
-            Tuple of (success: bool, object_id: str or None)
+            Tuple of (success: bool, object_id: str or error message)
         """
         # Determine the correct endpoint based on protocol type
         obj_type = obj.get("type", "tcpportobject")
@@ -246,6 +274,16 @@ class FTDAPIClient:
                 created_obj = response.json()
                 self.stats["port_objects_created"] += 1
                 return True, created_obj.get("id")
+            elif response.status_code == 422:
+                error_data = response.json()
+                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
+                
+                if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
+                    self.stats["port_objects_skipped"] += 1
+                    return True, f"SKIPPED: {error_msg}"
+                else:
+                    self.stats["port_objects_failed"] += 1
+                    return False, error_msg
             else:
                 self.stats["port_objects_failed"] += 1
                 error_msg = response.text
@@ -263,7 +301,7 @@ class FTDAPIClient:
             group: Dictionary containing port group data
             
         Returns:
-            Tuple of (success: bool, object_id: str or None)
+            Tuple of (success: bool, object_id: str or error message)
         """
         endpoint = f"{self.base_url}/object/portgroups"
         
@@ -274,6 +312,16 @@ class FTDAPIClient:
                 created_obj = response.json()
                 self.stats["port_groups_created"] += 1
                 return True, created_obj.get("id")
+            elif response.status_code == 422:
+                error_data = response.json()
+                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
+                
+                if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
+                    self.stats["port_groups_skipped"] += 1
+                    return True, f"SKIPPED: {error_msg}"
+                else:
+                    self.stats["port_groups_failed"] += 1
+                    return False, error_msg
             else:
                 self.stats["port_groups_failed"] += 1
                 error_msg = response.text
@@ -291,7 +339,7 @@ class FTDAPIClient:
             route: Dictionary containing static route data
             
         Returns:
-            Tuple of (success: bool, object_id: str or None)
+            Tuple of (success: bool, object_id: str or error message)
         """
         endpoint = f"{self.base_url}/devices/default/routing/staticrouteentries"
         
@@ -302,6 +350,16 @@ class FTDAPIClient:
                 created_obj = response.json()
                 self.stats["routes_created"] += 1
                 return True, created_obj.get("id")
+            elif response.status_code == 422:
+                error_data = response.json()
+                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
+                
+                if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
+                    self.stats["routes_skipped"] += 1
+                    return True, f"SKIPPED: {error_msg}"
+                else:
+                    self.stats["routes_failed"] += 1
+                    return False, error_msg
             else:
                 self.stats["routes_failed"] += 1
                 error_msg = response.text
@@ -319,7 +377,7 @@ class FTDAPIClient:
             rule: Dictionary containing access rule data
             
         Returns:
-            Tuple of (success: bool, object_id: str or None)
+            Tuple of (success: bool, object_id: str or error message)
         """
         endpoint = f"{self.base_url}/policy/accesspolicies/default/accessrules"
         
@@ -330,6 +388,16 @@ class FTDAPIClient:
                 created_obj = response.json()
                 self.stats["rules_created"] += 1
                 return True, created_obj.get("id")
+            elif response.status_code == 422:
+                error_data = response.json()
+                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
+                
+                if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
+                    self.stats["rules_skipped"] += 1
+                    return True, f"SKIPPED: {error_msg}"
+                else:
+                    self.stats["rules_failed"] += 1
+                    return False, error_msg
             else:
                 self.stats["rules_failed"] += 1
                 error_msg = response.text
@@ -381,21 +449,27 @@ class FTDAPIClient:
         print(f"{'='*60}")
         print(f"\nAddress Objects:")
         print(f"  Created: {self.stats['address_objects_created']}")
+        print(f"  Skipped: {self.stats['address_objects_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['address_objects_failed']}")
         print(f"\nAddress Groups:")
         print(f"  Created: {self.stats['address_groups_created']}")
+        print(f"  Skipped: {self.stats['address_groups_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['address_groups_failed']}")
         print(f"\nPort Objects:")
         print(f"  Created: {self.stats['port_objects_created']}")
+        print(f"  Skipped: {self.stats['port_objects_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['port_objects_failed']}")
         print(f"\nPort Groups:")
         print(f"  Created: {self.stats['port_groups_created']}")
+        print(f"  Skipped: {self.stats['port_groups_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['port_groups_failed']}")
         print(f"\nStatic Routes:")
         print(f"  Created: {self.stats['routes_created']}")
+        print(f"  Skipped: {self.stats['routes_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['routes_failed']}")
         print(f"\nAccess Rules:")
         print(f"  Created: {self.stats['rules_created']}")
+        print(f"  Skipped: {self.stats['rules_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['rules_failed']}")
         print(f"\n{'='*60}")
 
@@ -452,9 +526,13 @@ def import_address_objects(client: FTDAPIClient, filename: str) -> bool:
         
         success, result = client.create_network_object(obj)
         if success:
-            print("✓")
+            if "SKIPPED" in str(result):
+                print("⊘ (already exists)")
+            else:
+                print("✓")
         else:
-            print(f"✗ {result}")
+            print(f"✗")
+            print(f"      Error: {result}")
             all_success = False
         
         # Small delay to avoid overwhelming the API
