@@ -47,7 +47,7 @@ pip install pyyaml requests urllib3
 - **Credentials**: Admin username and password
 
 ---
-#########################################################################################################
+############################################################################################################################################################
 ## For Airgapped networks
 
 ## Download required libraries from internet connected device using:
@@ -106,8 +106,10 @@ python -m pip install --no-index --find-links=. pyyaml requests urllib3
 ```bash
 python -c "import yaml, requests, urllib3; print('All libraries installed!')"
 ```
+# Skip to step 3
 
-#########################################################################################################
+
+####################################################################################################################################################
 ## Installation
 
 ### Step 1: Download All Script Files
@@ -145,6 +147,9 @@ python -c "import yaml, requests, urllib3; print('All libraries installed!')"
 
 ---
 
+### Download FortiGate YAML config:
+login to FortiGate-->click username in top right-->Configuration-->Backup-->Select YAML-->Click Ok
+rename config name to fortigate_config
 ## File Structure
 
 ### Your Working Directory Should Look Like:
