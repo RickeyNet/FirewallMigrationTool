@@ -34,6 +34,14 @@ WHAT THIS SCRIPT DOES:
     5. Optionally deploys changes
 
 HOW TO RUN:
+
+# Dry run for access rules
+    python ftd_api_cleanup.py --host 192.168.1.1 -u admin --only-rules --dry-run
+
+# Dry run for address objects
+    python ftd_api_cleanup.py --host 192.168.1.1 -u admin --only-address-objects --dry-run
+
+# Run individually:
     python ftd_api_cleanup.py --host 192.168.1.1 --username admin --base ftd_config
 
     python ftd_api_cleanup.py --host 192.168.1.1 -u admin --only-rules
@@ -47,7 +55,13 @@ HOW TO RUN:
     python ftd_api_cleanup.py --host 192.168.1.1 -u admin --only-address-groups
 
     python ftd_api_cleanup.py --host 192.168.1.1 -u admin --only-address-objects
-    
+
+# Delete service objects AND groups together
+    python ftd_api_cleanup.py --host 192.168.1.1 -u admin --only-service-objects --only-service-groups
+
+# Delete address objects AND groups together
+    python ftd_api_cleanup.py --host 192.168.1.1 -u admin --only-address-objects --only-address-groups
+
 SAFETY FEATURES:
     - Dry-run mode (preview without deleting)
     - Interactive confirmation required
