@@ -36,6 +36,18 @@ WHAT THIS SCRIPT DOES:
 HOW TO RUN:
     python ftd_api_cleanup.py --host 192.168.1.1 --username admin --base ftd_config
 
+    python ftd_api_cleanup.py --host 192.168.1.1 -u admin --only-rules
+
+    python ftd_api_cleanup.py --host 192.168.1.1 -u admin --only-routes
+
+    python ftd_api_cleanup.py --host 192.168.1.1 -u admin --only-service-groups
+
+    python ftd_api_cleanup.py --host 192.168.1.1 -u admin --only-service-objects
+
+    python ftd_api_cleanup.py --host 192.168.1.1 -u admin --only-address-groups
+
+    python ftd_api_cleanup.py --host 192.168.1.1 -u admin --only-address-objects
+    
 SAFETY FEATURES:
     - Dry-run mode (preview without deleting)
     - Interactive confirmation required
