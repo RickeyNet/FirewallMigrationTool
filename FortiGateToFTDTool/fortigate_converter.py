@@ -92,6 +92,66 @@ except ImportError as e:
     print("\n" + "="*60)
     sys.exit(1)
 
+def preprocess_yaml_file(input_file: str) -> str:
+    """
+    Pre-process YAML file to remove problematic sections before parsing.
+    
+    Some FortiGate sections contain characters or formats that cause
+    YAML parsing errors. This function reads the file as text, removes
+    those sections, and returns cleaned content.
+    
+    Args:
+        input_file: Path to the original YAML file
+        
+    Returns:
+        Cleaned YAML content as string
+    """
+    print("  Pre-processing YAML file to remove problematic sections...")
+    
+    # Sections to completely remove from YAML
+    sections_to_skip = [
+        'system_automation-trigger:',
+        'dlp_filepattern:',
+        'system_automation-action:',
+        'dlp_sensor:',
+        'dlp_settings:'
+    ]
+    
+    cleaned_lines = []
+    skip_section = False
+    current_indent = 0
+    
+    with open(input_file, 'r', encoding='utf-8') as f:
+        for line in f:
+            # Get the indentation level of this line
+            stripped = line.lstrip()
+            if stripped:
+                indent = len(line) - len(stripped)
+            else:
+                indent = 0
+            
+            # Check if this line starts a section we want to skip
+            if any(line.strip().startswith(section) for section in sections_to_skip):
+                skip_section = True
+                current_indent = indent
+                print(f"    Skipping section: {line.strip()}")
+                continue
+            
+            # If we're in a skip section, check if we've exited it
+            if skip_section:
+                # If we encounter a line with same or less indentation, we've exited the section
+                if stripped and indent <= current_indent:
+                    skip_section = False
+                else:
+                    # Still in the section, skip this line
+                    continue
+            
+            # Keep this line
+            cleaned_lines.append(line)
+    
+    cleaned_yaml = ''.join(cleaned_lines)
+    print(f"  ✓ Pre-processing complete")
+    return cleaned_yaml
 
 def main():
     """
@@ -159,13 +219,73 @@ Examples:
     print(f"\nLoading FortiGate configuration from: {args.input_file}")
     
     try:
-        # Open the YAML file in read mode
-        with open(args.input_file, 'r') as f:
-            # Parse the YAML content into a Python dictionary
-            # yaml.safe_load() safely parses YAML without executing code
-            fg_config = yaml.safe_load(f)
+        # Pre-process the YAML file to remove problematic sections
+        cleaned_yaml = preprocess_yaml_file(args.input_file)
         
-        print("✓ YAML file loaded successfully")
+        # Parse the cleaned YAML content into a Python dictionary
+        # yaml.safe_load() safely parses YAML without executing code
+        fg_config = yaml.safe_load(cleaned_yaml)
+        
+        print("✓ YAML file loaded and cleaned successfully")
+
+
+
+
+# ## **Which Method to Use?**
+
+# ### **Method 1 (Simple - First Solution):**
+# - Use this if the YAML file **parses successfully** but those sections cause problems later
+# - Removes sections **after** parsing
+# - Easier to implement
+
+# ### **Method 2 (Robust - Second Solution):**
+# - Use this if those sections **prevent YAML parsing** entirely
+# - Removes sections **before** parsing
+# - More reliable for badly-formatted sections
+
+# ---
+
+# ## **What This Does:**
+
+# ### **Sections Removed:**
+# 1. **`system_automation-trigger`** - Contains escape characters like `\'` in strings
+# 2. **`dlp_filepattern`** - Contains wildcard patterns like `*.bat` that confuse YAML
+# 3. **`system_automation-action`** - May have similar formatting issues
+# 4. **`dlp_sensor`** - DLP policies (not needed for FTD conversion)
+# 5. **`dlp_settings`** - DLP settings (not needed for FTD conversion)
+
+# ### **Console Output:**
+# ```
+# Loading FortiGate configuration from: fortigate.yaml
+#   Pre-processing YAML file to remove problematic sections...
+#     Skipping section: system_automation-trigger:
+#     Skipping section: dlp_filepattern:
+#   ✓ Pre-processing complete
+# ✓ YAML file loaded and cleaned successfully
+     
+        # ================================================================
+        # Remove problematic sections that cause parsing errors
+        # ================================================================
+        # Some FortiGate sections contain special characters or formats
+        # that aren't needed for FTD conversion and can cause issues
+        
+        sections_to_remove = [
+            'system_automation-trigger',  # Contains escape characters in strings
+            'dlp_filepattern',            # Contains wildcard patterns like *.bat
+            'system_automation-action',   # May contain similar issues
+            'dlp_sensor',                 # DLP policies not needed for basic conversion
+            'dlp_settings'                # DLP settings not needed
+        ]
+        
+        removed_count = 0
+        for section in sections_to_remove:
+            if section in fg_config:
+                del fg_config[section]
+                removed_count += 1
+                print(f"  Skipped section: {section} (not needed for conversion)")
+        
+        if removed_count > 0:
+            print(f"✓ Removed {removed_count} non-essential sections")
         
     except FileNotFoundError:
         # This error occurs if the file doesn't exist at the specified path
