@@ -252,23 +252,24 @@ class AddressConverter:
         
         CONVERSION RULES:
         - For iprange type: "start-ip" and "end-ip" -> "IP1-IP2"
-        - For subnet: [IP, NETMASK] -> "IP/CIDR"
+        - For subnet with /32: [IP, 255.255.255.255] -> "IP" (no /32 suffix for HOST)
+        - For subnet with other mask: [IP, NETMASK] -> "IP/CIDR"
         
         EXAMPLES:
         - FortiGate: type: iprange, start-ip: 10.0.0.1, end-ip: 10.0.0.10
           FTD: "10.0.0.1-10.0.0.10"
         
+        - FortiGate: subnet: [10.0.0.5, 255.255.255.255]
+          FTD: "10.0.0.5" (no /32 for HOST)
+        
         - FortiGate: subnet: [10.0.0.0, 255.255.255.0]
           FTD: "10.0.0.0/24"
-        
-        - FortiGate: subnet: [10.0.0.5, 255.255.255.255]
-          FTD: "10.0.0.5/32"
         
         Args:
             properties: Dictionary containing FortiGate address object properties
             
         Returns:
-            Formatted string value suitable for FTD (e.g., "10.0.0.0/24")
+            Formatted string value suitable for FTD (e.g., "10.0.0.0/24" or "10.0.0.5")
         """
         # ====================================================================
         # CASE 1: IP Range Type
@@ -305,9 +306,19 @@ class AddressConverter:
                 # Example: 255.255.255.0 -> 24
                 cidr = self._netmask_to_cidr(netmask)
                 
-                # Format for FTD: "IP/CIDR"
-                # Examples: "10.0.0.4/30" or "10.0.2.0/24" or "10.0.0.5/32"
-                return f"{ip_addr}/{cidr}"
+                # ============================================================
+                # IMPORTANT: HOST objects do NOT include /32 notation
+                # ============================================================
+                # Check if this is a host address (/32 or 255.255.255.255)
+                # For HOST type, FTD expects just the IP without /32
+                if netmask == '255.255.255.255' or cidr == 32:
+                    # Return IP address without CIDR notation
+                    # Example: "10.0.0.5" instead of "10.0.0.5/32"
+                    return ip_addr
+                else:
+                    # Return network with CIDR notation
+                    # Example: "10.0.2.0/24"
+                    return f"{ip_addr}/{cidr}"
             else:
                 # If format is unexpected, return just the first element
                 return str(subnet_list[0]) if subnet_list else ''
