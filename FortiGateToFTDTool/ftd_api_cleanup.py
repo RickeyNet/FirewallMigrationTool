@@ -34,33 +34,7 @@ WHAT THIS SCRIPT DOES:
     5. Optionally deploys changes
 
 HOW TO RUN:
-
-# Dry run for access rules
-    python ftd_api_cleanup.py --host 192.168.1.1 -u admin --only-rules --dry-run
-
-# Dry run for address objects
-    python ftd_api_cleanup.py --host 192.168.1.1 -u admin --only-address-objects --dry-run
-
-# Run individually:
     python ftd_api_cleanup.py --host 192.168.1.1 --username admin --base ftd_config
-
-    python ftd_api_cleanup.py --host 192.168.1.1 -u admin --only-rules
-
-    python ftd_api_cleanup.py --host 192.168.1.1 -u admin --only-routes
-
-    python ftd_api_cleanup.py --host 192.168.1.1 -u admin --only-service-groups
-
-    python ftd_api_cleanup.py --host 192.168.1.1 -u admin --only-service-objects
-
-    python ftd_api_cleanup.py --host 192.168.1.1 -u admin --only-address-groups
-
-    python ftd_api_cleanup.py --host 192.168.1.1 -u admin --only-address-objects
-
-# Delete service objects AND groups together
-    python ftd_api_cleanup.py --host 192.168.1.1 -u admin --only-service-objects --only-service-groups
-
-# Delete address objects AND groups together
-    python ftd_api_cleanup.py --host 192.168.1.1 -u admin --only-address-objects --only-address-groups
 
 SAFETY FEATURES:
     - Dry-run mode (preview without deleting)
@@ -94,7 +68,7 @@ class FTDAPICleanup:
     - Progress reporting and error handling
     """
     
-    def __init__(self, host: str, username: str, password: str, verify_ssl: bool = False):
+    def __init__(self, host: str, username: str, password: str, verify_ssl: bool = False, debug: bool = False):
         """
         Initialize the FTD API cleanup client.
         
@@ -103,11 +77,13 @@ class FTDAPICleanup:
             username: FDM username (typically 'admin')
             password: FDM password
             verify_ssl: Whether to verify SSL certificates (False for self-signed)
+            debug: Enable debug output
         """
         self.host = host
         self.username = username
         self.password = password
         self.verify_ssl = verify_ssl
+        self.debug = debug
         
         # Base URL for FDM API
         self.base_url = f"https://{host}/api/fdm/latest"
@@ -189,11 +165,14 @@ class FTDAPICleanup:
         """
         Retrieve all objects from a specific FTD endpoint.
         
+        This method handles pagination to ensure ALL objects are retrieved,
+        not just the first page.
+        
         Args:
             endpoint: API endpoint path (e.g., "/object/networks")
             
         Returns:
-            List of objects from FTD
+            List of all objects from FTD
         """
         url = f"{self.base_url}{endpoint}"
         all_items = []
@@ -201,6 +180,8 @@ class FTDAPICleanup:
         limit = 100
         
         try:
+            print(f"    Fetching from {endpoint}...")
+            
             while True:
                 params = {"offset": offset, "limit": limit}
                 response = self.session.get(url, params=params, timeout=30)
@@ -208,6 +189,13 @@ class FTDAPICleanup:
                 if response.status_code == 200:
                     data = response.json()
                     items = data.get("items", [])
+                    
+                    print(f"      Retrieved {len(items)} objects (offset: {offset})")
+                    
+                    # Debug: Show first object's structure
+                    if self.debug and items and offset == 0:
+                        print(f"\n      [DEBUG] First object structure:")
+                        print(f"      {json.dumps(items[0], indent=2)[:500]}...")
                     
                     if not items:
                         break
@@ -219,14 +207,20 @@ class FTDAPICleanup:
                     paging = data.get("paging", {})
                     if not paging.get("next"):
                         break
+                        
+                    # Safety: prevent infinite loops
+                    if offset > 10000:
+                        print(f"      Warning: Reached pagination limit at {offset} objects")
+                        break
                 else:
-                    print(f"  Warning: Failed to retrieve objects from {endpoint}: {response.status_code}")
+                    print(f"      Warning: HTTP {response.status_code} - {response.text[:200]}")
                     break
             
+            print(f"      Total objects retrieved: {len(all_items)}")
             return all_items
             
         except requests.exceptions.RequestException as e:
-            print(f"  Error retrieving objects from {endpoint}: {e}")
+            print(f"      Error retrieving objects from {endpoint}: {e}")
             return []
     
     def delete_object(self, endpoint: str, object_id: str) -> bool:
@@ -290,30 +284,45 @@ class FTDAPICleanup:
         print("  Retrieving access rules from FTD...")
         ftd_rules = self.get_all_objects("/policy/accesspolicies/default/accessrules")
         
-        # Match imported rules with FTD rules by name
-        print(f"  Found {len(ftd_rules)} rules in FTD")
+        if not ftd_rules:
+            print("  No rules found in FTD")
+            return True
+        
+        print(f"  Found {len(ftd_rules)} total rules in FTD")
         print(f"  Looking for {len(imported_rules)} imported rules to delete...")
         
+        # Build a lookup dictionary: name -> FTD object
+        ftd_lookup = {obj.get("name"): obj for obj in ftd_rules if obj.get("name")}
+        print(f"  Built lookup table with {len(ftd_lookup)} named rules")
+        
         all_success = True
+        matched_count = 0
+        
         for imported_rule in imported_rules:
             imported_name = imported_rule.get("name", "")
             
-            # Find matching rule in FTD
-            matching_rule = None
-            for ftd_rule in ftd_rules:
-                if ftd_rule.get("name") == imported_name:
-                    matching_rule = ftd_rule
-                    break
+            if not imported_name:
+                print(f"  Skipped: Unnamed rule in import file")
+                continue
             
-            if matching_rule:
-                rule_id = matching_rule.get("id")
+            # Look up the rule in FTD by name
+            if imported_name in ftd_lookup:
+                matched_count += 1
+                ftd_rule = ftd_lookup[imported_name]
+                rule_id = ftd_rule.get("id")
+                
+                if not rule_id:
+                    print(f"  Error: {imported_name} - No ID found in FTD object")
+                    self.stats["rules_failed"] += 1
+                    all_success = False
+                    continue
                 
                 if dry_run:
-                    print(f"  [DRY RUN] Would delete: {imported_name}")
+                    print(f"  [DRY RUN] Would delete: {imported_name} (ID: {rule_id})")
                     self.stats["rules_deleted"] += 1
                 else:
                     print(f"  Deleting: {imported_name}...", end=" ")
-                    success = self.delete_object("/policy/accesspolicies/default/accessrules", rule_id) # pyright: ignore[reportArgumentType]
+                    success = self.delete_object("/policy/accesspolicies/default/accessrules", rule_id)
                     
                     if success:
                         print("✓")
@@ -327,6 +336,7 @@ class FTDAPICleanup:
             else:
                 print(f"  Not found in FTD: {imported_name}")
         
+        print(f"\n  Summary: Matched {matched_count} of {len(imported_rules)} imported rules")
         return all_success
     
     def delete_static_routes(self, routes_file: str, dry_run: bool = False) -> bool:
@@ -536,28 +546,70 @@ class FTDAPICleanup:
         print(f"  Retrieving {object_type.lower()} from FTD...")
         ftd_objects = self.get_all_objects(endpoint)
         
-        print(f"  Found {len(ftd_objects)} {object_type.lower()} in FTD")
+        if not ftd_objects:
+            print(f"  No {object_type.lower()} found in FTD")
+            return True
+        
+        print(f"  Found {len(ftd_objects)} total {object_type.lower()} in FTD")
         print(f"  Looking for {len(imported_objects)} imported objects to delete...")
         
+        # Build a lookup dictionary: name -> FTD object
+        ftd_lookup = {obj.get("name"): obj for obj in ftd_objects if obj.get("name")}
+        print(f"  Built lookup table with {len(ftd_lookup)} named objects")
+        
+        # Debug: Show first few names from FTD
+        if ftd_lookup:
+            sample_names = list(ftd_lookup.keys())[:5]
+            print(f"  Sample FTD object names: {sample_names}")
+            
+            # Debug: Show first full object
+            if self.debug and ftd_lookup:
+                first_name = list(ftd_lookup.keys())[0]
+                first_obj = ftd_lookup[first_name]
+                print(f"\n  [DEBUG] Sample FTD object:")
+                print(f"    Name: {first_obj.get('name')}")
+                print(f"    ID: {first_obj.get('id')}")
+                print(f"    Type: {first_obj.get('type')}")
+                print(f"    Full object keys: {list(first_obj.keys())}\n")
+        
+        # Debug: Show first few names from import file
+        if imported_objects:
+            sample_imported = [obj.get("name", "UNNAMED") for obj in imported_objects[:5]]
+            print(f"  Sample imported names: {sample_imported}")
+        
         all_success = True
+        matched_count = 0
+        
         for imported_obj in imported_objects:
             imported_name = imported_obj.get("name", "")
             
-            matching_obj = None
-            for ftd_obj in ftd_objects:
-                if ftd_obj.get("name") == imported_name:
-                    matching_obj = ftd_obj
-                    break
+            if not imported_name:
+                print(f"  Skipped: Unnamed object in import file")
+                continue
             
-            if matching_obj:
-                obj_id = matching_obj.get("id")
+            # Look up the object in FTD by name
+            if imported_name in ftd_lookup:
+                matched_count += 1
+                ftd_obj = ftd_lookup[imported_name]
+                obj_id = ftd_obj.get("id")
+                
+                if self.debug:
+                    print(f"\n  [DEBUG] Match found for: {imported_name}")
+                    print(f"    FTD Object ID: {obj_id}")
+                    print(f"    FTD Object Type: {ftd_obj.get('type')}")
+                
+                if not obj_id:
+                    print(f"  Error: {imported_name} - No ID found in FTD object")
+                    self.stats[fail_stat] += 1
+                    all_success = False
+                    continue
                 
                 if dry_run:
-                    print(f"  [DRY RUN] Would delete: {imported_name}")
+                    print(f"  [DRY RUN] Would delete: {imported_name} (ID: {obj_id})")
                     self.stats[success_stat] += 1
                 else:
                     print(f"  Deleting: {imported_name}...", end=" ")
-                    success = self.delete_object(endpoint, obj_id) # pyright: ignore[reportArgumentType]
+                    success = self.delete_object(endpoint, obj_id)
                     
                     if success:
                         print("✓")
@@ -571,6 +623,7 @@ class FTDAPICleanup:
             else:
                 print(f"  Not found in FTD: {imported_name}")
         
+        print(f"\n  Summary: Matched {matched_count} of {len(imported_objects)} imported objects")
         return all_success
     
     def deploy_changes(self) -> bool:
@@ -697,6 +750,8 @@ Examples:
                        help='Delete only static routes')
     parser.add_argument('--only-rules', action='store_true',
                        help='Delete only access rules')
+    parser.add_argument('--debug', action='store_true',
+                       help='Enable debug output to see API responses')
     
     args = parser.parse_args()
     
@@ -730,7 +785,8 @@ Examples:
         host=args.host,
         username=args.username,
         password=args.password,
-        verify_ssl=not args.skip_verify
+        verify_ssl=not args.skip_verify,
+        debug=args.debug
     )
     
     # Authenticate
