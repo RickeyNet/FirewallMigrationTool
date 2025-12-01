@@ -45,6 +45,7 @@ import getpass
 import urllib3
 from typing import Dict, List, Optional, Tuple
 
+
 # Disable SSL warnings for self-signed certificates
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -567,9 +568,13 @@ def import_address_groups(client: FTDAPIClient, filename: str) -> bool:
     all_success = True
     for i, group in enumerate(groups, 1):
         name = group.get("name", "Unknown")
+        
+        # Clean the group object - ensure member objects only have name and type
+        cleaned_group = clean_group_object(group)
+        
         print(f"  [{i}/{len(groups)}] Creating: {name}...", end=" ")
         
-        success, result = client.create_network_group(group)
+        success, result = client.create_network_group(cleaned_group)
         if success:
             print("✓")
         else:
@@ -579,6 +584,49 @@ def import_address_groups(client: FTDAPIClient, filename: str) -> bool:
         time.sleep(0.2)
     
     return all_success
+
+
+def clean_group_object(group: Dict) -> Dict:
+    """
+    Clean a group object to ensure member references only have name and type.
+    
+    FTD groups reference member objects by name only. Remove any UUIDs, IDs,
+    versions, or other fields that might cause "cannot find entity" errors.
+    
+    Args:
+        group: Group object dictionary
+        
+    Returns:
+        Cleaned group object
+    """
+    cleaned = group.copy()
+    
+    # Clean the member objects in the "objects" array
+    if "objects" in cleaned and isinstance(cleaned["objects"], list):
+        cleaned_members = []
+        for member in cleaned["objects"]:
+            if isinstance(member, dict):
+                # Keep ONLY name and type - remove everything else
+                cleaned_member = {
+                    "name": member.get("name"),
+                    "type": member.get("type", "networkobject")
+                }
+                cleaned_members.append(cleaned_member)
+            else:
+                # If member is just a string, convert to proper format
+                cleaned_members.append({
+                    "name": str(member),
+                    "type": "networkobject"
+                })
+        
+        cleaned["objects"] = cleaned_members
+    
+    # Remove any UUID, id, or version fields from the group itself that came from FortiGate
+    cleaned.pop("uuid", None)
+    cleaned.pop("id", None) 
+    cleaned.pop("version", None)
+    
+    return cleaned
 
 
 def import_service_objects(client: FTDAPIClient, filename: str) -> bool:
@@ -648,9 +696,13 @@ def import_service_groups(client: FTDAPIClient, filename: str) -> bool:
     all_success = True
     for i, group in enumerate(groups, 1):
         name = group.get("name", "Unknown")
+        
+        # Clean the group object - ensure member objects only have name and type
+        cleaned_group = clean_group_object(group)
+        
         print(f"  [{i}/{len(groups)}] Creating: {name}...", end=" ")
         
-        success, result = client.create_port_group(group)
+        success, result = client.create_port_group(cleaned_group)
         if success:
             print("✓")
         else:

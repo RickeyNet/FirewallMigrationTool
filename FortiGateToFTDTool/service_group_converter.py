@@ -171,6 +171,8 @@ class ServiceGroupConverter:
             # STEP 2E: Convert members to FTD object format
             # ================================================================
             # FTD expects each member to be an object with 'name' and 'type'
+            # IMPORTANT: FTD only needs the NAME - it will look up the object by name
+            # Do NOT include UUIDs, IDs, or other fields - only name and type
             # FortiGate: ["HTTP", "HTTPS"]
             # FTD:       [{"name": "HTTP", "type": "tcpportobject"},
             #             {"name": "HTTPS", "type": "tcpportobject"}]
@@ -190,10 +192,14 @@ class ServiceGroupConverter:
                     # In a real implementation, you might look this up
                     member_type = "tcpportobject"
                 
+                # Create member object with ONLY name and type
+                # FTD will use the name to find the actual object in its database
                 member_obj = {
                     "name": member_name,
                     "type": member_type
                 }
+                # DO NOT add: id, uuid, version, or any other fields
+                # FTD resolves the reference by name only
                 ftd_members.append(member_obj)
             
             # ================================================================

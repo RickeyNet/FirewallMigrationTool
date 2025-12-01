@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 FortiGate Address Group Converter Module
 =========================================
