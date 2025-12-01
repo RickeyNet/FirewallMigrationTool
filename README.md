@@ -8,9 +8,10 @@
 4. [File Structure](#file-structure)
 5. [Phase 1: Converting FortiGate Configuration](#phase-1-converting-fortigate-configuration)
 6. [Phase 2: Importing to FTD](#phase-2-importing-to-ftd)
-7. [Troubleshooting](#troubleshooting)
-8. [Best Practices](#best-practices)
-9. [Appendix](#appendix)
+7. [Phase 3: Cleanup](Optional)
+8. [Troubleshooting](#troubleshooting)
+9. [Best Practices](#best-practices)
+10. [Appendix](#appendix)
 
 ---
 
@@ -25,7 +26,8 @@ This toolset converts FortiGate firewall configurations to Cisco FTD (Firepower 
 - ✅ Service Port Groups (port groups)
 - ✅ Static Routes
 - ✅ Firewall Policies (access rules)
-
+Additional Tools:
+- ✅ Bulk cleanup/delete script for removing imported objects
 ---
 
 ## Prerequisites
@@ -110,13 +112,9 @@ python -c "import yaml, requests, urllib3; print('All libraries installed!')"
 
 
 ####################################################################################################################################################
-## Installation
-
-### Step 1: Download All Script Files
-
-Create a working directory and save all 8 Python files:
-
-```
+Installation
+Step 1: Download All Script Files
+Create a working directory and save all 9 Python files:
 FortiGate-FTD-Migration/
 ├── fortigate_converter.py          # Main conversion script
 ├── address_converter.py            # Converts address objects
@@ -125,36 +123,28 @@ FortiGate-FTD-Migration/
 ├── service_group_converter.py      # Converts service groups
 ├── policy_converter.py             # Converts firewall policies
 ├── route_converter.py              # Converts static routes
-└── ftd_api_importer.py            # FTD API import script
-```
-
-### Step 2: Install Dependencies
-
+├── ftd_api_importer.py             # FTD API import script
+└── ftd_api_cleanup.py              # FTD bulk delete/cleanup script
+Step 2: Install Dependencies
 Open terminal/command prompt in your working directory:
-
-```bash
-# Install required Python libraries
+bash# Install required Python libraries
 pip install pyyaml requests urllib3
-```
-
-### Step 3: Verify Installation
-
+Step 3: Verify Installation
 Test that Python can find the libraries:
+bashpython -c "import yaml, requests, urllib3; print('All libraries installed!')"
 
-```bash
-python -c "import yaml, requests, urllib3; print('All libraries installed!')"
-```
+Download FortiGate YAML Config
 
----
+Login to FortiGate
+Click username in top right
+Go to Configuration → Backup
+Select YAML format
+Click OK
+Rename the downloaded config to fortigate_config.yaml
 
-### Download FortiGate YAML config:
-login to FortiGate-->click username in top right-->Configuration-->Backup-->Select YAML-->Click Ok
-rename config name to fortigate_config
-## File Structure
 
-### Your Working Directory Should Look Like:
-
-```
+File Structure
+Your Working Directory Should Look Like:
 FortiGate-FTD-Migration/
 ├── fortigate_converter.py          # Main converter
 ├── address_converter.py            # Module
@@ -163,24 +153,17 @@ FortiGate-FTD-Migration/
 ├── service_group_converter.py      # Module
 ├── policy_converter.py             # Module
 ├── route_converter.py              # Module
-├── ftd_api_importer.py            # API importer
-├── fortigate_config.yaml          # Your FortiGate YAML (input)
-└── ftd_config_*.json              # Generated FTD JSON files (output)
-```
+├── ftd_api_importer.py             # API importer
+├── ftd_api_cleanup.py              # Bulk delete script
+├── fortigate_config.yaml           # Your FortiGate YAML (input)
+└── ftd_config_*.json               # Generated FTD JSON files (output)
 
----
-
-## Phase 1: Converting FortiGate Configuration
-
-### Step 1: Prepare Your FortiGate Configuration
-
+Phase 1: Converting FortiGate Configuration
+Step 1: Prepare Your FortiGate Configuration
 Export your FortiGate configuration as YAML format and save it in your working directory.
-
-**Example filename:** `fortigate_config.yaml`
-
-**Expected YAML structure:**
-```yaml
-firewall_address:
+Example filename: fortigate_config.yaml
+Expected YAML structure:
+yamlfirewall_address:
   - Server1:
       subnet: [10.0.0.10, 255.255.255.255]
       comment: "Web Server"
@@ -209,65 +192,29 @@ router_static:
       dst: [0.0.0.0, 0.0.0.0]
       gateway: 192.168.1.1
       device: "port1"
-```
+Step 2: Run the Conversion Script
+Basic conversion:
+bashpython fortigate_converter.py fortigate_config.yaml --pretty
+Custom output name:
+bashpython fortigate_converter.py fortigate_config.yaml -o my_ftd_config --pretty
+Command breakdown:
 
-### Step 2: Run the Conversion Script
+fortigate_config.yaml - Your input file
+--pretty - Makes JSON readable (recommended)
+-o my_ftd_config - Output base name (optional)
 
-**Basic conversion:**
-```bash
-python fortigate_converter.py fortigate_config.yaml --pretty
-```
-
-**Custom output name:**
-```bash
-python fortigate_converter.py fortigate_config.yaml -o my_ftd_config --pretty
-```
-
-**Command breakdown:**
-- `fortigate_config.yaml` - Your input file
-- `--pretty` - Makes JSON readable (recommended)
-- `-o my_ftd_config` - Output base name (optional)
-
-### Step 3: Review Generated Files
-
-The script creates **7 JSON files**:
-
-1. **`ftd_config_address_objects.json`**
-   - Network objects (individual IPs, subnets)
-   
-2. **`ftd_config_address_groups.json`**
-   - Network groups (collections of addresses)
-   
-3. **`ftd_config_service_objects.json`**
-   - Port objects (TCP/UDP services)
-   - Note: Services with both TCP and UDP are split into separate objects
-   
-4. **`ftd_config_service_groups.json`**
-   - Port groups (collections of services)
-   
-5. **`ftd_config_static_routes.json`**
-   - Static routes
-   
-6. **`ftd_config_access_rules.json`**
-   - Firewall access rules (policies)
-   
-7. **`ftd_config_summary.json`**
-   - Conversion statistics and summary
-
-### Step 4: Verify Conversion Output
-
-**Check the summary file:**
-```bash
-# On Windows
+Step 3: Review Generated Files
+The script creates 7 JSON files:
+FileDescriptionftd_config_address_objects.jsonNetwork objects (individual IPs, subnets)ftd_config_address_groups.jsonNetwork groups (collections of addresses)ftd_config_service_objects.jsonPort objects (TCP/UDP services) - Note: Services with both TCP and UDP are split into separate objectsftd_config_service_groups.jsonPort groups (collections of services)ftd_config_static_routes.jsonStatic routesftd_config_access_rules.jsonFirewall access rules (policies)ftd_config_summary.jsonConversion statistics and summary
+Step 4: Verify Conversion Output
+Check the summary file:
+bash# On Windows
 type ftd_config_summary.json
 
 # On Mac/Linux
 cat ftd_config_summary.json
-```
-
-**Example summary:**
-```json
-{
+Example summary:
+json{
   "conversion_summary": {
     "address_objects": 48,
     "address_groups": 12,
@@ -290,126 +237,76 @@ cat ftd_config_summary.json
     }
   }
 }
-```
-
-**Review console output:**
-Look for any warnings or skipped objects:
-```
+Review console output for warnings:
 Converting Address Objects...
 ------------------------------------------------------------
   Converted: Bull_net -> NETWORK (10.0.20.0/24)
   Skipped: none (name is 'none')
   Skipped: 192.168.1.1 (name is just an IP address)
   Warning: No address object found for 10.0.50.0/24
-```
+Common Conversion Issues
+IssueMessageSolutionEmpty valuesSkipped: Empty_Object (empty value)Automatically skipped. Review original FortiGate config.Split servicesSplit: DNS -> DNS_TCP and DNS_UDPNormal behavior. FTD requires separate TCP and UDP objects.Unmatched routesWarning: No address object found for gateway 10.0.1.1Create the missing address object before importing routes.
 
-### Common Conversion Issues
+Phase 2: Importing to FTD
+Before You Begin
+⚠️ CRITICAL: Backup Your FTD Configuration
 
-**Issue 1: Objects with empty values**
-```
-Skipped: Empty_Object (empty value)
-```
-**Solution:** These are automatically skipped. Review original FortiGate config.
+Log into FDM web interface
+Navigate to System > Backup
+Create a full backup
+Download and save the backup file
 
-**Issue 2: Services split into TCP and UDP**
-```
-Split: DNS -> DNS_TCP and DNS_UDP
-```
-**Solution:** Normal behavior. FTD requires separate TCP and UDP objects.
-
-**Issue 3: Unmatched routes**
-```
-Warning: No address object found for gateway 10.0.1.1
-```
-**Solution:** Create the missing address object before importing routes.
-
----
-
-## Phase 2: Importing to FTD
-
-### Before You Begin
-
-**⚠️ CRITICAL: Backup Your FTD Configuration**
-
-1. Log into FDM web interface
-2. Navigate to **System > Backup**
-3. Create a full backup
-4. Download and save the backup file
-
-### Step 1: Test Connectivity
-
-**Verify you can reach FTD:**
-```bash
-# Test connectivity
+Step 1: Test Connectivity
+Verify you can reach FTD:
+bash# Test connectivity
 ping 192.168.1.1
 
-# Test HTTPS access (should see certificate error - this is normal)
+# Test HTTPS access (certificate error is normal for self-signed certs)
 curl -k https://192.168.1.1
-```
-
-### Step 2: Import Options
-
-You have **4 import strategies**:
-
-#### **Option A: All-at-Once Import (Fastest)**
-
+Step 2: Import Options
+You have 4 import strategies:
+Option A: All-at-Once Import (Fastest)
 Import everything in one run:
+bashpython ftd_api_importer.py --host 192.168.1.1 --username admin --deploy
+Pros: Fast, simple
+Cons: Harder to troubleshoot if errors occur
+Best for: Small configs, lab environments
 
-```bash
-python ftd_api_importer.py --host 192.168.1.1 --username admin --deploy
-```
-
-**Pros:** Fast, simple
-**Cons:** Harder to troubleshoot if errors occur
-**Best for:** Small configs, lab environments
-
----
-
-#### **Option B: Step-by-Step Import (Recommended for Production)**
-
+Option B: Step-by-Step Import (Recommended for Production)
 Import one type at a time, verify each step:
-
-```bash
-# Step 1: Import address objects
+bash# Step 1: Import address objects
 python ftd_api_importer.py --host 192.168.1.1 -u admin --only-address-objects
-# ✓ Verify in FDM web interface: Objects > Network
+# Verify in FDM: Objects > Network
 
 # Step 2: Import address groups
 python ftd_api_importer.py --host 192.168.1.1 -u admin --only-address-groups
-# ✓ Verify in FDM web interface: Objects > Network
+# Verify in FDM: Objects > Network
 
 # Step 3: Import service objects
 python ftd_api_importer.py --host 192.168.1.1 -u admin --only-service-objects
-# ✓ Verify in FDM web interface: Objects > Ports
+# Verify in FDM: Objects > Ports
 
 # Step 4: Import service groups
 python ftd_api_importer.py --host 192.168.1.1 -u admin --only-service-groups
-# ✓ Verify in FDM web interface: Objects > Ports
+# Verify in FDM: Objects > Ports
 
 # Step 5: Import static routes
 python ftd_api_importer.py --host 192.168.1.1 -u admin --only-routes
-# ✓ Verify in FDM web interface: Routing > Static Routes
+# Verify in FDM: Routing > Static Routes
 
 # Step 6: Import access rules
 python ftd_api_importer.py --host 192.168.1.1 -u admin --only-rules
-# ✓ Verify in FDM web interface: Policies > Access Control
+# Verify in FDM: Policies > Access Control
 
 # Step 7: Deploy all changes
 python ftd_api_importer.py --host 192.168.1.1 -u admin --deploy
-```
+Pros: Maximum control, easy to troubleshoot
+Cons: More time-consuming
+Best for: Production environments, large configs
 
-**Pros:** Maximum control, easy to troubleshoot
-**Cons:** More time-consuming
-**Best for:** Production environments, large configs
-
----
-
-#### **Option C: Batch Import (Balanced)**
-
+Option C: Batch Import (Balanced)
 Import related objects together:
-
-```bash
-# Import all address-related objects
+bash# Import all address-related objects
 python ftd_api_importer.py --host 192.168.1.1 -u admin \
   --only-address-objects --only-address-groups
 
@@ -423,20 +320,13 @@ python ftd_api_importer.py --host 192.168.1.1 -u admin \
 
 # Deploy
 python ftd_api_importer.py --host 192.168.1.1 -u admin --deploy
-```
+Pros: Faster than step-by-step, more control than all-at-once
+Cons: Still requires verification between steps
+Best for: Medium-sized configs
 
-**Pros:** Faster than step-by-step, more control than all-at-once
-**Cons:** Still requires verification between steps
-**Best for:** Medium-sized configs
-
----
-
-#### **Option D: Test Subset First**
-
+Option D: Test Subset First
 Test with a small subset before full import:
-
-```bash
-# Create a test file with 5-10 objects
+bash# Create a test file with 5-10 objects
 # Edit ftd_config_address_objects.json and save first 10 objects to test_addresses.json
 
 # Import test file
@@ -445,19 +335,12 @@ python ftd_api_importer.py --host 192.168.1.1 -u admin \
 
 # Verify in FDM, then import the full file
 python ftd_api_importer.py --host 192.168.1.1 -u admin --only-address-objects
-```
+Pros: Safest, validates process works
+Cons: Requires manual file editing
+Best for: First-time migrations, critical environments
 
-**Pros:** Safest, validates process works
-**Cons:** Requires manual file editing
-**Best for:** First-time migrations, critical environments
-
----
-
-### Step 3: Monitor Import Progress
-
-**During import, you'll see:**
-
-```
+Step 3: Monitor Import Progress
+During import, you'll see:
 ============================================================
 FortiGate to Cisco FTD Configuration Importer
 ============================================================
@@ -492,56 +375,14 @@ Address Objects:
   Created: 45
   Skipped: 2 (already exist)
   Failed:  1
-```
-
-**Symbol Legend:**
-- ✓ = Successfully created
-- ⊘ = Already exists (skipped, not an error)
-- ✗ = Failed (see error message)
-
-### Step 4: Handle Import Errors
-
-**Common errors and solutions:**
-
-#### Error: "Object already exists"
-```
-[5/50] Creating: Server1... ⊘ (already exists)
-```
-**Solution:** This is NORMAL. Object already exists in FTD. Script continues automatically.
-
-#### Error: "Authentication failed"
-```
-✗ Authentication failed: 401
-```
-**Solution:** 
-1. Verify username and password
-2. Check FDM is accessible at the IP
-3. Ensure account has admin privileges
-
-#### Error: "Invalid reference"
-```
-✗ Referenced object 'Gateway_10_0_1_1' not found
-```
-**Solution:**
-1. Import address objects before routes/rules
-2. Check that referenced objects exist in FTD
-3. Review conversion warnings for unmatched objects
-
-#### Error: "Connection timeout"
-```
-✗ Connection error: ReadTimeout
-```
-**Solution:**
-1. Check network connectivity
-2. Increase timeout (modify script if needed)
-3. FDM might be busy - wait and retry
-
-### Step 5: Deploy Changes
-
+Symbol Legend:
+SymbolMeaning✓Successfully created⊘Already exists (skipped, not an error)✗Failed (see error message)
+Step 4: Handle Import Errors
+Common errors and solutions:
+ErrorCauseSolution⊘ (already exists)Object already in FTDNormal - script continues automaticallyAuthentication failed: 401Bad credentialsVerify username/password and admin privilegesReferenced object 'X' not foundMissing dependencyImport address objects before routes/rulesConnection error: ReadTimeoutNetwork issueCheck connectivity, wait and retry
+Step 5: Deploy Changes
 After successful import, deploy to activate changes:
-
-```bash
-# Deploy via script
+bash# Deploy via script
 python ftd_api_importer.py --host 192.168.1.1 -u admin --deploy
 
 # OR deploy via FDM web interface:
@@ -549,194 +390,235 @@ python ftd_api_importer.py --host 192.168.1.1 -u admin --deploy
 # 2. Click "Deploy" button (top right)
 # 3. Review changes
 # 4. Click "Deploy Now"
-```
+Deployment typically takes 2-5 minutes.
+Step 6: Verify Configuration
+Check each object type in FDM:
+Object TypeFDM LocationNetwork ObjectsObjects > Network > NetworksNetwork GroupsObjects > Network > Network GroupsPort ObjectsObjects > Ports > TCP Ports / UDP PortsPort GroupsObjects > Ports > Port GroupsStatic RoutesRouting > Static RoutesAccess RulesPolicies > Access Control > Access Rules
 
-**Deployment takes 2-5 minutes typically.**
+Phase 3: Cleanup (Optional)
+The ftd_api_cleanup.py script allows you to bulk delete custom objects from FTD. This is useful for:
 
-### Step 6: Verify Configuration
+Removing failed/partial imports
+Resetting FTD to clean state before re-importing
+Testing migration in lab environments
 
-**Check each object type in FDM:**
+⚠️ WARNING
+This script DELETES ALL CUSTOM OBJECTS of selected types!
 
-1. **Network Objects:** Objects > Network > Networks
-2. **Network Groups:** Objects > Network > Network Groups
-3. **Port Objects:** Objects > Ports > TCP Ports / UDP Ports
-4. **Port Groups:** Objects > Ports > Port Groups
-5. **Static Routes:** Routing > Static Routes
-6. **Access Rules:** Policies > Access Control > Access Rules
+It does NOT use import files - it deletes EVERYTHING it finds
+Only deletes custom objects (system-defined objects are protected)
+Cannot be undone without restoring from backup
+Always backup your FTD configuration before running
 
-**Sample verification checklist:**
+Cleanup Commands
+Dry Run Mode (Preview without deleting)
+Always run dry-run first to see what will be deleted:
+bash# Preview what address objects would be deleted
+python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-address-objects --dry-run
 
-```
-□ All address objects imported
-□ All address groups imported
-□ All service objects imported
-□ All service groups imported
-□ All static routes imported
-□ All access rules imported
-□ Configuration deployed successfully
-□ No unexpected errors in FDM
-□ Sample traffic tests pass
-```
+# Preview deleting everything
+python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-all --dry-run
+Delete Specific Object Types
+bash# Delete all custom address objects
+python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-address-objects
 
----
+# Delete all custom address groups
+python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-address-groups
 
-## Troubleshooting
+# Delete all custom service objects (TCP and UDP)
+python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-service-objects
 
-### Conversion Issues
+# Delete all custom service groups
+python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-service-groups
 
-#### Problem: Script can't find converter modules
-```
+# Delete all custom static routes
+python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-routes
+
+# Delete all custom access rules
+python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-rules
+Delete Everything
+bash# Delete ALL custom objects (use with extreme caution!)
+python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-all
+Delete and Deploy
+bash# Delete and automatically deploy changes
+python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-all --deploy
+Skip Confirmation Prompt
+bash# Skip the safety confirmation (for automation)
+python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-all --yes
+Cleanup Options Reference
+OptionDescription--hostFTD management IP (required)-u, --usernameFDM username (required)-p, --passwordFDM password (will prompt if not provided)--dry-runPreview without deleting--deployDeploy changes after deletion--debugEnable debug output--yesSkip confirmation prompt--delete-address-objectsDelete all address objects--delete-address-groupsDelete all address groups--delete-service-objectsDelete all service objects--delete-service-groupsDelete all service groups--delete-routesDelete all static routes--delete-rulesDelete all access rules--delete-allDelete ALL custom objects
+Cleanup Deletion Order
+The script deletes objects in reverse dependency order to avoid reference errors:
+
+Access Rules (references everything)
+Static Routes (references address objects)
+Service Groups (references service objects)
+Service Objects (TCP and UDP)
+Address Groups (references address objects)
+Address Objects (no dependencies)
+
+
+Troubleshooting
+Conversion Issues
+Problem: Script can't find converter modules
 ERROR: Missing converter module files!
-```
-**Solution:**
-1. Ensure all 8 .py files are in the same directory
-2. Run script from that directory
-3. Check for typos in filenames
+Solution:
 
-#### Problem: YAML parsing errors
-```
+Ensure all 9 .py files are in the same directory
+Run script from that directory
+Check for typos in filenames
+
+Problem: YAML parsing errors
 ✗ ERROR: Could not parse YAML file!
-```
-**Solution:**
-1. Validate YAML syntax online (yamllint.com)
-2. Check for tabs (YAML requires spaces)
-3. Verify file encoding (should be UTF-8)
+Solution:
 
-#### Problem: Many objects skipped
-```
+Validate YAML syntax online (yamllint.com)
+Check for tabs (YAML requires spaces)
+Verify file encoding (should be UTF-8)
+
+Problem: Many objects skipped
 Skipped: none (name is 'none')
 Skipped: 192.168.1.1 (name is just an IP address)
-```
-**Solution:**
+Solution:
 These validations are intentional:
-- Objects named "none" are invalid
-- Object names that are just IPs are invalid
-- Objects with empty values are invalid
+
+Objects named "none" are invalid
+Object names that are just IPs are invalid
+Objects with empty values are invalid
+
 This prevents API errors. Review original FortiGate config.
-
-### Import Issues
-
-#### Problem: SSL certificate errors
-```
+Import Issues
+Problem: SSL certificate errors
 SSLError: certificate verify failed
-```
-**Solution:**
-Script disables SSL verification by default for self-signed certs. If you still see this error:
-```python
-# The script should have this line:
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-```
-
-#### Problem: Rate limiting
-```
+Solution:
+Script disables SSL verification by default for self-signed certs. This is normal behavior.
+Problem: Rate limiting
 Too many requests
-```
-**Solution:**
+Solution:
 Script includes 0.2s delays between requests. If you still hit limits:
-1. Increase delay in script (change `time.sleep(0.2)` to `time.sleep(0.5)`)
-2. Import in smaller batches
 
-#### Problem: Objects reference missing objects
-```
+Increase delay in script (change time.sleep(0.2) to time.sleep(0.5))
+Import in smaller batches
+
+Problem: Objects reference missing objects
 Referenced network 'Unknown_Net' not found
-```
-**Solution:**
-1. Check conversion warnings for unmatched objects
-2. Create missing objects manually in FDM
-3. Re-run import for dependent objects
+Solution:
 
-### Deployment Issues
+Check conversion warnings for unmatched objects
+Create missing objects manually in FDM
+Re-run import for dependent objects
 
-#### Problem: Deployment fails
-```
+Deployment Issues
+Problem: Deployment fails
 Deployment validation failed
-```
-**Solution:**
-1. Check FDM System > Task Status for details
-2. Common issues:
-   - Invalid object references
-   - Overlapping routes
-   - Conflicting rules
-3. Fix issues in FDM and redeploy
+Solution:
 
-#### Problem: Deployment stuck
-**Solution:**
-1. Wait 10 minutes (deployments can be slow)
-2. Check FDM System > Task Status
-3. If stuck >15 minutes, cancel and review logs
+Check FDM System > Task Status for details
+Common issues:
 
----
+Invalid object references
+Overlapping routes
+Conflicting rules
 
-## Best Practices
 
-### Before Migration
+Fix issues in FDM and redeploy
 
-**1. Test in Lab First**
-- Set up identical FTD in lab
-- Run full migration
-- Test thoroughly
-- Document issues and solutions
+Problem: Deployment stuck
+Solution:
 
-**2. Backup Everything**
-- FortiGate configuration
-- FTD configuration
-- All generated JSON files
+Wait 10 minutes (deployments can be slow)
+Check FDM System > Task Status
+If stuck >15 minutes, cancel and review logs
 
-**3. Plan Maintenance Window**
-- Schedule adequate time (2-4 hours for medium configs)
-- Plan rollback procedure
-- Notify stakeholders
 
-**4. Review Converted Config**
-- Check summary.json statistics
-- Review conversion warnings
-- Validate critical rules converted correctly
+Best Practices
+Before Migration
 
-### During Migration
+Test in Lab First
 
-**1. Import in Phases**
-- Use step-by-step approach
-- Verify each phase before proceeding
-- Test critical paths after each phase
+Set up identical FTD in lab
+Run full migration
+Test thoroughly
+Document issues and solutions
 
-**2. Monitor Closely**
-- Watch for errors during import
-- Check FDM logs
-- Validate objects after creation
 
-**3. Document Issues**
-- Note any errors
-- Track manual corrections needed
-- Record lessons learned
+Backup Everything
 
-### After Migration
+FortiGate configuration
+FTD configuration
+All generated JSON files
 
-**1. Thorough Testing**
-- Test all critical traffic flows
-- Verify remote access
-- Check routing
-- Validate NAT rules
-- Test logging
 
-**2. Monitor Performance**
-- Check CPU/memory usage
-- Monitor connection counts
-- Review logs for errors
+Plan Maintenance Window
 
-**3. Update Documentation**
-- Document new object names
-- Update network diagrams
-- Record configuration differences
+Schedule adequate time (2-4 hours for medium configs)
+Plan rollback procedure
+Notify stakeholders
 
----
 
-## Appendix
+Review Converted Config
 
-### A. Command Reference
+Check summary.json statistics
+Review conversion warnings
+Validate critical rules converted correctly
 
-#### Conversion Commands
-```bash
-# Basic conversion
+
+
+During Migration
+
+Import in Phases
+
+Use step-by-step approach
+Verify each phase before proceeding
+Test critical paths after each phase
+
+
+Monitor Closely
+
+Watch for errors during import
+Check FDM logs
+Validate objects after creation
+
+
+Document Issues
+
+Note any errors
+Track manual corrections needed
+Record lessons learned
+
+
+
+After Migration
+
+Thorough Testing
+
+Test all critical traffic flows
+Verify remote access
+Check routing
+Validate NAT rules
+Test logging
+
+
+Monitor Performance
+
+Check CPU/memory usage
+Monitor connection counts
+Review logs for errors
+
+
+Update Documentation
+
+Document new object names
+Update network diagrams
+Record configuration differences
+
+
+
+
+Appendix
+A. Command Reference
+Conversion Commands
+bash# Basic conversion
 python fortigate_converter.py config.yaml --pretty
 
 # Custom output name
@@ -744,11 +626,8 @@ python fortigate_converter.py config.yaml -o prod_ftd --pretty
 
 # Help
 python fortigate_converter.py --help
-```
-
-#### Import Commands
-```bash
-# Full import
+Import Commands
+bash# Full import
 python ftd_api_importer.py --host IP -u admin
 
 # Selective imports
@@ -768,24 +647,37 @@ python ftd_api_importer.py --host IP -u admin --deploy
 
 # Help
 python ftd_api_importer.py --help
-```
+Cleanup Commands
+bash# Dry run (preview)
+python ftd_api_cleanup.py --host IP -u admin --delete-all --dry-run
 
-### B. File Formats
+# Delete specific types
+python ftd_api_cleanup.py --host IP -u admin --delete-address-objects
+python ftd_api_cleanup.py --host IP -u admin --delete-address-groups
+python ftd_api_cleanup.py --host IP -u admin --delete-service-objects
+python ftd_api_cleanup.py --host IP -u admin --delete-service-groups
+python ftd_api_cleanup.py --host IP -u admin --delete-routes
+python ftd_api_cleanup.py --host IP -u admin --delete-rules
 
-#### Address Object (FTD JSON)
-```json
-{
+# Delete everything
+python ftd_api_cleanup.py --host IP -u admin --delete-all
+
+# Delete and deploy
+python ftd_api_cleanup.py --host IP -u admin --delete-all --deploy
+
+# Help
+python ftd_api_cleanup.py --help
+B. File Formats
+Address Object (FTD JSON)
+json{
   "name": "Server1",
   "description": "Web Server",
   "type": "networkobject",
   "subType": "HOST",
-  "value": "10.0.0.10/32"
+  "value": "10.0.0.10"
 }
-```
-
-#### Address Group (FTD JSON)
-```json
-{
+Address Group (FTD JSON)
+json{
   "name": "Web_Servers",
   "isSystemDefined": false,
   "objects": [
@@ -794,21 +686,15 @@ python ftd_api_importer.py --help
   ],
   "type": "networkobjectgroup"
 }
-```
-
-#### Port Object (FTD JSON)
-```json
-{
+Port Object (FTD JSON)
+json{
   "name": "HTTP_TCP",
   "isSystemDefined": false,
   "port": "80",
   "type": "tcpportobject"
 }
-```
-
-#### Static Route (FTD JSON)
-```json
-{
+Static Route (FTD JSON)
+json{
   "name": "Default_Route",
   "iface": {
     "name": "outside",
@@ -825,13 +711,8 @@ python ftd_api_importer.py --help
   "ipType": "IPv4",
   "type": "staticrouteentry"
 }
-```
-
-### C. Object Dependencies
-
-**Import Order Matters:**
-
-```
+C. Object Dependencies
+Import Order Matters:
 1. Address Objects (no dependencies)
    ↓
 2. Address Groups (references Address Objects)
@@ -843,31 +724,35 @@ python ftd_api_importer.py --help
 5. Static Routes (references Address Objects)
    ↓
 6. Access Rules (references everything above)
-```
+Cleanup Order (Reverse):
+1. Access Rules
+2. Static Routes
+3. Service Groups
+4. Service Objects
+5. Address Groups
+6. Address Objects
+D. Support and Resources
+FTD FDM API Documentation:
 
-### D. Support and Resources
+Official Cisco FDM API Guide: Search "FTD FDM REST API" on Cisco.com
+API Explorer: https://YOUR_FTD_IP/apiexplorer/
 
-**FTD FDM API Documentation:**
-- Official Cisco FDM API Guide: Search "FTD FDM REST API" on Cisco.com
-- API Explorer: `https://YOUR_FTD_IP/apiexplorer/`
+Python Resources:
 
-**Python Resources:**
-- PyYAML: https://pyyaml.org/
-- Requests: https://docs.python-requests.org/
+PyYAML: https://pyyaml.org/
+Requests: https://docs.python-requests.org/
 
-**Troubleshooting Resources:**
-- FDM Logs: System > Troubleshooting > Diagnostics
-- System Tasks: System > Task Status
-- Audit Log: System > Audit > Audit Log
+Troubleshooting Resources:
 
----
+FDM Logs: System > Troubleshooting > Diagnostics
+System Tasks: System > Task Status
+Audit Log: System > Audit > Audit Log
 
-## Quick Start Checklist
 
-```
+Quick Start Checklist
 □ Install Python 3.6+
 □ Install libraries: pip install pyyaml requests urllib3
-□ Download all 8 script files to one folder
+□ Download all 9 script files to one folder
 □ Export FortiGate config as YAML
 □ Backup FTD configuration
 □ Run conversion: python fortigate_converter.py config.yaml --pretty
@@ -879,10 +764,7 @@ python ftd_api_importer.py --help
 □ Test traffic flows
 □ Document any issues
 □ Celebrate successful migration! 🎉
-```
 
----
-
-**Document Version:** 1.0  
-**Last Updated:** November 2024  
-**Compatible With:** FTD 7.4.x with FDM
+Document Version: 1.1
+Last Updated: December 2024
+Compatible With: FTD 7.4.x with FDM
