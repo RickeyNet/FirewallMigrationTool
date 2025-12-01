@@ -34,6 +34,7 @@ SAFETY FEATURES:
 """
 
 import requests
+import json
 import argparse
 import sys
 import time
@@ -116,15 +117,15 @@ class FTDBulkDelete:
                     "Accept": "application/json"
                 })
                 
-                print("âœ“ Authentication successful")
+                print("[OK] Authentication successful")
                 return True
             else:
-                print(f"âœ— Authentication failed: {response.status_code}")
+                print(f"[ERROR] Authentication failed: {response.status_code}")
                 print(f"  Response: {response.text}")
                 return False
                 
         except requests.exceptions.RequestException as e:
-            print(f"âœ— Connection error: {e}")
+            print(f"[ERROR] Connection error: {e}")
             return False
     
     def get_all_objects(self, endpoint: str) -> List[Dict]:
@@ -285,10 +286,10 @@ class FTDBulkDelete:
                 success = self.delete_object(endpoint, obj_id)
                 
                 if success:
-                    print("âœ“")
+                    print("[OK]")
                     success_count += 1
                 else:
-                    print("âœ—")
+                    print("[ERROR]")
                     fail_count += 1
                 
                 time.sleep(0.2)  # Rate limiting
@@ -314,15 +315,15 @@ class FTDBulkDelete:
             response = self.session.post(endpoint, json={}, timeout=30)
             
             if response.status_code in [200, 201, 202]:
-                print("âœ“ Deployment initiated")
+                print("[OK] Deployment initiated")
                 print("  (Deployment may take several minutes)")
                 return True
             else:
-                print(f"âœ— Deployment failed: {response.status_code}")
+                print(f"[ERROR] Deployment failed: {response.status_code}")
                 return False
                 
         except requests.exceptions.RequestException as e:
-            print(f"âœ— Deployment error: {e}")
+            print(f"[ERROR] Deployment error: {e}")
             return False
 
 
@@ -390,13 +391,13 @@ Examples:
         
         backup = input().strip().lower()
         if backup != 'yes':
-            print("\nâœ— Please backup first!")
+            print("\n[ERROR] Please backup first!")
             return 1
         
         print("\nType 'DELETE ALL' to confirm: ", end="")
         confirm = input().strip()
         if confirm != 'DELETE ALL':
-            print("\nâœ— Cancelled")
+            print("\n[ERROR] Cancelled")
             return 1
     
     # Create client

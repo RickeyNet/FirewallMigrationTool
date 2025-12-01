@@ -51,7 +51,6 @@ FTD JSON OUTPUT FORMAT:
 
 from typing import Dict, List, Any, Tuple
 
-
 def sanitize_name(name: str) -> str:
     """
     Sanitize object names for FTD compatibility.
@@ -68,6 +67,8 @@ def sanitize_name(name: str) -> str:
     if name is None:
         return ""
     return str(name).replace(' ', '_')
+
+
 
 
 class ServiceConverter:

@@ -48,7 +48,6 @@ NOTE ON MEMBER TYPES:
 
 from typing import Dict, List, Any, Set
 
-
 def sanitize_name(name: str) -> str:
     """
     Sanitize object names for FTD compatibility.
@@ -65,6 +64,8 @@ def sanitize_name(name: str) -> str:
     if name is None:
         return ""
     return str(name).replace(' ', '_')
+
+
 
 
 class ServiceGroupConverter:
@@ -173,7 +174,6 @@ class ServiceGroupConverter:
             # ================================================================
             # If a member service was split (had both TCP and UDP ports),
             # we need to include BOTH versions in the group
-            # Also sanitize member names to replace spaces with underscores
             expanded_members = []
             
             for member_name in members_list:
@@ -216,7 +216,6 @@ class ServiceGroupConverter:
                 
                 # Create member object with ONLY name and type
                 # FTD will use the name to find the actual object in its database
-                # Name is already sanitized from the expanded_members loop
                 member_obj = {
                     "name": member_name,
                     "type": member_type
@@ -229,11 +228,11 @@ class ServiceGroupConverter:
             # STEP 2F: Create the FTD port group structure
             # ================================================================
             # This is the final format that FTD FDM API expects
-            # Sanitize the group name to replace spaces with underscores
+            # Sanitize the group name
             sanitized_group_name = sanitize_name(group_name)
             
             ftd_group = {
-                "name": sanitized_group_name,              # Sanitized group name
+                "name": sanitized_group_name,                    # Group name from FortiGate
                 "isSystemDefined": False,              # Custom groups are not system-defined
                 "objects": ftd_members,                # List of member port objects
                 "type": "portobjectgroup"              # FTD type for port groups

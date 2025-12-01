@@ -158,16 +158,69 @@ class FTDAPIClient:
                     "Accept": "application/json"
                 })
                 
-                print("âœ“ Authentication successful")
+                print("[OK] Authentication successful")
                 return True
             else:
-                print(f"âœ— Authentication failed: {response.status_code}")
+                print(f"[ERROR] Authentication failed: {response.status_code}")
                 print(f"  Response: {response.text}")
                 return False
                 
         except requests.exceptions.RequestException as e:
-            print(f"âœ— Connection error: {e}")
+            print(f"[ERROR] Connection error: {e}")
             return False
+    
+    def _extract_error_message(self, response_or_data) -> str:
+        """
+        Extract a human-readable error message from an API response.
+        
+        Args:
+            response_or_data: Either a requests.Response object or a dict of parsed JSON
+            
+        Returns:
+            String containing the error message
+        """
+        try:
+            # If it's a Response object, try to parse JSON
+            if hasattr(response_or_data, 'json'):
+                try:
+                    data = response_or_data.json()
+                except:
+                    return response_or_data.text[:500] if response_or_data.text else "Unknown error"
+            else:
+                data = response_or_data
+            
+            # Try different error message formats that FTD API might return
+            # Format 1: {"error": {"messages": [{"description": "..."}]}}
+            if 'error' in data:
+                error_obj = data['error']
+                if 'messages' in error_obj and error_obj['messages']:
+                    messages = []
+                    for msg in error_obj['messages']:
+                        if isinstance(msg, dict):
+                            desc = msg.get('description', '')
+                            code = msg.get('code', '')
+                            if desc:
+                                messages.append(f"{code}: {desc}" if code else desc)
+                        elif isinstance(msg, str):
+                            messages.append(msg)
+                    if messages:
+                        return " | ".join(messages)
+                if 'message' in error_obj:
+                    return error_obj['message']
+            
+            # Format 2: {"message": "..."}
+            if 'message' in data:
+                return data['message']
+            
+            # Format 3: {"description": "..."}
+            if 'description' in data:
+                return data['description']
+            
+            # Fallback: return the whole response as string (truncated)
+            return str(data)[:500]
+            
+        except Exception as e:
+            return f"Error parsing response: {str(e)}"
     
     def create_network_object(self, obj: Dict) -> Tuple[bool, Optional[str]]:
         """
@@ -191,7 +244,7 @@ class FTDAPIClient:
             elif response.status_code == 422:
                 # 422 Unprocessable Entity - usually means object already exists
                 error_data = response.json()
-                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
+                error_msg = self._extract_error_message(error_data)
                 
                 # Check if it's a duplicate/already exists error
                 if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
@@ -199,15 +252,15 @@ class FTDAPIClient:
                     return True, f"SKIPPED: {error_msg}"  # Return True to indicate it's not a failure
                 else:
                     self.stats["address_objects_failed"] += 1
-                    return False, error_msg
+                    return False, f"HTTP {response.status_code}: {error_msg}"
             else:
                 self.stats["address_objects_failed"] += 1
-                error_msg = response.text
-                return False, error_msg
+                error_msg = self._extract_error_message(response)
+                return False, f"HTTP {response.status_code}: {error_msg}"
                 
         except requests.exceptions.RequestException as e:
             self.stats["address_objects_failed"] += 1
-            return False, str(e)
+            return False, f"Request error: {str(e)}"
     
     def create_network_group(self, group: Dict) -> Tuple[bool, Optional[str]]:
         """
@@ -230,22 +283,22 @@ class FTDAPIClient:
                 return True, created_obj.get("id")
             elif response.status_code == 422:
                 error_data = response.json()
-                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
+                error_msg = self._extract_error_message(error_data)
                 
                 if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
                     self.stats["address_groups_skipped"] += 1
                     return True, f"SKIPPED: {error_msg}"
                 else:
                     self.stats["address_groups_failed"] += 1
-                    return False, error_msg
+                    return False, f"HTTP {response.status_code}: {error_msg}"
             else:
                 self.stats["address_groups_failed"] += 1
-                error_msg = response.text
-                return False, error_msg
+                error_msg = self._extract_error_message(response)
+                return False, f"HTTP {response.status_code}: {error_msg}"
                 
         except requests.exceptions.RequestException as e:
             self.stats["address_groups_failed"] += 1
-            return False, str(e)
+            return False, f"Request error: {str(e)}"
     
     def create_port_object(self, obj: Dict) -> Tuple[bool, Optional[str]]:
         """
@@ -277,22 +330,22 @@ class FTDAPIClient:
                 return True, created_obj.get("id")
             elif response.status_code == 422:
                 error_data = response.json()
-                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
+                error_msg = self._extract_error_message(error_data)
                 
                 if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
                     self.stats["port_objects_skipped"] += 1
                     return True, f"SKIPPED: {error_msg}"
                 else:
                     self.stats["port_objects_failed"] += 1
-                    return False, error_msg
+                    return False, f"HTTP {response.status_code}: {error_msg}"
             else:
                 self.stats["port_objects_failed"] += 1
-                error_msg = response.text
-                return False, error_msg
+                error_msg = self._extract_error_message(response)
+                return False, f"HTTP {response.status_code}: {error_msg}"
                 
         except requests.exceptions.RequestException as e:
             self.stats["port_objects_failed"] += 1
-            return False, str(e)
+            return False, f"Request error: {str(e)}"
     
     def create_port_group(self, group: Dict) -> Tuple[bool, Optional[str]]:
         """
@@ -315,22 +368,22 @@ class FTDAPIClient:
                 return True, created_obj.get("id")
             elif response.status_code == 422:
                 error_data = response.json()
-                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
+                error_msg = self._extract_error_message(error_data)
                 
                 if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
                     self.stats["port_groups_skipped"] += 1
                     return True, f"SKIPPED: {error_msg}"
                 else:
                     self.stats["port_groups_failed"] += 1
-                    return False, error_msg
+                    return False, f"HTTP {response.status_code}: {error_msg}"
             else:
                 self.stats["port_groups_failed"] += 1
-                error_msg = response.text
-                return False, error_msg
+                error_msg = self._extract_error_message(response)
+                return False, f"HTTP {response.status_code}: {error_msg}"
                 
         except requests.exceptions.RequestException as e:
             self.stats["port_groups_failed"] += 1
-            return False, str(e)
+            return False, f"Request error: {str(e)}"
     
     def create_static_route(self, route: Dict) -> Tuple[bool, Optional[str]]:
         """
@@ -353,22 +406,22 @@ class FTDAPIClient:
                 return True, created_obj.get("id")
             elif response.status_code == 422:
                 error_data = response.json()
-                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
+                error_msg = self._extract_error_message(error_data)
                 
                 if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
                     self.stats["routes_skipped"] += 1
                     return True, f"SKIPPED: {error_msg}"
                 else:
                     self.stats["routes_failed"] += 1
-                    return False, error_msg
+                    return False, f"HTTP {response.status_code}: {error_msg}"
             else:
                 self.stats["routes_failed"] += 1
-                error_msg = response.text
-                return False, error_msg
+                error_msg = self._extract_error_message(response)
+                return False, f"HTTP {response.status_code}: {error_msg}"
                 
         except requests.exceptions.RequestException as e:
             self.stats["routes_failed"] += 1
-            return False, str(e)
+            return False, f"Request error: {str(e)}"
     
     def create_access_rule(self, rule: Dict) -> Tuple[bool, Optional[str]]:
         """
@@ -391,22 +444,22 @@ class FTDAPIClient:
                 return True, created_obj.get("id")
             elif response.status_code == 422:
                 error_data = response.json()
-                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
+                error_msg = self._extract_error_message(error_data)
                 
                 if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
                     self.stats["rules_skipped"] += 1
                     return True, f"SKIPPED: {error_msg}"
                 else:
                     self.stats["rules_failed"] += 1
-                    return False, error_msg
+                    return False, f"HTTP {response.status_code}: {error_msg}"
             else:
                 self.stats["rules_failed"] += 1
-                error_msg = response.text
-                return False, error_msg
+                error_msg = self._extract_error_message(response)
+                return False, f"HTTP {response.status_code}: {error_msg}"
                 
         except requests.exceptions.RequestException as e:
             self.stats["rules_failed"] += 1
-            return False, str(e)
+            return False, f"Request error: {str(e)}"
     
     def deploy_changes(self) -> bool:
         """
@@ -428,17 +481,17 @@ class FTDAPIClient:
             response = self.session.post(endpoint, json={}, timeout=30)
             
             if response.status_code in [200, 201, 202]:
-                print("âœ“ Deployment initiated successfully")
+                print("[OK] Deployment initiated successfully")
                 print("  Note: Deployment may take several minutes to complete")
                 print("  Check FDM web interface for deployment status")
                 return True
             else:
-                print(f"âœ— Deployment failed: {response.status_code}")
+                print(f"[ERROR] Deployment failed: {response.status_code}")
                 print(f"  Response: {response.text}")
                 return False
                 
         except requests.exceptions.RequestException as e:
-            print(f"âœ— Deployment error: {e}")
+            print(f"[ERROR] Deployment error: {e}")
             return False
     
     def print_statistics(self):
@@ -490,10 +543,10 @@ def load_json_file(filename: str) -> Optional[List[Dict]]:
             data = json.load(f)
             return data
     except FileNotFoundError:
-        print(f"âœ— File not found: {filename}")
+        print(f"[ERROR] File not found: {filename}")
         return None
     except json.JSONDecodeError as e:
-        print(f"âœ— Invalid JSON in {filename}: {e}")
+        print(f"[ERROR] Invalid JSON in {filename}: {e}")
         return None
 
 
@@ -530,9 +583,9 @@ def import_address_objects(client: FTDAPIClient, filename: str) -> bool:
             if "SKIPPED" in str(result):
                 print("âŠ˜ (already exists)")
             else:
-                print("âœ“")
+                print("[OK]")
         else:
-            print(f"âœ—")
+            print(f"[ERROR]")
             print(f"      Error: {result}")
             all_success = False
         
@@ -576,9 +629,9 @@ def import_address_groups(client: FTDAPIClient, filename: str) -> bool:
         
         success, result = client.create_network_group(cleaned_group)
         if success:
-            print("âœ“")
+            print("[OK]")
         else:
-            print(f"âœ— {result}")
+            print(f"[ERROR] {result}")
             all_success = False
         
         time.sleep(0.2)
@@ -660,9 +713,9 @@ def import_service_objects(client: FTDAPIClient, filename: str) -> bool:
         
         success, result = client.create_port_object(obj)
         if success:
-            print("âœ“")
+            print("[OK]")
         else:
-            print(f"âœ— {result}")
+            print(f"[ERROR] {result}")
             all_success = False
         
         time.sleep(0.2)
@@ -704,9 +757,9 @@ def import_service_groups(client: FTDAPIClient, filename: str) -> bool:
         
         success, result = client.create_port_group(cleaned_group)
         if success:
-            print("âœ“")
+            print("[OK]")
         else:
-            print(f"âœ— {result}")
+            print(f"[ERROR] {result}")
             all_success = False
         
         time.sleep(0.2)
@@ -744,9 +797,9 @@ def import_static_routes(client: FTDAPIClient, filename: str) -> bool:
         
         success, result = client.create_static_route(route)
         if success:
-            print("âœ“")
+            print("[OK]")
         else:
-            print(f"âœ— {result}")
+            print(f"[ERROR] {result}")
             all_success = False
         
         time.sleep(0.2)
@@ -785,9 +838,9 @@ def import_access_rules(client: FTDAPIClient, filename: str) -> bool:
         
         success, result = client.create_access_rule(rule)
         if success:
-            print("âœ“")
+            print("[OK]")
         else:
-            print(f"âœ— {result}")
+            print(f"[ERROR] {result}")
             all_success = False
         
         time.sleep(0.2)
@@ -876,7 +929,7 @@ Examples:
     
     # Authenticate
     if not client.authenticate():
-        print("\nâœ— Authentication failed. Exiting.")
+        print("\n[ERROR] Authentication failed. Exiting.")
         return 1
     
     # Determine what to import
@@ -942,7 +995,7 @@ Examples:
             imported_any = True
         
         if not imported_any:
-            print("\nâœ— No import flags specified. Nothing to import.")
+            print("\n[ERROR] No import flags specified. Nothing to import.")
             return 1
     
     # Default: Import everything in order

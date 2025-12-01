@@ -41,7 +41,6 @@ IMPORTANT NOTES:
 
 from typing import Dict, List, Any
 
-
 def sanitize_name(name: str) -> str:
     """
     Sanitize object names for FTD compatibility.
@@ -58,6 +57,8 @@ def sanitize_name(name: str) -> str:
     if name is None:
         return ""
     return str(name).replace(' ', '_')
+
+
 
 
 class AddressGroupConverter:
@@ -173,10 +174,10 @@ class AddressGroupConverter:
             
             ftd_members = []
             for member_name in members_list:
-                # Create an FTD member object with sanitized name
+                # Create an FTD member object
                 member_obj = {
-                    "name": sanitize_name(member_name),  # Sanitized object name
-                    "type": "networkobject"              # Always 'networkobject' for address objects
+                    "name": sanitize_name(member_name),           # The object name
+                    "type": "networkobject"        # Always 'networkobject' for address objects
                 }
                 ftd_members.append(member_obj)
             
@@ -184,11 +185,11 @@ class AddressGroupConverter:
             # STEP 2E: Create the FTD network group structure
             # ================================================================
             # This is the final format that FTD FDM API expects
-            # Sanitize the group name to replace spaces with underscores
+            # Sanitize the group name
             sanitized_group_name = sanitize_name(group_name)
             
             ftd_group = {
-                "name": sanitized_group_name,              # Sanitized group name
+                "name": sanitized_group_name,                    # Group name from FortiGate
                 "isSystemDefined": False,              # Custom groups are not system-defined
                 "objects": ftd_members,                # List of member objects
                 "type": "networkobjectgroup"           # FTD type for address groups

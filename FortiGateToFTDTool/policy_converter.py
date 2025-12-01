@@ -61,7 +61,6 @@ IMPORTANT NOTES:
 
 from typing import Dict, List, Any, Set
 
-
 def sanitize_name(name: str) -> str:
     """
     Sanitize object names for FTD compatibility.
@@ -78,6 +77,8 @@ def sanitize_name(name: str) -> str:
     if name is None:
         return ""
     return str(name).replace(' ', '_')
+
+
 
 
 class PolicyConverter:
@@ -366,13 +367,12 @@ class PolicyConverter:
         
         If a service in the list was split (has both TCP and UDP ports),
         replace it with both the _TCP and _UDP versions.
-        Also sanitizes service names to replace spaces with underscores.
         
         Args:
             services: List of FortiGate service names
             
         Returns:
-            List of expanded and sanitized service names
+            List of expanded service names
         """
         expanded = []
         
@@ -399,7 +399,7 @@ class PolicyConverter:
         Create FTD port object references from FortiGate service names.
         
         Args:
-            service_names: List of FortiGate service names (possibly expanded, already sanitized)
+            service_names: List of FortiGate service names (possibly expanded)
             
         Returns:
             List of FTD port object reference dictionaries
@@ -416,7 +416,6 @@ class PolicyConverter:
                 # Unknown - could be either or a group, default to tcpportobject
                 port_type = "tcpportobject"
             
-            # Name is already sanitized from _expand_services
             port_obj = {
                 "name": service_name,
                 "type": port_type

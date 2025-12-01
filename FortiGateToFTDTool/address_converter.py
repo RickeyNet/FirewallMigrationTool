@@ -32,7 +32,6 @@ FTD JSON OUTPUT FORMAT:
 
 from typing import Dict, List, Any
 
-
 def sanitize_name(name: str) -> str:
     """
     Sanitize object names for FTD compatibility.
@@ -49,6 +48,8 @@ def sanitize_name(name: str) -> str:
     if name is None:
         return ""
     return str(name).replace(' ', '_')
+
+
 
 
 class AddressConverter:
@@ -185,7 +186,7 @@ class AddressConverter:
             sanitized_name = sanitize_name(object_name)
             
             ftd_object = {
-                "name": sanitized_name,                            # Sanitized object name
+                "name": sanitized_name,                           # Object name from FortiGate
                 "description": properties.get('comment', ''),  # Optional description
                 "type": "networkobject",                       # Always 'networkobject' for addresses
                 "subType": address_type,                       # HOST, NETWORK, or RANGE
