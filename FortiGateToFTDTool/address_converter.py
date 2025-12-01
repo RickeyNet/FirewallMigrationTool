@@ -33,6 +33,24 @@ FTD JSON OUTPUT FORMAT:
 from typing import Dict, List, Any
 
 
+def sanitize_name(name: str) -> str:
+    """
+    Sanitize object names for FTD compatibility.
+    
+    FTD does not allow spaces in object names. This function replaces
+    spaces with underscores to ensure compatibility.
+    
+    Args:
+        name: Original object name (may contain spaces)
+        
+    Returns:
+        Sanitized name with spaces replaced by underscores
+    """
+    if name is None:
+        return ""
+    return str(name).replace(' ', '_')
+
+
 class AddressConverter:
     """
     Converter class for transforming FortiGate address objects to FTD network objects.
@@ -163,8 +181,11 @@ class AddressConverter:
             # STEP 2G: Create the FTD network object structure
             # ================================================================
             # This is the final format that FTD FDM API expects
+            # Sanitize the object name to replace spaces with underscores
+            sanitized_name = sanitize_name(object_name)
+            
             ftd_object = {
-                "name": object_name,                           # Object name from FortiGate
+                "name": sanitized_name,                            # Sanitized object name
                 "description": properties.get('comment', ''),  # Optional description
                 "type": "networkobject",                       # Always 'networkobject' for addresses
                 "subType": address_type,                       # HOST, NETWORK, or RANGE
@@ -178,7 +199,10 @@ class AddressConverter:
             # STEP 2H: Print conversion details for user feedback
             # ================================================================
             # This helps users see what's being converted in real-time
-            print(f"  Converted: {object_name} -> {address_type} ({address_value})")
+            if object_name != sanitized_name:
+                print(f"  Converted: {object_name} -> {sanitized_name} [{address_type}] ({address_value})")
+            else:
+                print(f"  Converted: {sanitized_name} -> {address_type} ({address_value})")
         
         # ====================================================================
         # STEP 3: Return all converted objects
