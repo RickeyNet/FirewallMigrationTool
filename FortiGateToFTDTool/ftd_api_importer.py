@@ -581,7 +581,7 @@ def import_address_objects(client: FTDAPIClient, filename: str) -> bool:
         success, result = client.create_network_object(obj)
         if success:
             if "SKIPPED" in str(result):
-                print("âŠ˜ (already exists)")
+                print("(already exists)")
             else:
                 print("[OK]")
         else:
@@ -622,16 +622,21 @@ def import_address_groups(client: FTDAPIClient, filename: str) -> bool:
     for i, group in enumerate(groups, 1):
         name = group.get("name", "Unknown")
         
-        # Clean the group object - ensure member objects only have name and type
-        cleaned_group = clean_group_object(group)
+        # Clean the group object - remove FortiGate-specific fields like uuid
+        # and ensure member objects only have name and type
+        cleaned_group = clean_group_object(group, group_type="network")
         
         print(f"  [{i}/{len(groups)}] Creating: {name}...", end=" ")
         
         success, result = client.create_network_group(cleaned_group)
         if success:
-            print("[OK]")
+            if "SKIPPED" in str(result):
+                print("(already exists)")
+            else:
+                print("[OK]")
         else:
-            print(f"[ERROR] {result}")
+            print(f"[ERROR]")
+            print(f"      Error: {result}")
             all_success = False
         
         time.sleep(0.2)
@@ -639,45 +644,80 @@ def import_address_groups(client: FTDAPIClient, filename: str) -> bool:
     return all_success
 
 
-def clean_group_object(group: Dict) -> Dict:
+def clean_group_object(group: Dict, group_type: str = "network") -> Dict:
     """
-    Clean a group object to ensure member references only have name and type.
+    Clean a group object to ensure only FTD-compatible fields are included.
     
-    FTD groups reference member objects by name only. Remove any UUIDs, IDs,
-    versions, or other fields that might cause "cannot find entity" errors.
+    FTD groups reference member objects by name only. This function removes
+    any FortiGate-specific fields like UUIDs, colors, comments, and ensures
+    member objects only have name and type.
     
     Args:
-        group: Group object dictionary
+        group: Group object dictionary from the converted JSON
+        group_type: Either "network" for address groups or "port" for service groups
         
     Returns:
-        Cleaned group object
+        Cleaned group object with only FTD-compatible fields
     """
-    cleaned = group.copy()
+    # Start fresh with only the fields FTD needs
+    cleaned = {}
     
-    # Clean the member objects in the "objects" array
-    if "objects" in cleaned and isinstance(cleaned["objects"], list):
+    # Copy only the essential fields for FTD
+    # Name is required
+    if "name" in group:
+        cleaned["name"] = group["name"]
+    
+    # isSystemDefined should be False for custom objects
+    cleaned["isSystemDefined"] = group.get("isSystemDefined", False)
+    
+    # Type is required
+    if group_type == "network":
+        cleaned["type"] = "networkobjectgroup"
+    else:
+        cleaned["type"] = "portobjectgroup"
+    
+    # Clean the member objects - keep ONLY name and type
+    if "objects" in group and isinstance(group["objects"], list):
         cleaned_members = []
-        for member in cleaned["objects"]:
+        for member in group["objects"]:
             if isinstance(member, dict):
-                # Keep ONLY name and type - remove everything else
+                # Determine the correct member type
+                if group_type == "network":
+                    default_type = "networkobject"
+                else:
+                    # For port groups, try to preserve tcp/udp type
+                    default_type = member.get("type", "tcpportobject")
+                
+                # Keep ONLY name and type - remove everything else (uuid, id, version, etc.)
                 cleaned_member = {
                     "name": member.get("name"),
-                    "type": member.get("type", "networkobject")
+                    "type": default_type
                 }
                 cleaned_members.append(cleaned_member)
-            else:
+            elif isinstance(member, str):
                 # If member is just a string, convert to proper format
-                cleaned_members.append({
-                    "name": str(member),
-                    "type": "networkobject"
-                })
+                if group_type == "network":
+                    cleaned_members.append({
+                        "name": member,
+                        "type": "networkobject"
+                    })
+                else:
+                    cleaned_members.append({
+                        "name": member,
+                        "type": "tcpportobject"
+                    })
         
         cleaned["objects"] = cleaned_members
+    else:
+        cleaned["objects"] = []
     
-    # Remove any UUID, id, or version fields from the group itself that came from FortiGate
-    cleaned.pop("uuid", None)
-    cleaned.pop("id", None) 
-    cleaned.pop("version", None)
+    # Note: We intentionally DO NOT copy these FortiGate-specific fields:
+    # - uuid (FortiGate's internal identifier)
+    # - id (FortiGate's internal identifier)  
+    # - version (FortiGate versioning)
+    # - color (FortiGate UI color coding)
+    # - comment (could be added as description if needed)
+    # - member (FortiGate format - we use "objects" instead)
     
     return cleaned
 
@@ -750,16 +790,21 @@ def import_service_groups(client: FTDAPIClient, filename: str) -> bool:
     for i, group in enumerate(groups, 1):
         name = group.get("name", "Unknown")
         
-        # Clean the group object - ensure member objects only have name and type
-        cleaned_group = clean_group_object(group)
+        # Clean the group object - remove FortiGate-specific fields like uuid
+        # and ensure member objects only have name and type
+        cleaned_group = clean_group_object(group, group_type="port")
         
         print(f"  [{i}/{len(groups)}] Creating: {name}...", end=" ")
         
         success, result = client.create_port_group(cleaned_group)
         if success:
-            print("[OK]")
+            if "SKIPPED" in str(result):
+                print("(already exists)")
+            else:
+                print("[OK]")
         else:
-            print(f"[ERROR] {result}")
+            print(f"[ERROR]")
+            print(f"      Error: {result}")
             all_success = False
         
         time.sleep(0.2)
