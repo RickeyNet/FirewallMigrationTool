@@ -56,6 +56,24 @@ IMPORTANT NOTES:
 from typing import Dict, List, Any, Tuple
 
 
+def sanitize_name(name: str) -> str:
+    """
+    Sanitize object names for FTD compatibility.
+    
+    FTD does not allow spaces in object names. This function replaces
+    spaces with underscores to ensure compatibility.
+    
+    Args:
+        name: Original object name (may contain spaces)
+        
+    Returns:
+        Sanitized name with spaces replaced by underscores
+    """
+    if name is None:
+        return ""
+    return str(name).replace(' ', '_')
+
+
 class RouteConverter:
     """
     Converter class for transforming FortiGate static routes to FTD route entries.
@@ -227,23 +245,29 @@ class RouteConverter:
             else:
                 route_name = f"Route_{route_id}_{dst_name}"
             
+            # Sanitize all names to replace spaces with underscores
+            sanitized_route_name = sanitize_name(route_name)
+            sanitized_interface_name = sanitize_name(interface_name)
+            sanitized_dst_name = sanitize_name(dst_name)
+            sanitized_gateway_name = sanitize_name(gateway_name)
+            
             # ================================================================
             # STEP 2H: Create the FTD static route entry structure
             # ================================================================
             ftd_route = {
-                "name": route_name,
+                "name": sanitized_route_name,
                 "iface": {
-                    "name": interface_name,
+                    "name": sanitized_interface_name,
                     "type": "physicalinterface"  # Assume physical, could also be subinterface
                 },
                 "networks": [
                     {
-                        "name": dst_name,
+                        "name": sanitized_dst_name,
                         "type": "networkobject"
                     }
                 ],
                 "gateway": {
-                    "name": gateway_name,
+                    "name": sanitized_gateway_name,
                     "type": "networkobject"
                 },
                 "metricValue": metric,
@@ -258,10 +282,13 @@ class RouteConverter:
             # ================================================================
             # STEP 2I: Print conversion details for user feedback
             # ================================================================
-            print(f"  Converted: [{route_id}] {route_name}")
-            print(f"    Destination: {dst_name} ({dst_network})")
-            print(f"    Gateway: {gateway_name}")
-            print(f"    Interface: {interface_name}")
+            if route_name != sanitized_route_name:
+                print(f"  Converted: [{route_id}] {route_name} -> {sanitized_route_name}")
+            else:
+                print(f"  Converted: [{route_id}] {sanitized_route_name}")
+            print(f"    Destination: {sanitized_dst_name} ({dst_network})")
+            print(f"    Gateway: {sanitized_gateway_name}")
+            print(f"    Interface: {sanitized_interface_name}")
             print(f"    Metric: {metric}")
         
         # ====================================================================

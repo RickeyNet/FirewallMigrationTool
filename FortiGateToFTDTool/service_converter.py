@@ -52,6 +52,24 @@ FTD JSON OUTPUT FORMAT:
 from typing import Dict, List, Any, Tuple
 
 
+def sanitize_name(name: str) -> str:
+    """
+    Sanitize object names for FTD compatibility.
+    
+    FTD does not allow spaces in object names. This function replaces
+    spaces with underscores to ensure compatibility.
+    
+    Args:
+        name: Original object name (may contain spaces)
+        
+    Returns:
+        Sanitized name with spaces replaced by underscores
+    """
+    if name is None:
+        return ""
+    return str(name).replace(' ', '_')
+
+
 class ServiceConverter:
     """
     Converter class for transforming FortiGate service objects to FTD port objects.
@@ -146,6 +164,9 @@ class ServiceConverter:
             # ================================================================
             # STEP 2D: Determine what port objects to create
             # ================================================================
+            # Sanitize the service name to replace spaces with underscores
+            sanitized_service_name = sanitize_name(service_name)
+            
             # CASE 1: Service has BOTH TCP and UDP ports
             if tcp_ports and udp_ports:
                 # We MUST create TWO separate objects
@@ -153,7 +174,7 @@ class ServiceConverter:
                 
                 # Create TCP port object with _TCP suffix
                 tcp_obj = self._create_port_object(
-                    name=f"{service_name}_TCP",
+                    name=f"{sanitized_service_name}_TCP",
                     port_value=tcp_ports,
                     protocol_type="tcp",
                     properties=properties
@@ -163,7 +184,7 @@ class ServiceConverter:
                 
                 # Create UDP port object with _UDP suffix
                 udp_obj = self._create_port_object(
-                    name=f"{service_name}_UDP",
+                    name=f"{sanitized_service_name}_UDP",
                     port_value=udp_ports,
                     protocol_type="udp",
                     properties=properties
@@ -172,31 +193,40 @@ class ServiceConverter:
                 self.udp_count += 1
                 
                 self.split_count += 1
-                print(f"  Split: {service_name} -> {service_name}_TCP and {service_name}_UDP")
+                if service_name != sanitized_service_name:
+                    print(f"  Split: {service_name} -> {sanitized_service_name}_TCP and {sanitized_service_name}_UDP")
+                else:
+                    print(f"  Split: {service_name} -> {service_name}_TCP and {service_name}_UDP")
             
             # CASE 2: Service has ONLY TCP ports
             elif tcp_ports:
                 tcp_obj = self._create_port_object(
-                    name=service_name,
+                    name=sanitized_service_name,
                     port_value=tcp_ports,
                     protocol_type="tcp",
                     properties=properties
                 )
                 port_objects.append(tcp_obj)
                 self.tcp_count += 1
-                print(f"  Converted: {service_name} -> TCP port {tcp_ports}")
+                if service_name != sanitized_service_name:
+                    print(f"  Converted: {service_name} -> {sanitized_service_name} [TCP port {tcp_ports}]")
+                else:
+                    print(f"  Converted: {service_name} -> TCP port {tcp_ports}")
             
             # CASE 3: Service has ONLY UDP ports
             elif udp_ports:
                 udp_obj = self._create_port_object(
-                    name=service_name,
+                    name=sanitized_service_name,
                     port_value=udp_ports,
                     protocol_type="udp",
                     properties=properties
                 )
                 port_objects.append(udp_obj)
                 self.udp_count += 1
-                print(f"  Converted: {service_name} -> UDP port {udp_ports}")
+                if service_name != sanitized_service_name:
+                    print(f"  Converted: {service_name} -> {sanitized_service_name} [UDP port {udp_ports}]")
+                else:
+                    print(f"  Converted: {service_name} -> UDP port {udp_ports}")
             
             # CASE 4: Service has neither TCP nor UDP ports
             else:

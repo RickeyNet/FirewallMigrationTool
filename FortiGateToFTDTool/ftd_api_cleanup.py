@@ -4,7 +4,7 @@ Cisco FTD FDM API Bulk Delete Script
 =====================================
 This script deletes ALL custom objects of specified types from Cisco FTD.
 
-⚠️  WARNING: THIS DELETES ALL CUSTOM CONFIGURATION! ⚠️
+âš ï¸  WARNING: THIS DELETES ALL CUSTOM CONFIGURATION! âš ï¸
     - This does NOT use import files - it deletes EVERYTHING it finds
     - Only deletes custom objects (skips system-defined objects)
     - Always backup your FTD configuration before running
@@ -34,7 +34,6 @@ SAFETY FEATURES:
 """
 
 import requests
-import json
 import argparse
 import sys
 import time
@@ -117,15 +116,15 @@ class FTDBulkDelete:
                     "Accept": "application/json"
                 })
                 
-                print("✓ Authentication successful")
+                print("âœ“ Authentication successful")
                 return True
             else:
-                print(f"✗ Authentication failed: {response.status_code}")
+                print(f"âœ— Authentication failed: {response.status_code}")
                 print(f"  Response: {response.text}")
                 return False
                 
         except requests.exceptions.RequestException as e:
-            print(f"✗ Connection error: {e}")
+            print(f"âœ— Connection error: {e}")
             return False
     
     def get_all_objects(self, endpoint: str) -> List[Dict]:
@@ -286,10 +285,10 @@ class FTDBulkDelete:
                 success = self.delete_object(endpoint, obj_id)
                 
                 if success:
-                    print("✓")
+                    print("âœ“")
                     success_count += 1
                 else:
-                    print("✗")
+                    print("âœ—")
                     fail_count += 1
                 
                 time.sleep(0.2)  # Rate limiting
@@ -315,15 +314,15 @@ class FTDBulkDelete:
             response = self.session.post(endpoint, json={}, timeout=30)
             
             if response.status_code in [200, 201, 202]:
-                print("✓ Deployment initiated")
+                print("âœ“ Deployment initiated")
                 print("  (Deployment may take several minutes)")
                 return True
             else:
-                print(f"✗ Deployment failed: {response.status_code}")
+                print(f"âœ— Deployment failed: {response.status_code}")
                 return False
                 
         except requests.exceptions.RequestException as e:
-            print(f"✗ Deployment error: {e}")
+            print(f"âœ— Deployment error: {e}")
             return False
 
 
@@ -333,7 +332,7 @@ def main():
         description='Bulk delete ALL custom objects from Cisco FTD via FDM API',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-⚠️  WARNING: DELETES ALL CUSTOM OBJECTS OF SELECTED TYPES! ⚠️
+âš ï¸  WARNING: DELETES ALL CUSTOM OBJECTS OF SELECTED TYPES! âš ï¸
 
 Examples:
   # Dry run - see what would be deleted
@@ -382,7 +381,7 @@ Examples:
     # Safety confirmation
     if not args.dry_run and not args.yes:
         print("\n" + "="*60)
-        print("⚠️  FINAL WARNING ⚠️")
+        print("âš ï¸  FINAL WARNING âš ï¸")
         print("="*60)
         print("\nThis will DELETE ALL CUSTOM OBJECTS of the selected types!")
         print("This does NOT check import files - it deletes EVERYTHING it finds.")
@@ -391,13 +390,13 @@ Examples:
         
         backup = input().strip().lower()
         if backup != 'yes':
-            print("\n✗ Please backup first!")
+            print("\nâœ— Please backup first!")
             return 1
         
         print("\nType 'DELETE ALL' to confirm: ", end="")
         confirm = input().strip()
         if confirm != 'DELETE ALL':
-            print("\n✗ Cancelled")
+            print("\nâœ— Cancelled")
             return 1
     
     # Create client

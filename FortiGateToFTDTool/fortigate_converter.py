@@ -150,7 +150,7 @@ def preprocess_yaml_file(input_file: str) -> str:
             cleaned_lines.append(line)
     
     cleaned_yaml = ''.join(cleaned_lines)
-    print(f"  ✓ Pre-processing complete")
+    print(f"  âœ“ Pre-processing complete")
     return cleaned_yaml
 
 def main():
@@ -226,7 +226,7 @@ Examples:
         # yaml.safe_load() safely parses YAML without executing code
         fg_config = yaml.safe_load(cleaned_yaml)
         
-        print("✓ YAML file loaded and cleaned successfully")
+        print("âœ“ YAML file loaded and cleaned successfully")
 
 
 
@@ -260,8 +260,8 @@ Examples:
 #   Pre-processing YAML file to remove problematic sections...
 #     Skipping section: system_automation-trigger:
 #     Skipping section: dlp_filepattern:
-#   ✓ Pre-processing complete
-# ✓ YAML file loaded and cleaned successfully
+#   âœ“ Pre-processing complete
+# âœ“ YAML file loaded and cleaned successfully
      
         # ================================================================
         # Remove problematic sections that cause parsing errors
@@ -285,11 +285,11 @@ Examples:
                 print(f"  Skipped section: {section} (not needed for conversion)")
         
         if removed_count > 0:
-            print(f"✓ Removed {removed_count} non-essential sections")
+            print(f"âœ“ Removed {removed_count} non-essential sections")
         
     except FileNotFoundError:
         # This error occurs if the file doesn't exist at the specified path
-        print(f"\n✗ ERROR: Input file '{args.input_file}' not found!")
+        print(f"\nâœ— ERROR: Input file '{args.input_file}' not found!")
         print("\nTroubleshooting:")
         print("  1. Check that the file path is correct")
         print("  2. If the file is in the same folder as this script, just use the filename")
@@ -300,14 +300,14 @@ Examples:
         
     except yaml.YAMLError as e:
         # This error occurs if the YAML file has syntax errors
-        print(f"\n✗ ERROR: Could not parse YAML file!")
+        print(f"\nâœ— ERROR: Could not parse YAML file!")
         print(f"  Details: {e}")
         print("\nMake sure the file is valid YAML format")
         return 1
         
     except Exception as e:
         # Catch any other unexpected errors
-        print(f"\n✗ ERROR: {e}")
+        print(f"\nâœ— ERROR: {e}")
         return 1
     
     # ========================================================================
@@ -340,7 +340,7 @@ Examples:
     # This returns a list of FTD network object dictionaries
     network_objects = address_converter.convert()
     
-    print(f"✓ Converted {len(network_objects)} address objects")
+    print(f"âœ“ Converted {len(network_objects)} address objects")
     
     # ========================================================================
     # STEP 5B: Initialize route converter with address objects
@@ -360,7 +360,7 @@ Examples:
     # This returns a list of FTD network group dictionaries
     network_groups = address_group_converter.convert()
     
-    print(f"✓ Converted {len(network_groups)} address groups")
+    print(f"âœ“ Converted {len(network_groups)} address groups")
     
     # ========================================================================
     # STEP 7: Convert service port objects
@@ -375,7 +375,7 @@ Examples:
     
     # Get statistics about the conversion
     service_stats = service_converter.get_statistics()
-    print(f"✓ Converted {service_stats['total_objects']} port objects")
+    print(f"âœ“ Converted {service_stats['total_objects']} port objects")
     print(f"  - TCP objects: {service_stats['tcp_objects']}")
     print(f"  - UDP objects: {service_stats['udp_objects']}")
     print(f"  - Services split into TCP+UDP: {service_stats['split_services']}")
@@ -412,7 +412,7 @@ Examples:
     # Convert FortiGate service groups to FTD port groups
     port_groups = service_group_converter.convert()
     
-    print(f"✓ Converted {len(port_groups)} port groups")
+    print(f"âœ“ Converted {len(port_groups)} port groups")
     
     # ========================================================================
     # STEP 10: Convert firewall policies to access rules
@@ -429,7 +429,7 @@ Examples:
     
     # Get statistics about the conversion
     policy_stats = policy_converter.get_statistics()
-    print(f"✓ Converted {policy_stats['total_rules']} access rules")
+    print(f"âœ“ Converted {policy_stats['total_rules']} access rules")
     print(f"  - PERMIT rules: {policy_stats['permit_rules']}")
     print(f"  - DENY rules: {policy_stats['deny_rules']}")
     
@@ -445,7 +445,7 @@ Examples:
     
     # Get statistics about the conversion
     route_stats = route_converter.get_statistics()
-    print(f"✓ Converted {route_stats['total_routes']} static routes")
+    print(f"âœ“ Converted {route_stats['total_routes']} static routes")
     if route_stats['blackhole_skipped'] > 0:
         print(f"  - Blackhole routes skipped: {route_stats['blackhole_skipped']}")
     if route_stats['other_skipped'] > 0:
@@ -483,7 +483,7 @@ Examples:
                 json.dump(network_objects, f, indent=2)
             else:
                 json.dump(network_objects, f)
-        print(f"✓ Address objects saved to: {address_objects_output}")
+        print(f"âœ“ Address objects saved to: {address_objects_output}")
         
         # ====================================================================
         # Save address groups
@@ -493,7 +493,7 @@ Examples:
                 json.dump(network_groups, f, indent=2)
             else:
                 json.dump(network_groups, f)
-        print(f"✓ Address groups saved to: {address_groups_output}")
+        print(f"âœ“ Address groups saved to: {address_groups_output}")
         
         # ====================================================================
         # Save service port objects
@@ -503,7 +503,7 @@ Examples:
                 json.dump(port_objects, f, indent=2)
             else:
                 json.dump(port_objects, f)
-        print(f"✓ Service objects saved to: {service_objects_output}")
+        print(f"âœ“ Service objects saved to: {service_objects_output}")
         
         # ====================================================================
         # Save service port groups
@@ -513,7 +513,7 @@ Examples:
                 json.dump(port_groups, f, indent=2)
             else:
                 json.dump(port_groups, f)
-        print(f"✓ Service groups saved to: {service_groups_output}")
+        print(f"âœ“ Service groups saved to: {service_groups_output}")
         
         # ====================================================================
         # Save access rules
@@ -523,7 +523,7 @@ Examples:
                 json.dump(access_rules, f, indent=2)
             else:
                 json.dump(access_rules, f)
-        print(f"✓ Access rules saved to: {access_rules_output}")
+        print(f"âœ“ Access rules saved to: {access_rules_output}")
         
         # ====================================================================
         # Save static routes
@@ -533,7 +533,7 @@ Examples:
                 json.dump(static_routes, f, indent=2)
             else:
                 json.dump(static_routes, f)
-        print(f"✓ Static routes saved to: {static_routes_output}")
+        print(f"âœ“ Static routes saved to: {static_routes_output}")
         
         # ====================================================================
         # Save summary statistics
@@ -564,10 +564,10 @@ Examples:
         }
         with open(summary_output, 'w') as f:
             json.dump(summary, f, indent=2)
-        print(f"✓ Summary saved to: {summary_output}")
+        print(f"âœ“ Summary saved to: {summary_output}")
         
     except IOError as e:
-        print(f"\n✗ ERROR: Could not write output files!")
+        print(f"\nâœ— ERROR: Could not write output files!")
         print(f"  Details: {e}")
         return 1
     

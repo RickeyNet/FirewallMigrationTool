@@ -158,15 +158,15 @@ class FTDAPIClient:
                     "Accept": "application/json"
                 })
                 
-                print("✓ Authentication successful")
+                print("âœ“ Authentication successful")
                 return True
             else:
-                print(f"✗ Authentication failed: {response.status_code}")
+                print(f"âœ— Authentication failed: {response.status_code}")
                 print(f"  Response: {response.text}")
                 return False
                 
         except requests.exceptions.RequestException as e:
-            print(f"✗ Connection error: {e}")
+            print(f"âœ— Connection error: {e}")
             return False
     
     def create_network_object(self, obj: Dict) -> Tuple[bool, Optional[str]]:
@@ -428,17 +428,17 @@ class FTDAPIClient:
             response = self.session.post(endpoint, json={}, timeout=30)
             
             if response.status_code in [200, 201, 202]:
-                print("✓ Deployment initiated successfully")
+                print("âœ“ Deployment initiated successfully")
                 print("  Note: Deployment may take several minutes to complete")
                 print("  Check FDM web interface for deployment status")
                 return True
             else:
-                print(f"✗ Deployment failed: {response.status_code}")
+                print(f"âœ— Deployment failed: {response.status_code}")
                 print(f"  Response: {response.text}")
                 return False
                 
         except requests.exceptions.RequestException as e:
-            print(f"✗ Deployment error: {e}")
+            print(f"âœ— Deployment error: {e}")
             return False
     
     def print_statistics(self):
@@ -490,10 +490,10 @@ def load_json_file(filename: str) -> Optional[List[Dict]]:
             data = json.load(f)
             return data
     except FileNotFoundError:
-        print(f"✗ File not found: {filename}")
+        print(f"âœ— File not found: {filename}")
         return None
     except json.JSONDecodeError as e:
-        print(f"✗ Invalid JSON in {filename}: {e}")
+        print(f"âœ— Invalid JSON in {filename}: {e}")
         return None
 
 
@@ -528,11 +528,11 @@ def import_address_objects(client: FTDAPIClient, filename: str) -> bool:
         success, result = client.create_network_object(obj)
         if success:
             if "SKIPPED" in str(result):
-                print("⊘ (already exists)")
+                print("âŠ˜ (already exists)")
             else:
-                print("✓")
+                print("âœ“")
         else:
-            print(f"✗")
+            print(f"âœ—")
             print(f"      Error: {result}")
             all_success = False
         
@@ -576,9 +576,9 @@ def import_address_groups(client: FTDAPIClient, filename: str) -> bool:
         
         success, result = client.create_network_group(cleaned_group)
         if success:
-            print("✓")
+            print("âœ“")
         else:
-            print(f"✗ {result}")
+            print(f"âœ— {result}")
             all_success = False
         
         time.sleep(0.2)
@@ -660,9 +660,9 @@ def import_service_objects(client: FTDAPIClient, filename: str) -> bool:
         
         success, result = client.create_port_object(obj)
         if success:
-            print("✓")
+            print("âœ“")
         else:
-            print(f"✗ {result}")
+            print(f"âœ— {result}")
             all_success = False
         
         time.sleep(0.2)
@@ -704,9 +704,9 @@ def import_service_groups(client: FTDAPIClient, filename: str) -> bool:
         
         success, result = client.create_port_group(cleaned_group)
         if success:
-            print("✓")
+            print("âœ“")
         else:
-            print(f"✗ {result}")
+            print(f"âœ— {result}")
             all_success = False
         
         time.sleep(0.2)
@@ -744,9 +744,9 @@ def import_static_routes(client: FTDAPIClient, filename: str) -> bool:
         
         success, result = client.create_static_route(route)
         if success:
-            print("✓")
+            print("âœ“")
         else:
-            print(f"✗ {result}")
+            print(f"âœ— {result}")
             all_success = False
         
         time.sleep(0.2)
@@ -785,9 +785,9 @@ def import_access_rules(client: FTDAPIClient, filename: str) -> bool:
         
         success, result = client.create_access_rule(rule)
         if success:
-            print("✓")
+            print("âœ“")
         else:
-            print(f"✗ {result}")
+            print(f"âœ— {result}")
             all_success = False
         
         time.sleep(0.2)
@@ -876,7 +876,7 @@ Examples:
     
     # Authenticate
     if not client.authenticate():
-        print("\n✗ Authentication failed. Exiting.")
+        print("\nâœ— Authentication failed. Exiting.")
         return 1
     
     # Determine what to import
@@ -942,7 +942,7 @@ Examples:
             imported_any = True
         
         if not imported_any:
-            print("\n✗ No import flags specified. Nothing to import.")
+            print("\nâœ— No import flags specified. Nothing to import.")
             return 1
     
     # Default: Import everything in order

@@ -62,6 +62,24 @@ IMPORTANT NOTES:
 from typing import Dict, List, Any, Set
 
 
+def sanitize_name(name: str) -> str:
+    """
+    Sanitize object names for FTD compatibility.
+    
+    FTD does not allow spaces in object names. This function replaces
+    spaces with underscores to ensure compatibility.
+    
+    Args:
+        name: Original object name (may contain spaces)
+        
+    Returns:
+        Sanitized name with spaces replaced by underscores
+    """
+    if name is None:
+        return ""
+    return str(name).replace(' ', '_')
+
+
 class PolicyConverter:
     """
     Converter class for transforming FortiGate firewall policies to FTD access rules.
@@ -196,8 +214,11 @@ class PolicyConverter:
             # ================================================================
             # STEP 2G: Create the FTD access rule structure
             # ================================================================
+            # Sanitize the policy name to replace spaces with underscores
+            sanitized_policy_name = sanitize_name(policy_name)
+            
             ftd_rule = {
-                "name": policy_name,
+                "name": sanitized_policy_name,
                 "ruleId": rule_id_counter,
                 "sourceZones": ftd_source_zones,
                 "destinationZones": ftd_dest_zones,
@@ -222,8 +243,12 @@ class PolicyConverter:
             src_count = len(ftd_source_networks)
             dst_count = len(ftd_dest_networks)
             svc_count = len(ftd_dest_ports)
-            print(f"  Converted: [{policy_id}] {policy_name} -> {ftd_action} "
-                  f"(Src:{src_count} Dst:{dst_count} Svc:{svc_count})")
+            if policy_name != sanitized_policy_name:
+                print(f"  Converted: [{policy_id}] {policy_name} -> {sanitized_policy_name} [{ftd_action}] "
+                      f"(Src:{src_count} Dst:{dst_count} Svc:{svc_count})")
+            else:
+                print(f"  Converted: [{policy_id}] {sanitized_policy_name} -> {ftd_action} "
+                      f"(Src:{src_count} Dst:{dst_count} Svc:{svc_count})")
         
         # ====================================================================
         # STEP 3: Store results and return
@@ -300,7 +325,7 @@ class PolicyConverter:
                 continue
             
             zone_obj = {
-                "name": zone_name,
+                "name": sanitize_name(zone_name),
                 "type": "securityzone"
             }
             zone_objects.append(zone_obj)
@@ -328,7 +353,7 @@ class PolicyConverter:
             # In a real implementation, you might look this up
             # For now, we'll assume it could be either
             network_obj = {
-                "name": addr_name,
+                "name": sanitize_name(addr_name),
                 "type": "networkobject"  # Could also be "networkobjectgroup"
             }
             network_objects.append(network_obj)
@@ -341,12 +366,13 @@ class PolicyConverter:
         
         If a service in the list was split (has both TCP and UDP ports),
         replace it with both the _TCP and _UDP versions.
+        Also sanitizes service names to replace spaces with underscores.
         
         Args:
             services: List of FortiGate service names
             
         Returns:
-            List of expanded service names
+            List of expanded and sanitized service names
         """
         expanded = []
         
@@ -355,13 +381,16 @@ class PolicyConverter:
             if service.upper() in ['ALL', 'ANY']:
                 continue
             
+            # Sanitize the service name
+            sanitized_service = sanitize_name(service)
+            
             if service in self.split_services:
-                # This service was split, add both versions
-                expanded.append(f"{service}_TCP")
-                expanded.append(f"{service}_UDP")
+                # This service was split, add both versions with sanitized name
+                expanded.append(f"{sanitized_service}_TCP")
+                expanded.append(f"{sanitized_service}_UDP")
             else:
-                # Service was not split, use as-is
-                expanded.append(service)
+                # Service was not split, use sanitized name
+                expanded.append(sanitized_service)
         
         return expanded
     
@@ -370,7 +399,7 @@ class PolicyConverter:
         Create FTD port object references from FortiGate service names.
         
         Args:
-            service_names: List of FortiGate service names (possibly expanded)
+            service_names: List of FortiGate service names (possibly expanded, already sanitized)
             
         Returns:
             List of FTD port object reference dictionaries
@@ -387,6 +416,7 @@ class PolicyConverter:
                 # Unknown - could be either or a group, default to tcpportobject
                 port_type = "tcpportobject"
             
+            # Name is already sanitized from _expand_services
             port_obj = {
                 "name": service_name,
                 "type": port_type

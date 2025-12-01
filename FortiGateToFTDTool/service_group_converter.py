@@ -49,6 +49,24 @@ NOTE ON MEMBER TYPES:
 from typing import Dict, List, Any, Set
 
 
+def sanitize_name(name: str) -> str:
+    """
+    Sanitize object names for FTD compatibility.
+    
+    FTD does not allow spaces in object names. This function replaces
+    spaces with underscores to ensure compatibility.
+    
+    Args:
+        name: Original object name (may contain spaces)
+        
+    Returns:
+        Sanitized name with spaces replaced by underscores
+    """
+    if name is None:
+        return ""
+    return str(name).replace(' ', '_')
+
+
 class ServiceGroupConverter:
     """
     Converter class for transforming FortiGate service groups to FTD port groups.
@@ -155,17 +173,21 @@ class ServiceGroupConverter:
             # ================================================================
             # If a member service was split (had both TCP and UDP ports),
             # we need to include BOTH versions in the group
+            # Also sanitize member names to replace spaces with underscores
             expanded_members = []
             
             for member_name in members_list:
+                # Sanitize the member name first
+                sanitized_member = sanitize_name(member_name)
+                
                 if member_name in self.split_services:
                     # This service was split, so add both TCP and UDP versions
-                    expanded_members.append(f"{member_name}_TCP")
-                    expanded_members.append(f"{member_name}_UDP")
-                    print(f"    Expanded: {member_name} -> {member_name}_TCP, {member_name}_UDP")
+                    expanded_members.append(f"{sanitized_member}_TCP")
+                    expanded_members.append(f"{sanitized_member}_UDP")
+                    print(f"    Expanded: {member_name} -> {sanitized_member}_TCP, {sanitized_member}_UDP")
                 else:
-                    # This service was not split, use as-is
-                    expanded_members.append(member_name)
+                    # This service was not split, use sanitized name
+                    expanded_members.append(sanitized_member)
             
             # ================================================================
             # STEP 2E: Convert members to FTD object format
@@ -194,6 +216,7 @@ class ServiceGroupConverter:
                 
                 # Create member object with ONLY name and type
                 # FTD will use the name to find the actual object in its database
+                # Name is already sanitized from the expanded_members loop
                 member_obj = {
                     "name": member_name,
                     "type": member_type
@@ -206,8 +229,11 @@ class ServiceGroupConverter:
             # STEP 2F: Create the FTD port group structure
             # ================================================================
             # This is the final format that FTD FDM API expects
+            # Sanitize the group name to replace spaces with underscores
+            sanitized_group_name = sanitize_name(group_name)
+            
             ftd_group = {
-                "name": group_name,                    # Group name from FortiGate
+                "name": sanitized_group_name,              # Sanitized group name
                 "isSystemDefined": False,              # Custom groups are not system-defined
                 "objects": ftd_members,                # List of member port objects
                 "type": "portobjectgroup"              # FTD type for port groups
@@ -220,7 +246,10 @@ class ServiceGroupConverter:
             # STEP 2G: Print conversion details for user feedback
             # ================================================================
             member_count = len(ftd_members)
-            print(f"  Converted: {group_name} ({member_count} members)")
+            if group_name != sanitized_group_name:
+                print(f"  Converted: {group_name} -> {sanitized_group_name} ({member_count} members)")
+            else:
+                print(f"  Converted: {sanitized_group_name} ({member_count} members)")
         
         # ====================================================================
         # STEP 3: Store results and return
