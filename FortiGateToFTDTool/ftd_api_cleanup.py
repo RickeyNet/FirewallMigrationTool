@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Cisco FTD FDM API Cleanup Script
-=================================
-This script deletes configurations that were imported to Cisco FTD
-using the ftd_api_importer.py script.
+Cisco FTD FDM API Bulk Delete Script
+=====================================
+This script deletes ALL custom objects of specified types from Cisco FTD.
 
-⚠️  WARNING: THIS SCRIPT DELETES CONFIGURATION! ⚠️
+⚠️  WARNING: THIS DELETES ALL CUSTOM CONFIGURATION! ⚠️
+    - This does NOT use import files - it deletes EVERYTHING it finds
+    - Only deletes custom objects (skips system-defined objects)
     - Always backup your FTD configuration before running
     - Test in a lab environment first
-    - Review what will be deleted before confirming
     - Cannot be undone without restoring from backup
 
 REQUIREMENTS:
@@ -16,30 +16,20 @@ REQUIREMENTS:
     - requests library (install with: pip install requests)
     - urllib3 library (install with: pip install urllib3)
 
-SUPPORTED FTD VERSIONS:
-    - FTD 7.4.x with FDM (tested on 7.4.2.4-9)
-    - Local management via FDM
-
 WHAT THIS SCRIPT DOES:
     1. Authenticates to FTD FDM API
-    2. Retrieves lists of objects from JSON files
-    3. Finds matching objects in FTD
-    4. Deletes objects in reverse dependency order:
-       - Access rules first (depend on everything)
-       - Static routes
-       - Service groups (depend on service objects)
-       - Service objects
-       - Address groups (depend on address objects)
-       - Address objects last
+    2. Retrieves ALL objects of the specified type from FTD
+    3. Filters out system-defined objects (keeps only custom objects)
+    4. Deletes all custom objects found
     5. Optionally deploys changes
 
 HOW TO RUN:
-    python ftd_api_cleanup.py --host 192.168.1.1 --username admin --base ftd_config
+    python ftd_api_cleanup.py --host 192.168.1.1 --username admin --delete-address-objects
 
 SAFETY FEATURES:
     - Dry-run mode (preview without deleting)
     - Interactive confirmation required
-    - Selective deletion by type
+    - Only deletes custom objects (system-defined are protected)
     - Detailed logging of what's being deleted
 """
 
@@ -50,33 +40,26 @@ import sys
 import time
 import getpass
 import urllib3
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 # Disable SSL warnings for self-signed certificates
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
-class FTDAPICleanup:
+class FTDBulkDelete:
     """
-    Client for deleting objects from Cisco FTD via FDM API.
-    
-    This class handles:
-    - Authentication and token management
-    - Retrieving object lists from FTD
-    - Matching imported objects with FTD objects
-    - Deleting objects in correct dependency order
-    - Progress reporting and error handling
+    Client for bulk deleting all objects from Cisco FTD via FDM API.
     """
     
     def __init__(self, host: str, username: str, password: str, verify_ssl: bool = False, debug: bool = False):
         """
-        Initialize the FTD API cleanup client.
+        Initialize the FTD API client.
         
         Args:
             host: FTD management IP address or hostname
-            username: FDM username (typically 'admin')
+            username: FDM username
             password: FDM password
-            verify_ssl: Whether to verify SSL certificates (False for self-signed)
+            verify_ssl: Whether to verify SSL certificates
             debug: Enable debug output
         """
         self.host = host
@@ -85,40 +68,24 @@ class FTDAPICleanup:
         self.verify_ssl = verify_ssl
         self.debug = debug
         
-        # Base URL for FDM API
         self.base_url = f"https://{host}/api/fdm/latest"
-        
-        # Session for maintaining connection
         self.session = requests.Session()
         self.session.verify = verify_ssl
         
-        # Authentication tokens
         self.access_token = None
         self.refresh_token = None
         
         # Track statistics
         self.stats = {
-            "rules_deleted": 0,
-            "rules_failed": 0,
-            "routes_deleted": 0,
-            "routes_failed": 0,
-            "port_groups_deleted": 0,
-            "port_groups_failed": 0,
-            "port_objects_deleted": 0,
-            "port_objects_failed": 0,
-            "address_groups_deleted": 0,
-            "address_groups_failed": 0,
-            "address_objects_deleted": 0,
-            "address_objects_failed": 0
+            "total_found": 0,
+            "system_objects": 0,
+            "custom_objects": 0,
+            "deleted": 0,
+            "failed": 0
         }
     
     def authenticate(self) -> bool:
-        """
-        Authenticate to the FTD FDM API and obtain access tokens.
-        
-        Returns:
-            True if authentication successful, False otherwise
-        """
+        """Authenticate to FTD FDM API."""
         print(f"\n{'='*60}")
         print(f"Authenticating to FTD at {self.host}")
         print(f"{'='*60}")
@@ -163,16 +130,13 @@ class FTDAPICleanup:
     
     def get_all_objects(self, endpoint: str) -> List[Dict]:
         """
-        Retrieve all objects from a specific FTD endpoint.
-        
-        This method handles pagination to ensure ALL objects are retrieved,
-        not just the first page.
+        Retrieve ALL objects from FTD endpoint with pagination.
         
         Args:
-            endpoint: API endpoint path (e.g., "/object/networks")
+            endpoint: API endpoint path
             
         Returns:
-            List of all objects from FTD
+            List of all objects
         """
         url = f"{self.base_url}{endpoint}"
         all_items = []
@@ -180,7 +144,7 @@ class FTDAPICleanup:
         limit = 100
         
         try:
-            print(f"    Fetching from {endpoint}...")
+            print(f"  Fetching from {endpoint}...")
             
             while True:
                 params = {"offset": offset, "limit": limit}
@@ -190,12 +154,16 @@ class FTDAPICleanup:
                     data = response.json()
                     items = data.get("items", [])
                     
-                    print(f"      Retrieved {len(items)} objects (offset: {offset})")
+                    if self.debug:
+                        print(f"    Retrieved {len(items)} objects (offset: {offset})")
                     
-                    # Debug: Show first object's structure
+                    # Debug: Show first object
                     if self.debug and items and offset == 0:
-                        print(f"\n      [DEBUG] First object structure:")
-                        print(f"      {json.dumps(items[0], indent=2)[:500]}...")
+                        print(f"\n    [DEBUG] First object:")
+                        print(f"      Name: {items[0].get('name')}")
+                        print(f"      ID: {items[0].get('id')}")
+                        print(f"      Type: {items[0].get('type')}")
+                        print(f"      isSystemDefined: {items[0].get('isSystemDefined')}\n")
                     
                     if not items:
                         break
@@ -203,37 +171,30 @@ class FTDAPICleanup:
                     all_items.extend(items)
                     offset += limit
                     
-                    # Check if we've retrieved all items
+                    # Check pagination
                     paging = data.get("paging", {})
                     if not paging.get("next"):
                         break
-                        
-                    # Safety: prevent infinite loops
+                    
+                    # Safety limit
                     if offset > 10000:
-                        print(f"      Warning: Reached pagination limit at {offset} objects")
+                        print(f"    Warning: Stopped at {offset} objects (safety limit)")
                         break
                 else:
-                    print(f"      Warning: HTTP {response.status_code} - {response.text[:200]}")
+                    print(f"    Warning: HTTP {response.status_code}")
+                    if self.debug:
+                        print(f"    Response: {response.text[:200]}")
                     break
             
-            print(f"      Total objects retrieved: {len(all_items)}")
+            print(f"  Total retrieved: {len(all_items)} objects")
             return all_items
             
         except requests.exceptions.RequestException as e:
-            print(f"      Error retrieving objects from {endpoint}: {e}")
+            print(f"  Error: {e}")
             return []
     
     def delete_object(self, endpoint: str, object_id: str) -> bool:
-        """
-        Delete a specific object from FTD.
-        
-        Args:
-            endpoint: API endpoint path
-            object_id: UUID of the object to delete
-            
-        Returns:
-            True if successful, False otherwise
-        """
+        """Delete a single object by ID."""
         url = f"{self.base_url}{endpoint}/{object_id}"
         
         try:
@@ -242,392 +203,108 @@ class FTDAPICleanup:
             if response.status_code in [200, 204]:
                 return True
             elif response.status_code == 404:
-                # Object not found - already deleted or never existed
-                return True
+                return True  # Already gone
             else:
+                if self.debug:
+                    print(f" (HTTP {response.status_code})")
                 return False
                 
-        except requests.exceptions.RequestException as e:
+        except requests.exceptions.RequestException:
             return False
     
-    def delete_access_rules(self, rules_file: str, dry_run: bool = False) -> bool:
+    def delete_all_custom_objects(self, endpoint: str, object_type: str, dry_run: bool = False) -> bool:
         """
-        Delete access rules from FTD based on imported file.
+        Delete ALL custom (non-system) objects of a type.
         
         Args:
-            rules_file: Path to JSON file with imported rules
-            dry_run: If True, only show what would be deleted
-            
-        Returns:
-            True if all deletions successful, False if any failed
-        """
-        print(f"\n{'-'*60}")
-        print(f"Processing Access Rules from {rules_file}")
-        print(f"{'-'*60}")
-        
-        # Load the imported rules
-        try:
-            with open(rules_file, 'r') as f:
-                imported_rules = json.load(f)
-        except FileNotFoundError:
-            print(f"  File not found: {rules_file} (skipping)")
-            return True
-        except json.JSONDecodeError:
-            print(f"  Invalid JSON in {rules_file} (skipping)")
-            return True
-        
-        if not imported_rules:
-            print("  No rules to delete")
-            return True
-        
-        # Get all rules from FTD
-        print("  Retrieving access rules from FTD...")
-        ftd_rules = self.get_all_objects("/policy/accesspolicies/default/accessrules")
-        
-        if not ftd_rules:
-            print("  No rules found in FTD")
-            return True
-        
-        print(f"  Found {len(ftd_rules)} total rules in FTD")
-        print(f"  Looking for {len(imported_rules)} imported rules to delete...")
-        
-        # Build a lookup dictionary: name -> FTD object
-        ftd_lookup = {obj.get("name"): obj for obj in ftd_rules if obj.get("name")}
-        print(f"  Built lookup table with {len(ftd_lookup)} named rules")
-        
-        all_success = True
-        matched_count = 0
-        
-        for imported_rule in imported_rules:
-            imported_name = imported_rule.get("name", "")
-            
-            if not imported_name:
-                print(f"  Skipped: Unnamed rule in import file")
-                continue
-            
-            # Look up the rule in FTD by name
-            if imported_name in ftd_lookup:
-                matched_count += 1
-                ftd_rule = ftd_lookup[imported_name]
-                rule_id = ftd_rule.get("id")
-                
-                if not rule_id:
-                    print(f"  Error: {imported_name} - No ID found in FTD object")
-                    self.stats["rules_failed"] += 1
-                    all_success = False
-                    continue
-                
-                if dry_run:
-                    print(f"  [DRY RUN] Would delete: {imported_name} (ID: {rule_id})")
-                    self.stats["rules_deleted"] += 1
-                else:
-                    print(f"  Deleting: {imported_name}...", end=" ")
-                    success = self.delete_object("/policy/accesspolicies/default/accessrules", rule_id)
-                    
-                    if success:
-                        print("✓")
-                        self.stats["rules_deleted"] += 1
-                    else:
-                        print("✗")
-                        self.stats["rules_failed"] += 1
-                        all_success = False
-                    
-                    time.sleep(0.2)
-            else:
-                print(f"  Not found in FTD: {imported_name}")
-        
-        print(f"\n  Summary: Matched {matched_count} of {len(imported_rules)} imported rules")
-        return all_success
-    
-    def delete_static_routes(self, routes_file: str, dry_run: bool = False) -> bool:
-        """
-        Delete static routes from FTD based on imported file.
-        
-        Args:
-            routes_file: Path to JSON file with imported routes
-            dry_run: If True, only show what would be deleted
-            
-        Returns:
-            True if all deletions successful, False if any failed
-        """
-        print(f"\n{'-'*60}")
-        print(f"Processing Static Routes from {routes_file}")
-        print(f"{'-'*60}")
-        
-        try:
-            with open(routes_file, 'r') as f:
-                imported_routes = json.load(f)
-        except FileNotFoundError:
-            print(f"  File not found: {routes_file} (skipping)")
-            return True
-        except json.JSONDecodeError:
-            print(f"  Invalid JSON in {routes_file} (skipping)")
-            return True
-        
-        if not imported_routes:
-            print("  No routes to delete")
-            return True
-        
-        print("  Retrieving static routes from FTD...")
-        ftd_routes = self.get_all_objects("/devices/default/routing/staticrouteentries")
-        
-        print(f"  Found {len(ftd_routes)} routes in FTD")
-        print(f"  Looking for {len(imported_routes)} imported routes to delete...")
-        
-        all_success = True
-        for imported_route in imported_routes:
-            imported_name = imported_route.get("name", "")
-            
-            matching_route = None
-            for ftd_route in ftd_routes:
-                if ftd_route.get("name") == imported_name:
-                    matching_route = ftd_route
-                    break
-            
-            if matching_route:
-                route_id = matching_route.get("id")
-                
-                if dry_run:
-                    print(f"  [DRY RUN] Would delete: {imported_name}")
-                    self.stats["routes_deleted"] += 1
-                else:
-                    print(f"  Deleting: {imported_name}...", end=" ")
-                    success = self.delete_object("/devices/default/routing/staticrouteentries", route_id) # pyright: ignore[reportArgumentType]
-                    
-                    if success:
-                        print("✓")
-                        self.stats["routes_deleted"] += 1
-                    else:
-                        print("✗")
-                        self.stats["routes_failed"] += 1
-                        all_success = False
-                    
-                    time.sleep(0.2)
-            else:
-                print(f"  Not found in FTD: {imported_name}")
-        
-        return all_success
-    
-    def delete_port_groups(self, groups_file: str, dry_run: bool = False) -> bool:
-        """Delete port groups from FTD."""
-        return self._delete_generic_objects(
-            groups_file, 
-            "/object/portgroups",
-            "Port Groups",
-            "port_groups_deleted",
-            "port_groups_failed",
-            dry_run
-        )
-    
-    def delete_port_objects(self, objects_file: str, dry_run: bool = False) -> bool:
-        """Delete port objects (TCP and UDP) from FTD."""
-        print(f"\n{'-'*60}")
-        print(f"Processing Port Objects from {objects_file}")
-        print(f"{'-'*60}")
-        
-        try:
-            with open(objects_file, 'r') as f:
-                imported_objects = json.load(f)
-        except FileNotFoundError:
-            print(f"  File not found: {objects_file} (skipping)")
-            return True
-        except json.JSONDecodeError:
-            print(f"  Invalid JSON in {objects_file} (skipping)")
-            return True
-        
-        if not imported_objects:
-            print("  No port objects to delete")
-            return True
-        
-        # Get TCP and UDP port objects from FTD
-        print("  Retrieving port objects from FTD...")
-        ftd_tcp_ports = self.get_all_objects("/object/tcpports")
-        ftd_udp_ports = self.get_all_objects("/object/udpports")
-        ftd_all_ports = ftd_tcp_ports + ftd_udp_ports
-        
-        print(f"  Found {len(ftd_all_ports)} port objects in FTD")
-        print(f"  Looking for {len(imported_objects)} imported objects to delete...")
-        
-        all_success = True
-        for imported_obj in imported_objects:
-            imported_name = imported_obj.get("name", "")
-            obj_type = imported_obj.get("type", "")
-            
-            matching_obj = None
-            for ftd_obj in ftd_all_ports:
-                if ftd_obj.get("name") == imported_name:
-                    matching_obj = ftd_obj
-                    break
-            
-            if matching_obj:
-                obj_id = matching_obj.get("id")
-                
-                # Determine endpoint based on type
-                if obj_type == "tcpportobject" or matching_obj.get("type") == "tcpportobject":
-                    endpoint = "/object/tcpports"
-                else:
-                    endpoint = "/object/udpports"
-                
-                if dry_run:
-                    print(f"  [DRY RUN] Would delete: {imported_name} ({obj_type})")
-                    self.stats["port_objects_deleted"] += 1
-                else:
-                    print(f"  Deleting: {imported_name} ({obj_type})...", end=" ")
-                    success = self.delete_object(endpoint, obj_id) # pyright: ignore[reportArgumentType]
-                    
-                    if success:
-                        print("✓")
-                        self.stats["port_objects_deleted"] += 1
-                    else:
-                        print("✗")
-                        self.stats["port_objects_failed"] += 1
-                        all_success = False
-                    
-                    time.sleep(0.2)
-            else:
-                print(f"  Not found in FTD: {imported_name}")
-        
-        return all_success
-    
-    def delete_address_groups(self, groups_file: str, dry_run: bool = False) -> bool:
-        """Delete address groups from FTD."""
-        return self._delete_generic_objects(
-            groups_file,
-            "/object/networkgroups",
-            "Address Groups",
-            "address_groups_deleted",
-            "address_groups_failed",
-            dry_run
-        )
-    
-    def delete_address_objects(self, objects_file: str, dry_run: bool = False) -> bool:
-        """Delete address objects from FTD."""
-        return self._delete_generic_objects(
-            objects_file,
-            "/object/networks",
-            "Address Objects",
-            "address_objects_deleted",
-            "address_objects_failed",
-            dry_run
-        )
-    
-    def _delete_generic_objects(self, file_path: str, endpoint: str, 
-                                object_type: str, success_stat: str, 
-                                fail_stat: str, dry_run: bool = False) -> bool:
-        """
-        Generic method to delete objects from FTD.
-        
-        Args:
-            file_path: Path to JSON file
             endpoint: API endpoint
             object_type: Type name for display
-            success_stat: Statistics key for successful deletions
-            fail_stat: Statistics key for failed deletions
             dry_run: If True, only show what would be deleted
+            
+        Returns:
+            True if successful
         """
-        print(f"\n{'-'*60}")
-        print(f"Processing {object_type} from {file_path}")
-        print(f"{'-'*60}")
+        print(f"\n{'='*60}")
+        print(f"Processing {object_type}")
+        print(f"{'='*60}")
         
-        try:
-            with open(file_path, 'r') as f:
-                imported_objects = json.load(f)
-        except FileNotFoundError:
-            print(f"  File not found: {file_path} (skipping)")
-            return True
-        except json.JSONDecodeError:
-            print(f"  Invalid JSON in {file_path} (skipping)")
-            return True
+        # Get ALL objects from FTD
+        all_objects = self.get_all_objects(endpoint)
         
-        if not imported_objects:
-            print(f"  No {object_type.lower()} to delete")
-            return True
-        
-        print(f"  Retrieving {object_type.lower()} from FTD...")
-        ftd_objects = self.get_all_objects(endpoint)
-        
-        if not ftd_objects:
+        if not all_objects:
             print(f"  No {object_type.lower()} found in FTD")
             return True
         
-        print(f"  Found {len(ftd_objects)} total {object_type.lower()} in FTD")
-        print(f"  Looking for {len(imported_objects)} imported objects to delete...")
+        self.stats["total_found"] = len(all_objects)
         
-        # Build a lookup dictionary: name -> FTD object
-        ftd_lookup = {obj.get("name"): obj for obj in ftd_objects if obj.get("name")}
-        print(f"  Built lookup table with {len(ftd_lookup)} named objects")
+        # Filter out system-defined objects
+        custom_objects = [obj for obj in all_objects if not obj.get('isSystemDefined', False)]
+        system_objects = [obj for obj in all_objects if obj.get('isSystemDefined', False)]
         
-        # Debug: Show first few names from FTD
-        if ftd_lookup:
-            sample_names = list(ftd_lookup.keys())[:5]
-            print(f"  Sample FTD object names: {sample_names}")
+        self.stats["custom_objects"] = len(custom_objects)
+        self.stats["system_objects"] = len(system_objects)
+        
+        print(f"\n  Found {len(all_objects)} total objects:")
+        print(f"    - Custom objects: {len(custom_objects)} (will be deleted)")
+        print(f"    - System objects: {len(system_objects)} (protected)")
+        
+        if not custom_objects:
+            print(f"\n  No custom {object_type.lower()} to delete")
+            return True
+        
+        # Show sample of what will be deleted
+        print(f"\n  Sample custom objects found:")
+        for obj in custom_objects[:10]:
+            name = obj.get('name', 'UNNAMED')
+            obj_id = obj.get('id', 'NO_ID')
+            print(f"    - {name} (ID: {obj_id[:20]}...)")
+        
+        if len(custom_objects) > 10:
+            print(f"    ... and {len(custom_objects) - 10} more")
+        
+        # Delete custom objects
+        print(f"\n  {'[DRY RUN] Would delete' if dry_run else 'Deleting'} {len(custom_objects)} custom objects...")
+        
+        success_count = 0
+        fail_count = 0
+        
+        for i, obj in enumerate(custom_objects, 1):
+            name = obj.get('name', 'UNNAMED')
+            obj_id = obj.get('id')
             
-            # Debug: Show first full object
-            if self.debug and ftd_lookup:
-                first_name = list(ftd_lookup.keys())[0]
-                first_obj = ftd_lookup[first_name]
-                print(f"\n  [DEBUG] Sample FTD object:")
-                print(f"    Name: {first_obj.get('name')}")
-                print(f"    ID: {first_obj.get('id')}")
-                print(f"    Type: {first_obj.get('type')}")
-                print(f"    Full object keys: {list(first_obj.keys())}\n")
-        
-        # Debug: Show first few names from import file
-        if imported_objects:
-            sample_imported = [obj.get("name", "UNNAMED") for obj in imported_objects[:5]]
-            print(f"  Sample imported names: {sample_imported}")
-        
-        all_success = True
-        matched_count = 0
-        
-        for imported_obj in imported_objects:
-            imported_name = imported_obj.get("name", "")
-            
-            if not imported_name:
-                print(f"  Skipped: Unnamed object in import file")
+            if not obj_id:
+                print(f"  [{i}/{len(custom_objects)}] Error: {name} - No ID")
+                fail_count += 1
                 continue
             
-            # Look up the object in FTD by name
-            if imported_name in ftd_lookup:
-                matched_count += 1
-                ftd_obj = ftd_lookup[imported_name]
-                obj_id = ftd_obj.get("id")
-                
-                if self.debug:
-                    print(f"\n  [DEBUG] Match found for: {imported_name}")
-                    print(f"    FTD Object ID: {obj_id}")
-                    print(f"    FTD Object Type: {ftd_obj.get('type')}")
-                
-                if not obj_id:
-                    print(f"  Error: {imported_name} - No ID found in FTD object")
-                    self.stats[fail_stat] += 1
-                    all_success = False
-                    continue
-                
-                if dry_run:
-                    print(f"  [DRY RUN] Would delete: {imported_name} (ID: {obj_id})")
-                    self.stats[success_stat] += 1
-                else:
-                    print(f"  Deleting: {imported_name}...", end=" ")
-                    success = self.delete_object(endpoint, obj_id)
-                    
-                    if success:
-                        print("✓")
-                        self.stats[success_stat] += 1
-                    else:
-                        print("✗")
-                        self.stats[fail_stat] += 1
-                        all_success = False
-                    
-                    time.sleep(0.2)
+            if dry_run:
+                print(f"  [{i}/{len(custom_objects)}] Would delete: {name}")
+                success_count += 1
             else:
-                print(f"  Not found in FTD: {imported_name}")
+                print(f"  [{i}/{len(custom_objects)}] Deleting: {name}...", end=" ")
+                
+                success = self.delete_object(endpoint, obj_id)
+                
+                if success:
+                    print("✓")
+                    success_count += 1
+                else:
+                    print("✗")
+                    fail_count += 1
+                
+                time.sleep(0.2)  # Rate limiting
         
-        print(f"\n  Summary: Matched {matched_count} of {len(imported_objects)} imported objects")
-        return all_success
+        self.stats["deleted"] = success_count
+        self.stats["failed"] = fail_count
+        
+        print(f"\n  Summary:")
+        print(f"    Deleted: {success_count}")
+        print(f"    Failed: {fail_count}")
+        
+        return fail_count == 0
     
     def deploy_changes(self) -> bool:
-        """Deploy pending configuration changes to FTD."""
+        """Deploy pending changes."""
         print(f"\n{'='*60}")
         print("Deploying configuration changes...")
         print(f"{'='*60}")
@@ -638,8 +315,8 @@ class FTDAPICleanup:
             response = self.session.post(endpoint, json={}, timeout=30)
             
             if response.status_code in [200, 201, 202]:
-                print("✓ Deployment initiated successfully")
-                print("  Note: Deployment may take several minutes to complete")
+                print("✓ Deployment initiated")
+                print("  (Deployment may take several minutes)")
                 return True
             else:
                 print(f"✗ Deployment failed: {response.status_code}")
@@ -648,205 +325,161 @@ class FTDAPICleanup:
         except requests.exceptions.RequestException as e:
             print(f"✗ Deployment error: {e}")
             return False
-    
-    def print_statistics(self):
-        """Print deletion statistics."""
-        print(f"\n{'='*60}")
-        print("DELETION STATISTICS")
-        print(f"{'='*60}")
-        print(f"\nAccess Rules:")
-        print(f"  Deleted: {self.stats['rules_deleted']}")
-        print(f"  Failed:  {self.stats['rules_failed']}")
-        print(f"\nStatic Routes:")
-        print(f"  Deleted: {self.stats['routes_deleted']}")
-        print(f"  Failed:  {self.stats['routes_failed']}")
-        print(f"\nPort Groups:")
-        print(f"  Deleted: {self.stats['port_groups_deleted']}")
-        print(f"  Failed:  {self.stats['port_groups_failed']}")
-        print(f"\nPort Objects:")
-        print(f"  Deleted: {self.stats['port_objects_deleted']}")
-        print(f"  Failed:  {self.stats['port_objects_failed']}")
-        print(f"\nAddress Groups:")
-        print(f"  Deleted: {self.stats['address_groups_deleted']}")
-        print(f"  Failed:  {self.stats['address_groups_failed']}")
-        print(f"\nAddress Objects:")
-        print(f"  Deleted: {self.stats['address_objects_deleted']}")
-        print(f"  Failed:  {self.stats['address_objects_failed']}")
-        
-        total_deleted = sum([
-            self.stats['rules_deleted'],
-            self.stats['routes_deleted'],
-            self.stats['port_groups_deleted'],
-            self.stats['port_objects_deleted'],
-            self.stats['address_groups_deleted'],
-            self.stats['address_objects_deleted']
-        ])
-        
-        total_failed = sum([
-            self.stats['rules_failed'],
-            self.stats['routes_failed'],
-            self.stats['port_groups_failed'],
-            self.stats['port_objects_failed'],
-            self.stats['address_groups_failed'],
-            self.stats['address_objects_failed']
-        ])
-        
-        print(f"\nTOTAL:")
-        print(f"  Deleted: {total_deleted}")
-        print(f"  Failed:  {total_failed}")
-        print(f"\n{'='*60}")
 
 
 def main():
-    """Main function to orchestrate the cleanup process."""
+    """Main function."""
     parser = argparse.ArgumentParser(
-        description='Delete imported configurations from Cisco FTD via FDM API',
+        description='Bulk delete ALL custom objects from Cisco FTD via FDM API',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-⚠️  WARNING: THIS DELETES CONFIGURATION FROM YOUR FIREWALL! ⚠️
+⚠️  WARNING: DELETES ALL CUSTOM OBJECTS OF SELECTED TYPES! ⚠️
 
 Examples:
-  # Dry run (preview what will be deleted)
-  python ftd_api_cleanup.py --host 192.168.1.1 -u admin --dry-run
+  # Dry run - see what would be deleted
+  python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-address-objects --dry-run
+  
+  # Delete all address objects
+  python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-address-objects
+  
+  # Delete all rules
+  python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-rules
   
   # Delete everything
-  python ftd_api_cleanup.py --host 192.168.1.1 -u admin --base ftd_config
-  
-  # Delete only address objects
-  python ftd_api_cleanup.py --host 192.168.1.1 -u admin --only-address-objects
-  
-  # Delete and deploy
-  python ftd_api_cleanup.py --host 192.168.1.1 -u admin --deploy
+  python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-all
         """
     )
     
-    parser.add_argument('--host', required=True,
-                       help='FTD management IP address or hostname')
-    parser.add_argument('-u', '--username', required=True,
-                       help='FDM username (typically "admin")')
-    parser.add_argument('-p', '--password',
-                       help='FDM password (will prompt if not provided)')
-    parser.add_argument('--base', default='ftd_config',
-                       help='Base name of JSON files (default: ftd_config)')
-    parser.add_argument('--dry-run', action='store_true',
-                       help='Show what would be deleted without actually deleting')
-    parser.add_argument('--deploy', action='store_true',
-                       help='Automatically deploy changes after deletion')
-    parser.add_argument('--skip-verify', action='store_true', default=True,
-                       help='Skip SSL certificate verification (default: True)')
-    parser.add_argument('--yes', action='store_true',
-                       help='Skip confirmation prompt (dangerous!)')
+    parser.add_argument('--host', required=True, help='FTD management IP')
+    parser.add_argument('-u', '--username', required=True, help='FDM username')
+    parser.add_argument('-p', '--password', help='FDM password')
+    parser.add_argument('--dry-run', action='store_true', help='Preview without deleting')
+    parser.add_argument('--deploy', action='store_true', help='Deploy after deletion')
+    parser.add_argument('--debug', action='store_true', help='Enable debug output')
+    parser.add_argument('--yes', action='store_true', help='Skip confirmation')
     
-    # Selective deletion options
-    parser.add_argument('--only-address-objects', action='store_true',
-                       help='Delete only address objects')
-    parser.add_argument('--only-address-groups', action='store_true',
-                       help='Delete only address groups')
-    parser.add_argument('--only-service-objects', action='store_true',
-                       help='Delete only service objects')
-    parser.add_argument('--only-service-groups', action='store_true',
-                       help='Delete only service groups')
-    parser.add_argument('--only-routes', action='store_true',
-                       help='Delete only static routes')
-    parser.add_argument('--only-rules', action='store_true',
-                       help='Delete only access rules')
-    parser.add_argument('--debug', action='store_true',
-                       help='Enable debug output to see API responses')
+    # Object type selection
+    parser.add_argument('--delete-address-objects', action='store_true', help='Delete all address objects')
+    parser.add_argument('--delete-address-groups', action='store_true', help='Delete all address groups')
+    parser.add_argument('--delete-service-objects', action='store_true', help='Delete all service objects')
+    parser.add_argument('--delete-service-groups', action='store_true', help='Delete all service groups')
+    parser.add_argument('--delete-routes', action='store_true', help='Delete all static routes')
+    parser.add_argument('--delete-rules', action='store_true', help='Delete all access rules')
+    parser.add_argument('--delete-all', action='store_true', help='Delete ALL custom objects (everything)')
     
     args = parser.parse_args()
     
-    # Prompt for password if not provided
+    # Check if at least one delete option is selected
+    if not any([args.delete_address_objects, args.delete_address_groups, 
+                args.delete_service_objects, args.delete_service_groups,
+                args.delete_routes, args.delete_rules, args.delete_all]):
+        parser.error("Must specify at least one --delete-* option")
+    
+    # Prompt for password
     if not args.password:
         args.password = getpass.getpass(f"Enter password for {args.username}: ")
     
     # Safety confirmation
     if not args.dry_run and not args.yes:
         print("\n" + "="*60)
-        print("⚠️  WARNING: YOU ARE ABOUT TO DELETE CONFIGURATION! ⚠️")
+        print("⚠️  FINAL WARNING ⚠️")
         print("="*60)
-        print("\nThis will delete imported objects from your FTD firewall.")
-        print("This action cannot be undone without restoring from backup.")
-        print("\nRecommended: Run with --dry-run first to preview changes.")
-        print("\nHave you backed up your FTD configuration? (yes/no): ", end="")
+        print("\nThis will DELETE ALL CUSTOM OBJECTS of the selected types!")
+        print("This does NOT check import files - it deletes EVERYTHING it finds.")
+        print("\nOnly system-defined objects will be preserved.")
+        print("\nHave you backed up your FTD? (yes/no): ", end="")
         
-        backup_confirm = input().strip().lower()
-        if backup_confirm != 'yes':
-            print("\n✗ Please backup your configuration first!")
+        backup = input().strip().lower()
+        if backup != 'yes':
+            print("\n✗ Please backup first!")
             return 1
         
-        print("\nAre you sure you want to proceed? (yes/no): ", end="")
-        confirm = input().strip().lower()
-        if confirm != 'yes':
-            print("\n✗ Operation cancelled")
+        print("\nType 'DELETE ALL' to confirm: ", end="")
+        confirm = input().strip()
+        if confirm != 'DELETE ALL':
+            print("\n✗ Cancelled")
             return 1
     
-    # Create API client
-    client = FTDAPICleanup(
+    # Create client
+    client = FTDBulkDelete(
         host=args.host,
         username=args.username,
         password=args.password,
-        verify_ssl=not args.skip_verify,
         debug=args.debug
     )
     
     # Authenticate
     if not client.authenticate():
-        print("\n✗ Authentication failed. Exiting.")
         return 1
     
-    # Display mode
     mode = "DRY RUN" if args.dry_run else "DELETE"
     print(f"\n{'='*60}")
-    print(f"Starting Cleanup Process - {mode} MODE")
+    print(f"BULK DELETE MODE: {mode}")
     print(f"{'='*60}")
     
-    # Determine what to delete
-    delete_all = not any([
-        args.only_address_objects,
-        args.only_address_groups,
-        args.only_service_objects,
-        args.only_service_groups,
-        args.only_routes,
-        args.only_rules
-    ])
-    
     # Delete in reverse dependency order
-    if delete_all or args.only_rules:
-        client.delete_access_rules(f"{args.base}_access_rules.json", args.dry_run)
+    if args.delete_all or args.delete_rules:
+        client.delete_all_custom_objects(
+            "/policy/accesspolicies/default/accessrules",
+            "Access Rules",
+            args.dry_run
+        )
     
-    if delete_all or args.only_routes:
-        client.delete_static_routes(f"{args.base}_static_routes.json", args.dry_run)
+    if args.delete_all or args.delete_routes:
+        client.delete_all_custom_objects(
+            "/devices/default/routing/staticrouteentries",
+            "Static Routes",
+            args.dry_run
+        )
     
-    if delete_all or args.only_service_groups:
-        client.delete_port_groups(f"{args.base}_service_groups.json", args.dry_run)
+    if args.delete_all or args.delete_service_groups:
+        client.delete_all_custom_objects(
+            "/object/portgroups",
+            "Service Groups",
+            args.dry_run
+        )
     
-    if delete_all or args.only_service_objects:
-        client.delete_port_objects(f"{args.base}_service_objects.json", args.dry_run)
+    if args.delete_all or args.delete_service_objects:
+        # Delete TCP ports
+        client.delete_all_custom_objects(
+            "/object/tcpports",
+            "TCP Port Objects",
+            args.dry_run
+        )
+        # Delete UDP ports
+        client.delete_all_custom_objects(
+            "/object/udpports",
+            "UDP Port Objects",
+            args.dry_run
+        )
     
-    if delete_all or args.only_address_groups:
-        client.delete_address_groups(f"{args.base}_address_groups.json", args.dry_run)
+    if args.delete_all or args.delete_address_groups:
+        client.delete_all_custom_objects(
+            "/object/networkgroups",
+            "Address Groups",
+            args.dry_run
+        )
     
-    if delete_all or args.only_address_objects:
-        client.delete_address_objects(f"{args.base}_address_objects.json", args.dry_run)
+    if args.delete_all or args.delete_address_objects:
+        client.delete_all_custom_objects(
+            "/object/networks",
+            "Address Objects",
+            args.dry_run
+        )
     
-    # Print statistics
-    client.print_statistics()
-    
-    # Deploy if requested and not dry run
+    # Deploy if requested
     if args.deploy and not args.dry_run:
         client.deploy_changes()
-    elif not args.dry_run:
-        print(f"\n{'='*60}")
-        print("Deletion complete. Changes are pending deployment.")
-        print("To deploy:")
-        print("  1. Run this script again with --deploy flag")
-        print("  2. Deploy manually from FDM web interface")
-        print(f"{'='*60}")
+    
+    print(f"\n{'='*60}")
+    if args.dry_run:
+        print("DRY RUN COMPLETE - No changes made")
+        print("Remove --dry-run to actually delete")
     else:
-        print(f"\n{'='*60}")
-        print("DRY RUN complete - no actual changes made")
-        print("Remove --dry-run flag to perform actual deletion")
-        print(f"{'='*60}")
+        print("DELETION COMPLETE")
+        if not args.deploy:
+            print("Changes pending - deploy manually or use --deploy")
+    print(f"{'='*60}")
     
     return 0
 
