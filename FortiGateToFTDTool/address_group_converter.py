@@ -42,6 +42,24 @@ IMPORTANT NOTES:
 from typing import Dict, List, Any
 
 
+def sanitize_name(name: str) -> str:
+    """
+    Sanitize object names for FTD compatibility.
+    
+    FTD does not allow spaces in object names. This function replaces
+    spaces with underscores to ensure compatibility.
+    
+    Args:
+        name: Original object name (may contain spaces)
+        
+    Returns:
+        Sanitized name with spaces replaced by underscores
+    """
+    if name is None:
+        return ""
+    return str(name).replace(' ', '_')
+
+
 class AddressGroupConverter:
     """
     Converter class for transforming FortiGate address groups to FTD network groups.
@@ -155,10 +173,10 @@ class AddressGroupConverter:
             
             ftd_members = []
             for member_name in members_list:
-                # Create an FTD member object
+                # Create an FTD member object with sanitized name
                 member_obj = {
-                    "name": member_name,           # The object name
-                    "type": "networkobject"        # Always 'networkobject' for address objects
+                    "name": sanitize_name(member_name),  # Sanitized object name
+                    "type": "networkobject"              # Always 'networkobject' for address objects
                 }
                 ftd_members.append(member_obj)
             
@@ -166,8 +184,11 @@ class AddressGroupConverter:
             # STEP 2E: Create the FTD network group structure
             # ================================================================
             # This is the final format that FTD FDM API expects
+            # Sanitize the group name to replace spaces with underscores
+            sanitized_group_name = sanitize_name(group_name)
+            
             ftd_group = {
-                "name": group_name,                    # Group name from FortiGate
+                "name": sanitized_group_name,              # Sanitized group name
                 "isSystemDefined": False,              # Custom groups are not system-defined
                 "objects": ftd_members,                # List of member objects
                 "type": "networkobjectgroup"           # FTD type for address groups
@@ -181,7 +202,10 @@ class AddressGroupConverter:
             # ================================================================
             # This helps users see what's being converted in real-time
             member_count = len(ftd_members)
-            print(f"  Converted: {group_name} ({member_count} members)")
+            if group_name != sanitized_group_name:
+                print(f"  Converted: {group_name} -> {sanitized_group_name} ({member_count} members)")
+            else:
+                print(f"  Converted: {sanitized_group_name} ({member_count} members)")
             
             # Optional: Print the actual member names for debugging
             # Uncomment the next line if you want to see all members
