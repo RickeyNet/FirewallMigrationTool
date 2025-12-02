@@ -59,24 +59,26 @@ IMPORTANT NOTES:
     - ruleId is assigned sequentially starting from 1
 """
 
+import re
 from typing import Dict, List, Any, Set
 
 def sanitize_name(name: str) -> str:
     """
     Sanitize object names for FTD compatibility.
     
-    FTD does not allow spaces in object names. This function replaces
-    spaces with underscores to ensure compatibility.
+    FTD only allows alphanumeric characters and underscores in object names.
+    This function replaces any other character with an underscore.
     
     Args:
-        name: Original object name (may contain spaces)
+        name: Original object name (may contain spaces, dashes, etc.)
         
     Returns:
-        Sanitized name with spaces replaced by underscores
+        Sanitized name with only alphanumeric characters and underscores
     """
     if name is None:
         return ""
-    return str(name).replace(' ', '_')
+    # Replace any character that isn't alphanumeric or underscore with underscore
+    return re.sub(r'[^a-zA-Z0-9_]', '_', str(name))
 
 
 

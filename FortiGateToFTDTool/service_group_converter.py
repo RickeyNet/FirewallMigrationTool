@@ -46,6 +46,7 @@ NOTE ON MEMBER TYPES:
     - The type field is set generically (could be refined in post-processing)
 """
 
+import re
 from typing import Dict, List, Any, Set
 
 def sanitize_name(name: str) -> str:
@@ -63,7 +64,8 @@ def sanitize_name(name: str) -> str:
     """
     if name is None:
         return ""
-    return str(name).replace(' ', '_')
+    # Replace any character that isn't aplhanumeric or underscore with underscore
+    return re.sub(r'[^a-zA-Z0-9_]', '_', str(name))
 
 
 
