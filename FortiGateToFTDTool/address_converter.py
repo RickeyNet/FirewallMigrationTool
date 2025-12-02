@@ -238,7 +238,16 @@ class AddressConverter:
         # ====================================================================
         # FortiGate marks IP ranges with type: iprange
         if properties.get('type') == 'iprange':
-            return "RANGE"
+            # Get start and end IPs
+            start_ip = str(properties.get('start-ip', ''))
+            end_ip = str(properties.get('end-ip', ''))
+    
+            # If start-ip equals end-ip, this is actually a single host, not a range
+            if start_ip and end_ip and start_ip == end_ip:
+                print(f"    Note: IP range with same start/end IP ({start_ip}) - converting to HOST")
+                return "HOST"
+            else:
+                return "RANGE"
         
         # ====================================================================
         # CHECK 2: Is this a subnet-based address?
@@ -302,12 +311,14 @@ class AddressConverter:
         # ====================================================================
         # Check if this is an IP range (has start-ip and end-ip)
         if properties.get('type') == 'iprange':
-            # Extract the start and end IP addresses
-            start_ip = properties.get('start-ip', '')
-            end_ip = properties.get('end-ip', '')
-            
-            # Format for FTD: "IP1-IP2"
-            # Example: "10.212.134.200-10.212.134.210"
+            start_ip = str(properties.get('start-ip', ''))
+            end_ip = str(properties.get('end-ip', ''))
+    
+            # If start-ip equals end-ip, return just the single IP (HOST format)
+            if start_ip and end_ip and start_ip == end_ip:
+                return start_ip
+    
+            # Otherwise, format for FTD range: "IP1-IP2"
             return f"{start_ip}-{end_ip}"
         
         # ====================================================================
