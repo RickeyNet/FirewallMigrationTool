@@ -46,19 +46,19 @@ def sanitize_name(name: str) -> str:
     """
     Sanitize object names for FTD compatibility.
     
-    FTD does not allow spaces in object names. This function replaces
-    spaces with underscores to ensure compatibility.
+    FTD only allows alphanumeric characters and underscores in object names.
+    This function replaces any other character with an underscore.
     
     Args:
-        name: Original object name (may contain spaces)
+        name: Original object name (may contain spaces, dashes, etc.)
         
     Returns:
-        Sanitized name with spaces replaced by underscores
+        Sanitized name with only alphanumeric characters and underscores
     """
     if name is None:
         return ""
-    # Replace any character that isn't aplhanumeric or underscore with underscore
-    return re.sub(r'[^a-zA-Z0-9_]', '_', str(name)).upper()
+    # Replace any character that isn't alphanumeric or underscore with underscore
+    return re.sub(r'[^a-zA-Z0-9_]', '_', str(name))
 
 
 
@@ -70,25 +70,116 @@ class AddressGroupConverter:
     This class is responsible for:
     1. Reading the 'firewall_addrgrp' section from FortiGate YAML
     2. Extracting group names and their member objects
-    3. Converting to FTD's networkobjectgroup format
-    4. Handling edge cases (empty groups, single vs multiple members)
+    3. FLATTENING nested groups (FTD doesn't allow groups inside groups)
+    4. Converting to FTD's networkobjectgroup format
+    5. Handling edge cases (empty groups, single vs multiple members)
     """
     
-    def __init__(self, fortigate_config: Dict[str, Any]):
+    def __init__(self, fortigate_config: Dict[str, Any], address_object_names: set = None): # pyright: ignore[reportArgumentType]
         """
         Initialize the converter with FortiGate configuration data.
         
         Args:
             fortigate_config: Dictionary containing the complete parsed FortiGate YAML
                              Expected to have a 'firewall_addrgrp' key with group data
+            address_object_names: Set of address object names (to distinguish objects from groups)
         """
         # Store the entire FortiGate configuration
         # We'll extract what we need from this in the convert() method
         self.fg_config = fortigate_config
         
+        # Set of known address object names (not groups)
+        self.address_object_names = address_object_names or set()
+        
         # This will store the converted FTD network groups
         # Starts empty and gets populated by the convert() method
         self.ftd_network_groups = []
+        
+        # Build a lookup of group name -> member list for flattening nested groups
+        self.group_members = {}
+        self._build_group_lookup()
+    
+    def _build_group_lookup(self):
+        """
+        Build a lookup dictionary of group names to their members.
+        This is used to flatten nested groups.
+        """
+        address_groups = self.fg_config.get('firewall_addrgrp', [])
+        
+        for group_dict in address_groups:
+            group_name = list(group_dict.keys())[0]
+            properties = group_dict[group_name]
+            
+            # Get members and normalize to list
+            members_raw = properties.get('member', [])
+            if isinstance(members_raw, str):
+                members_list = [members_raw]
+            elif isinstance(members_raw, list):
+                members_list = members_raw
+            else:
+                members_list = []
+            
+            # Store with sanitized name
+            self.group_members[sanitize_name(group_name)] = [sanitize_name(m) for m in members_list]
+    
+    def _is_group(self, name: str) -> bool:
+        """
+        Check if a name refers to a group (not an individual object).
+        
+        Args:
+            name: The sanitized object/group name to check
+            
+        Returns:
+            True if the name is a group, False if it's an individual object
+        """
+        return name in self.group_members
+    
+    def _flatten_members(self, members: List[str], visited: set = None) -> List[str]: # pyright: ignore[reportArgumentType]
+        """
+        Recursively flatten a list of members, expanding any nested groups.
+        
+        Args:
+            members: List of member names (may include group names)
+            visited: Set of already-visited group names (prevents infinite loops)
+            
+        Returns:
+            List of individual object names (no groups)
+        """
+        if visited is None:
+            visited = set()
+        
+        flattened = []
+        
+        for member in members:
+            if self._is_group(member):
+                # This member is a group - expand it
+                if member in visited:
+                    # Circular reference - skip to prevent infinite loop
+                    print(f"    Warning: Circular reference detected for group '{member}', skipping")
+                    continue
+                
+                # Mark as visited
+                visited.add(member)
+                
+                # Get the group's members and recursively flatten
+                nested_members = self.group_members.get(member, [])
+                expanded = self._flatten_members(nested_members, visited)
+                
+                print(f"    Flattening nested group '{member}' -> {len(expanded)} objects")
+                flattened.extend(expanded)
+            else:
+                # This is an individual object - add it
+                flattened.append(member)
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_flattened = []
+        for item in flattened:
+            if item not in seen:
+                seen.add(item)
+                unique_flattened.append(item)
+        
+        return unique_flattened
     
     def convert(self) -> List[Dict]:
         """
@@ -100,8 +191,9 @@ class AddressGroupConverter:
         3. Extract the group name (the dictionary key)
         4. Extract the group properties (uuid, member, color, etc.)
         5. Normalize the 'member' field to always be a list
-        6. Create FTD networkobjectgroup structure
-        7. Return the complete list of converted groups
+        6. FLATTEN any nested groups (expand group members into individual objects)
+        7. Create FTD networkobjectgroup structure
+        8. Return the complete list of converted groups
         
         Returns:
             List of dictionaries, each representing an FTD network object group
@@ -109,11 +201,8 @@ class AddressGroupConverter:
         # ====================================================================
         # STEP 1: Extract address groups from FortiGate configuration
         # ====================================================================
-        # The .get() method safely retrieves the key, returning [] if not found
-        # This prevents KeyError exceptions if the key doesn't exist
         address_groups = self.fg_config.get('firewall_addrgrp', [])
         
-        # Check if we found any address groups
         if not address_groups:
             print("Warning: No address groups found in FortiGate configuration")
             print("  Expected key: 'firewall_addrgrp'")
@@ -125,98 +214,83 @@ class AddressGroupConverter:
         # ====================================================================
         # STEP 2: Process each FortiGate address group
         # ====================================================================
-        # Each group in the list looks like: {'GROUP_NAME': {properties}}
         for group_dict in address_groups:
             # ================================================================
             # STEP 2A: Extract the group name
             # ================================================================
-            # The group name is the only key in the dictionary
-            # Example: {'Blocked IPs': {uuid: ..., member: ...}}
-            #          The group name is 'Blocked IPs'
-            
             group_name = list(group_dict.keys())[0]
+            sanitized_group_name = sanitize_name(group_name)
             
             # ================================================================
             # STEP 2B: Extract the group properties
             # ================================================================
-            # Properties include: uuid, member, color, comment, etc.
             properties = group_dict[group_name]
             
             # ================================================================
             # STEP 2C: Extract and normalize the member list
             # ================================================================
-            # FortiGate can store members as either:
-            # 1. A single string: member: "object_name"
-            # 2. A list of strings: member: ["obj1", "obj2", "obj3"]
-            # We need to normalize this to ALWAYS be a list
-            
             members_raw = properties.get('member', [])
             
             # Normalize to list format
             if isinstance(members_raw, str):
-                # If it's a single string, convert to a list with one item
-                # Example: "object1" becomes ["object1"]
-                members_list = [members_raw]
+                members_list = [sanitize_name(members_raw)]
             elif isinstance(members_raw, list):
-                # If it's already a list, use it as-is
-                # Example: ["obj1", "obj2"] stays ["obj1", "obj2"]
-                members_list = members_raw
+                members_list = [sanitize_name(m) for m in members_raw]
             else:
-                # If it's some other type (shouldn't happen), default to empty list
                 print(f"  Warning: Group '{group_name}' has unexpected member format")
                 members_list = []
             
             # ================================================================
-            # STEP 2D: Convert members to FTD object format
+            # STEP 2D: FLATTEN nested groups
             # ================================================================
-            # FTD expects each member to be an object with 'name' and 'type'
-            # FortiGate: ["Server1", "Server2"]
-            # FTD:       [{"name": "Server1", "type": "networkobject"},
-            #             {"name": "Server2", "type": "networkobject"}]
+            # FTD does NOT allow groups inside groups, so we need to expand
+            # any nested groups into their individual objects
+            flattened_members = self._flatten_members(members_list)
             
+            # ================================================================
+            # STEP 2E: Convert members to FTD object format
+            # ================================================================
             ftd_members = []
-            for member_name in members_list:
-                # Create an FTD member object
+            for member_name in flattened_members:
                 member_obj = {
-                    "name": sanitize_name(member_name),           # The object name
-                    "type": "networkobject"        # Always 'networkobject' for address objects
+                    "name": member_name,
+                    "type": "networkobject"
                 }
                 ftd_members.append(member_obj)
             
             # ================================================================
-            # STEP 2E: Create the FTD network group structure
+            # STEP 2F: Create the FTD network group structure
             # ================================================================
-            # This is the final format that FTD FDM API expects
-            # Sanitize the group name
-            sanitized_group_name = sanitize_name(group_name)
-            
             ftd_group = {
-                "name": sanitized_group_name,                    # Group name from FortiGate
-                "isSystemDefined": False,              # Custom groups are not system-defined
-                "objects": ftd_members,                # List of member objects
-                "type": "networkobjectgroup"           # FTD type for address groups
+                "name": sanitized_group_name,
+                "isSystemDefined": False,
+                "objects": ftd_members,
+                "type": "networkobjectgroup"
             }
             
             # Add the converted group to our result list
             network_groups.append(ftd_group)
             
             # ================================================================
-            # STEP 2F: Print conversion details for user feedback
+            # STEP 2G: Print conversion details for user feedback
             # ================================================================
-            # This helps users see what's being converted in real-time
-            member_count = len(ftd_members)
-            if group_name != sanitized_group_name:
-                print(f"  Converted: {group_name} -> {sanitized_group_name} ({member_count} members)")
-            else:
-                print(f"  Converted: {sanitized_group_name} ({member_count} members)")
+            original_count = len(members_list)
+            final_count = len(ftd_members)
             
-            # Optional: Print the actual member names for debugging
-            # Uncomment the next line if you want to see all members
-            # print(f"    Members: {', '.join(members_list)}")
+            if group_name != sanitized_group_name:
+                print(f"  Converted: {group_name} -> {sanitized_group_name} ({final_count} members)", end="")
+            else:
+                print(f"  Converted: {sanitized_group_name} ({final_count} members)", end="")
+            
+            if final_count != original_count:
+                print(f" [flattened from {original_count} entries]")
+            else:
+                print()
         
         # ====================================================================
         # STEP 3: Return all converted groups
         # ====================================================================
+        self.ftd_network_groups = network_groups
         return network_groups
 
 
@@ -296,12 +370,13 @@ if __name__ == '__main__':
     """
     
     # Sample FortiGate configuration for testing
+    # Includes nested groups to test flattening
     test_config = {
         'firewall_addrgrp': [
             {
                 'Blocked IPs': {
                     'uuid': '11111111-2222-3333-8888-000000000005',
-                    'member': ["1.0.0.1", "149.112.112.122", "208.67.222.222"]
+                    'member': ["BadIP1", "BadIP2", "BadIP3"]
                 }
             },
             {
@@ -311,9 +386,23 @@ if __name__ == '__main__':
                 }
             },
             {
-                'Single_Member_Group': {
+                'Servers': {
                     'uuid': '11111111-2222-3333-8888-000000000007',
-                    'member': "SingleObject"  # Test single string member
+                    'member': ["Server1", "Server2"]
+                }
+            },
+            {
+                'All_Network_Devices': {
+                    'uuid': '11111111-2222-3333-8888-000000000008',
+                    # This group contains OTHER GROUPS - needs to be flattened!
+                    'member': ["Switches", "Servers", "Firewall1"]
+                }
+            },
+            {
+                'Everything': {
+                    'uuid': '11111111-2222-3333-8888-000000000009',
+                    # This group contains a group that contains groups - deep nesting!
+                    'member': ["All_Network_Devices", "Blocked IPs", "SingleServer"]
                 }
             }
         ]
@@ -323,7 +412,7 @@ if __name__ == '__main__':
     converter = AddressGroupConverter(test_config)
     
     # Run conversion
-    print("Testing Address Group Converter...")
+    print("Testing Address Group Converter with Nested Groups...")
     print("="*60)
     result = converter.convert()
     
@@ -334,3 +423,9 @@ if __name__ == '__main__':
     print(json.dumps(result, indent=2))
     print("\n" + "="*60)
     print(f"Total groups converted: {len(result)}")
+    
+    # Show flattening results
+    print("\nFlattening Summary:")
+    print("-"*60)
+    for group in result:
+        print(f"  {group['name']}: {len(group['objects'])} members")

@@ -53,19 +53,19 @@ def sanitize_name(name: str) -> str:
     """
     Sanitize object names for FTD compatibility.
     
-    FTD does not allow spaces in object names. This function replaces
-    spaces with underscores to ensure compatibility.
+    FTD only allows alphanumeric characters and underscores in object names.
+    This function replaces any other character with an underscore.
     
     Args:
-        name: Original object name (may contain spaces)
+        name: Original object name (may contain spaces, dashes, etc.)
         
     Returns:
-        Sanitized name with spaces replaced by underscores
+        Sanitized name with only alphanumeric characters and underscores
     """
     if name is None:
         return ""
-    # Replace any character that isn't aplhanumeric or underscore with underscore
-    return re.sub(r'[^a-zA-Z0-9_]', '_', str(name)).upper()
+    # Replace any character that isn't alphanumeric or underscore with underscore
+    return re.sub(r'[^a-zA-Z0-9_]', '_', str(name))
 
 
 
@@ -77,9 +77,10 @@ class ServiceGroupConverter:
     This class is responsible for:
     1. Reading the 'firewall_service_group' section from FortiGate YAML
     2. Extracting group names and their member services
-    3. Converting to FTD's portobjectgroup format
-    4. Handling edge cases (empty groups, single vs multiple members)
-    5. Tracking which services need to be expanded (if they were split)
+    3. FLATTENING nested groups (FTD doesn't allow groups inside groups)
+    4. Converting to FTD's portobjectgroup format
+    5. Handling edge cases (empty groups, single vs multiple members)
+    6. Tracking which services need to be expanded (if they were split)
     """
     
     def __init__(self, fortigate_config: Dict[str, Any], 
@@ -102,6 +103,92 @@ class ServiceGroupConverter:
         
         # This will store the converted FTD port groups
         self.ftd_port_groups = []
+        
+        # Build a lookup of group name -> member list for flattening nested groups
+        self.group_members = {}
+        self._build_group_lookup()
+    
+    def _build_group_lookup(self):
+        """
+        Build a lookup dictionary of group names to their members.
+        This is used to flatten nested groups.
+        """
+        service_groups = self.fg_config.get('firewall_service_group', [])
+        
+        for group_dict in service_groups:
+            group_name = list(group_dict.keys())[0]
+            properties = group_dict[group_name]
+            
+            # Get members and normalize to list
+            members_raw = properties.get('member', [])
+            if isinstance(members_raw, str):
+                members_list = [members_raw]
+            elif isinstance(members_raw, list):
+                members_list = members_raw
+            else:
+                members_list = []
+            
+            # Store with sanitized name
+            self.group_members[sanitize_name(group_name)] = [sanitize_name(m) for m in members_list]
+    
+    def _is_group(self, name: str) -> bool:
+        """
+        Check if a name refers to a group (not an individual service object).
+        
+        Args:
+            name: The sanitized object/group name to check
+            
+        Returns:
+            True if the name is a group, False if it's an individual object
+        """
+        return name in self.group_members
+    
+    def _flatten_members(self, members: List[str], visited: set = None) -> List[str]: # pyright: ignore[reportArgumentType]
+        """
+        Recursively flatten a list of members, expanding any nested groups.
+        
+        Args:
+            members: List of member names (may include group names)
+            visited: Set of already-visited group names (prevents infinite loops)
+            
+        Returns:
+            List of individual object names (no groups)
+        """
+        if visited is None:
+            visited = set()
+        
+        flattened = []
+        
+        for member in members:
+            if self._is_group(member):
+                # This member is a group - expand it
+                if member in visited:
+                    # Circular reference - skip to prevent infinite loop
+                    print(f"    Warning: Circular reference detected for group '{member}', skipping")
+                    continue
+                
+                # Mark as visited
+                visited.add(member)
+                
+                # Get the group's members and recursively flatten
+                nested_members = self.group_members.get(member, [])
+                expanded = self._flatten_members(nested_members, visited)
+                
+                print(f"    Flattening nested group '{member}' -> {len(expanded)} objects")
+                flattened.extend(expanded)
+            else:
+                # This is an individual object - add it
+                flattened.append(member)
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_flattened = []
+        for item in flattened:
+            if item not in seen:
+                seen.add(item)
+                unique_flattened.append(item)
+        
+        return unique_flattened
     
     def convert(self) -> List[Dict]:
         """
@@ -140,9 +227,8 @@ class ServiceGroupConverter:
             # ================================================================
             # STEP 2A: Extract the group name
             # ================================================================
-            # The group name is the only key in the dictionary
-            # Example: {'Email Access': {uuid: ..., member: ...}}
             group_name = list(group_dict.keys())[0]
+            sanitized_group_name = sanitize_name(group_name)
             
             # ================================================================
             # STEP 2B: Extract the group properties
@@ -152,105 +238,86 @@ class ServiceGroupConverter:
             # ================================================================
             # STEP 2C: Extract and normalize the member list
             # ================================================================
-            # FortiGate can store members as either:
-            # 1. A single string: member: "service_name"
-            # 2. A list of strings: member: ["svc1", "svc2", "svc3"]
-            # We need to normalize this to ALWAYS be a list
-            
             members_raw = properties.get('member', [])
             
             # Normalize to list format
             if isinstance(members_raw, str):
-                # Single string -> list with one item
-                members_list = [members_raw]
+                members_list = [sanitize_name(members_raw)]
             elif isinstance(members_raw, list):
-                # Already a list
-                members_list = members_raw
+                members_list = [sanitize_name(m) for m in members_raw]
             else:
-                # Unexpected format
                 print(f"  Warning: Group '{group_name}' has unexpected member format")
                 members_list = []
             
             # ================================================================
-            # STEP 2D: Expand members that were split into TCP and UDP
+            # STEP 2D: FLATTEN nested groups
             # ================================================================
-            # If a member service was split (had both TCP and UDP ports),
-            # we need to include BOTH versions in the group
+            # FTD does NOT allow groups inside groups, so we need to expand
+            # any nested groups into their individual objects
+            flattened_members = self._flatten_members(members_list)
+            
+            # ================================================================
+            # STEP 2E: Expand members that were split into TCP and UDP
+            # ================================================================
             expanded_members = []
             
-            for member_name in members_list:
-                # Sanitize the member name first
-                sanitized_member = sanitize_name(member_name)
-                
+            for member_name in flattened_members:
                 if member_name in self.split_services:
                     # This service was split, so add both TCP and UDP versions
-                    expanded_members.append(f"{sanitized_member}_TCP")
-                    expanded_members.append(f"{sanitized_member}_UDP")
-                    print(f"    Expanded: {member_name} -> {sanitized_member}_TCP, {sanitized_member}_UDP")
+                    expanded_members.append(f"{member_name}_TCP")
+                    expanded_members.append(f"{member_name}_UDP")
+                    print(f"    Expanded split service: {member_name} -> {member_name}_TCP, {member_name}_UDP")
                 else:
-                    # This service was not split, use sanitized name
-                    expanded_members.append(sanitized_member)
+                    # This service was not split, use as-is
+                    expanded_members.append(member_name)
             
             # ================================================================
-            # STEP 2E: Convert members to FTD object format
+            # STEP 2F: Convert members to FTD object format
             # ================================================================
-            # FTD expects each member to be an object with 'name' and 'type'
-            # IMPORTANT: FTD only needs the NAME - it will look up the object by name
-            # Do NOT include UUIDs, IDs, or other fields - only name and type
-            # FortiGate: ["HTTP", "HTTPS"]
-            # FTD:       [{"name": "HTTP", "type": "tcpportobject"},
-            #             {"name": "HTTPS", "type": "tcpportobject"}]
-            
-            # Note: We don't know the exact type (tcp vs udp) without looking up
-            # each service, so we use a generic approach or set a placeholder
             ftd_members = []
             for member_name in expanded_members:
                 # Determine type based on naming convention
-                # If name ends with _TCP or _UDP, we can infer the type
                 if member_name.endswith('_TCP'):
                     member_type = "tcpportobject"
                 elif member_name.endswith('_UDP'):
                     member_type = "udpportobject"
                 else:
-                    # Unknown - could be either, default to tcpportobject
-                    # In a real implementation, you might look this up
                     member_type = "tcpportobject"
                 
-                # Create member object with ONLY name and type
-                # FTD will use the name to find the actual object in its database
                 member_obj = {
                     "name": member_name,
                     "type": member_type
                 }
-                # DO NOT add: id, uuid, version, or any other fields
-                # FTD resolves the reference by name only
                 ftd_members.append(member_obj)
             
             # ================================================================
-            # STEP 2F: Create the FTD port group structure
+            # STEP 2G: Create the FTD port group structure
             # ================================================================
-            # This is the final format that FTD FDM API expects
-            # Sanitize the group name
-            sanitized_group_name = sanitize_name(group_name)
-            
             ftd_group = {
-                "name": sanitized_group_name,                    # Group name from FortiGate
-                "isSystemDefined": False,              # Custom groups are not system-defined
-                "objects": ftd_members,                # List of member port objects
-                "type": "portobjectgroup"              # FTD type for port groups
+                "name": sanitized_group_name,
+                "isSystemDefined": False,
+                "objects": ftd_members,
+                "type": "portobjectgroup"
             }
             
             # Add the converted group to our result list
             port_groups.append(ftd_group)
             
             # ================================================================
-            # STEP 2G: Print conversion details for user feedback
+            # STEP 2H: Print conversion details for user feedback
             # ================================================================
-            member_count = len(ftd_members)
+            original_count = len(members_list)
+            final_count = len(ftd_members)
+            
             if group_name != sanitized_group_name:
-                print(f"  Converted: {group_name} -> {sanitized_group_name} ({member_count} members)")
+                print(f"  Converted: {group_name} -> {sanitized_group_name} ({final_count} members)", end="")
             else:
-                print(f"  Converted: {sanitized_group_name} ({member_count} members)")
+                print(f"  Converted: {sanitized_group_name} ({final_count} members)", end="")
+            
+            if final_count != original_count:
+                print(f" [flattened/expanded from {original_count} entries]")
+            else:
+                print()
         
         # ====================================================================
         # STEP 3: Store results and return
