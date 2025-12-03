@@ -379,25 +379,26 @@ Examples:
     print(f"  - TCP objects: {service_stats['tcp_objects']}")
     print(f"  - UDP objects: {service_stats['udp_objects']}")
     print(f"  - Services split into TCP+UDP: {service_stats['split_services']}")
+    if service_stats.get('multi_port_services', 0) > 0:
+        print(f"  - Services split due to multiple ports: {service_stats['multi_port_services']}")
     if service_stats['skipped_services'] > 0:
         print(f"  - Skipped (non-port protocols): {service_stats['skipped_services']}")
     
     # ========================================================================
-    # STEP 8: Identify split services for group processing
+    # STEP 8: Get service name mapping for group processing
     # ========================================================================
-    # Build a set of service names that were split into TCP and UDP
-    # This is needed so the group converter knows to expand these members
-    split_services = set()
+    # Get the mapping of FortiGate service names to FTD object names
+    # This is needed so the group converter knows how to expand members
+    service_name_mapping = service_converter.get_service_name_mapping()
     
-    # Look through all converted port objects to find pairs
-    # If we have both "SERVICE_TCP" and "SERVICE_UDP", then "SERVICE" was split
-    # Convert names to strings first to handle cases where they might be integers
-    tcp_names = {str(obj['name'])[:-4] for obj in port_objects if str(obj['name']).endswith('_TCP')}
-    udp_names = {str(obj['name'])[:-4] for obj in port_objects if str(obj['name']).endswith('_UDP')}
-    split_services = tcp_names & udp_names  # Intersection of both sets
+    # Also build legacy split_services set for backward compatibility
+    split_services = set()
+    for fg_name, ftd_names in service_name_mapping.items():
+        if len(ftd_names) > 1:
+            split_services.add(fg_name)
     
     if split_services:
-        print(f"\n  Services split into TCP and UDP: {', '.join(sorted(split_services))}")
+        print(f"\n  Services that were split: {', '.join(sorted(split_services))}")
     
     # ========================================================================
     # STEP 9: Convert service port groups
@@ -406,8 +407,11 @@ Examples:
     print("Converting Service Port Groups...")
     print("-"*60)
     
-    # Update the service group converter with the list of split services
-    service_group_converter.set_split_services(split_services)
+    # Update the service group converter with the service name mapping
+    service_group_converter.set_split_services(
+        split_services=split_services,
+        service_name_mapping=service_name_mapping
+    )
     
     # Convert FortiGate service groups to FTD port groups
     port_groups = service_group_converter.convert()
@@ -422,6 +426,7 @@ Examples:
     print("-"*60)
     
     # Update the policy converter with the list of split services
+    # TODO: Policy converter may also need updating for multi-port services
     policy_converter.set_split_services(split_services)
     
     # Convert FortiGate policies to FTD access rules
