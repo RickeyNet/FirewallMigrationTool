@@ -595,13 +595,14 @@ def import_address_objects(client: FTDAPIClient, filename: str) -> bool:
     return all_success
 
 
-def import_address_groups(client: FTDAPIClient, filename: str) -> bool:
+def import_address_groups(client: FTDAPIClient, filename: str, debug: bool = False) -> bool:
     """
     Import address groups from JSON file to FTD.
     
     Args:
         client: Authenticated FTD API client
         filename: Path to address groups JSON file
+        debug: If True, print the cleaned JSON before sending to API
         
     Returns:
         True if all imports successful, False if any failed
@@ -626,6 +627,11 @@ def import_address_groups(client: FTDAPIClient, filename: str) -> bool:
         # and ensure member objects only have name and type
         cleaned_group = clean_group_object(group, group_type="network")
         
+        # Debug: show what we're sending to the API
+        if debug:
+            print(f"\n  [DEBUG] Cleaned group JSON for '{name}':")
+            print(f"    {json.dumps(cleaned_group, indent=2)}")
+        
         print(f"  [{i}/{len(groups)}] Creating: {name}...", end=" ")
         
         success, result = client.create_network_group(cleaned_group)
@@ -637,6 +643,8 @@ def import_address_groups(client: FTDAPIClient, filename: str) -> bool:
         else:
             print(f"[ERROR]")
             print(f"      Error: {result}")
+            # On error, show what we tried to send
+            print(f"      Sent: {json.dumps(cleaned_group)}")
             all_success = False
         
         time.sleep(0.2)
@@ -763,13 +771,14 @@ def import_service_objects(client: FTDAPIClient, filename: str) -> bool:
     return all_success
 
 
-def import_service_groups(client: FTDAPIClient, filename: str) -> bool:
+def import_service_groups(client: FTDAPIClient, filename: str, debug: bool = False) -> bool:
     """
     Import service port groups from JSON file to FTD.
     
     Args:
         client: Authenticated FTD API client
         filename: Path to service groups JSON file
+        debug: If True, print the cleaned JSON before sending to API
         
     Returns:
         True if all imports successful, False if any failed
@@ -794,6 +803,11 @@ def import_service_groups(client: FTDAPIClient, filename: str) -> bool:
         # and ensure member objects only have name and type
         cleaned_group = clean_group_object(group, group_type="port")
         
+        # Debug: show what we're sending to the API
+        if debug:
+            print(f"\n  [DEBUG] Cleaned group JSON for '{name}':")
+            print(f"    {json.dumps(cleaned_group, indent=2)}")
+        
         print(f"  [{i}/{len(groups)}] Creating: {name}...", end=" ")
         
         success, result = client.create_port_group(cleaned_group)
@@ -805,6 +819,8 @@ def import_service_groups(client: FTDAPIClient, filename: str) -> bool:
         else:
             print(f"[ERROR]")
             print(f"      Error: {result}")
+            # On error, show what we tried to send
+            print(f"      Sent: {json.dumps(cleaned_group)}")
             all_success = False
         
         time.sleep(0.2)

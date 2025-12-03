@@ -68,7 +68,7 @@ def sanitize_name(name: str) -> str:
     if name is None:
         return ""
     # Replace any character that isn't aplhanumeric or underscore with underscore
-    return re.sub(r'[^a-zA-Z0-9_]', '_', str(name))
+    return re.sub(r'[^a-zA-Z0-9_]', '_', str(name)).upper()
 
 
 
