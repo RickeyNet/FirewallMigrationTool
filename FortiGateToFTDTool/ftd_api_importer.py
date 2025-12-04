@@ -689,17 +689,26 @@ def clean_group_object(group: Dict, group_type: str = "network") -> Dict:
         cleaned_members = []
         for member in group["objects"]:
             if isinstance(member, dict):
+                member_name = member.get("name", "")
+                
                 # Determine the correct member type
                 if group_type == "network":
-                    default_type = "networkobject"
+                    member_type = "networkobject"
                 else:
-                    # For port groups, try to preserve tcp/udp type
-                    default_type = member.get("type", "tcpportobject")
+                    # For port groups, determine type from name or existing type
+                    # Check for _TCP or _UDP anywhere in name (handles _TCP_1, _UDP_2, etc.)
+                    if '_UDP' in str(member_name):
+                        member_type = "udpportobject"
+                    elif '_TCP' in str(member_name):
+                        member_type = "tcpportobject"
+                    else:
+                        # Try to preserve existing type, default to TCP
+                        member_type = member.get("type", "tcpportobject")
                 
                 # Keep ONLY name and type - remove everything else (uuid, id, version, etc.)
                 cleaned_member = {
-                    "name": member.get("name"),
-                    "type": default_type
+                    "name": member_name,
+                    "type": member_type
                 }
                 cleaned_members.append(cleaned_member)
             elif isinstance(member, str):
@@ -710,9 +719,14 @@ def clean_group_object(group: Dict, group_type: str = "network") -> Dict:
                         "type": "networkobject"
                     })
                 else:
+                    # Determine type from name
+                    if '_UDP' in member:
+                        member_type = "udpportobject"
+                    else:
+                        member_type = "tcpportobject"
                     cleaned_members.append({
                         "name": member,
-                        "type": "tcpportobject"
+                        "type": member_type
                     })
         
         cleaned["objects"] = cleaned_members

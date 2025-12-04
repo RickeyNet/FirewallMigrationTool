@@ -1,50 +1,53 @@
 #!/usr/bin/env python3
 """
-FortiGate Service Port Object Converter Module
-===============================================
-This module handles the conversion of FortiGate service custom objects to 
-Cisco FTD port objects (TCP and UDP).
+FortiGate Service Group Converter Module
+=========================================
+This module handles the conversion of FortiGate service groups to 
+Cisco FTD port object groups.
 
-CRITICAL RULES FOR CISCO FTD:
-    1. TCP and UDP must be in SEPARATE objects
-    2. Each object can only have ONE port or ONE port range
-    3. Multiple ports/ranges must be split into separate objects
+IMPORTANT CONSIDERATION:
+    - When a FortiGate service group references a service that was split
+      into TCP and UDP objects (like "DNS" -> "DNS_TCP" and "DNS_UDP"),
+      the group must include BOTH the TCP and UDP versions
+    - This module assumes all member names are provided as-is from FortiGate
+    - The main script should handle resolving split services
 
 WHAT THIS MODULE DOES:
-    - Parses FortiGate 'firewall_service_custom' section from YAML
-    - Extracts service objects (TCP ports, UDP ports, or both)
-    - Splits services with both TCP and UDP into separate objects
-    - Splits multiple ports/ranges into separate objects (with _1, _2, etc. suffixes)
-    - Converts to FTD 'tcpportobject' and 'udpportobject' formats
+    - Parses FortiGate 'firewall_service_group' section from YAML
+    - Extracts group name and member services
+    - Converts to FTD 'portobjectgroup' format
+    - Handles both single members and lists of members
 
 FORTIGATE YAML FORMAT:
-    firewall_service_custom:
-        - SERVICE_NAME:
+    firewall_service_group:
+        - GROUP_NAME:
             uuid: xxxxx
-            tcp-portrange: 80  # Single port
-            tcp-portrange: 80-443  # Port range
-            tcp-portrange: [80, 443, 8080]  # Multiple ports (list)
-            tcp-portrange: [80-443, 8080-8090]  # Multiple ranges (list)
-
-CONVERSION EXAMPLES:
-    FortiGate: LR_CLUST with tcp-portrange: [8300-8301, 8500-8501, 8086]
-    
-    FTD Output:
-        LR_CLUST_TCP_1: port 8300-8301
-        LR_CLUST_TCP_2: port 8500-8501
-        LR_CLUST_TCP_3: port 8086
+            member: ["HTTP", "HTTPS", "DNS"]  # List of service names
+            color: 13  # Optional
+        - ANOTHER_GROUP:
+            member: "single_service"  # Single member (string, not list)
 
 FTD JSON OUTPUT FORMAT:
     {
-        "name": "LR_CLUST_TCP_1",
+        "name": "Web_Access",
         "isSystemDefined": false,
-        "port": "8300-8301",
-        "type": "tcpportobject"
+        "objects": [
+            {"name": "HTTP_TCP", "type": "tcpportobject"},
+            {"name": "HTTPS_TCP", "type": "tcpportobject"},
+            {"name": "DNS_TCP", "type": "tcpportobject"},
+            {"name": "DNS_UDP", "type": "udpportobject"}
+        ],
+        "type": "portobjectgroup"
     }
+
+NOTE ON MEMBER TYPES:
+    - We don't know in advance if a member is TCP or UDP
+    - We include the member name as-is from FortiGate
+    - The type field is set generically (could be refined in post-processing)
 """
 
 import re
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any, Set
 
 def sanitize_name(name: str) -> str:
     """
@@ -67,287 +70,300 @@ def sanitize_name(name: str) -> str:
 
 
 
-class ServiceConverter:
+class ServiceGroupConverter:
     """
-    Converter class for transforming FortiGate service objects to FTD port objects.
+    Converter class for transforming FortiGate service groups to FTD port groups.
     
     This class is responsible for:
-    1. Reading the 'firewall_service_custom' section from FortiGate YAML
-    2. Identifying TCP and UDP port ranges
-    3. Splitting services with both TCP and UDP into separate objects
-    4. Splitting multiple ports/ranges into separate objects
-    5. Formatting ports for FTD API compatibility
-    6. Handling special protocols (IP, ICMP, etc.)
+    1. Reading the 'firewall_service_group' section from FortiGate YAML
+    2. Extracting group names and their member services
+    3. FLATTENING nested groups (FTD doesn't allow groups inside groups)
+    4. Converting to FTD's portobjectgroup format
+    5. Handling edge cases (empty groups, single vs multiple members)
+    6. Expanding services that were split into multiple FTD objects
     """
     
-    def __init__(self, fortigate_config: Dict[str, Any]):
+    def __init__(self, fortigate_config: Dict[str, Any], 
+                 split_services: Set[str] = None, # pyright: ignore[reportArgumentType]
+                 service_name_mapping: Dict[str, List[str]] = None): # pyright: ignore[reportArgumentType]
         """
         Initialize the converter with FortiGate configuration data.
         
         Args:
             fortigate_config: Dictionary containing the complete parsed FortiGate YAML
-                             Expected to have a 'firewall_service_custom' key
+                             Expected to have a 'firewall_service_group' key
+            split_services: (DEPRECATED) Set of service names that were split into TCP and UDP
+            service_name_mapping: Dict mapping FortiGate service names to list of FTD object names
+                                 Example: {"LR_CLUST": ["LR_CLUST_TCP_1", "LR_CLUST_TCP_2", "LR_CLUST_UDP_3"]}
         """
         # Store the entire FortiGate configuration
         self.fg_config = fortigate_config
         
-        # This will store the converted FTD port objects
-        # Both TCP and UDP objects will be stored here
-        self.ftd_port_objects = []
+        # DEPRECATED: Old way of tracking split services (kept for backward compatibility)
+        self.split_services = split_services or set()
         
-        # Track statistics for reporting
-        self.tcp_count = 0
-        self.udp_count = 0
-        self.split_count = 0  # Services that were split into TCP and UDP
-        self.multi_port_split_count = 0  # Services split due to multiple ports
-        self.skipped_count = 0  # Services that couldn't be converted
+        # NEW: Mapping of FortiGate service name -> list of FTD object names
+        # This handles services split into multiple ports AND TCP/UDP splits
+        self.service_name_mapping = service_name_mapping or {}
         
-        # Mapping of FortiGate service name -> list of FTD object names created
-        # Used by ServiceGroupConverter to expand group members correctly
-        self.service_name_mapping = {}
+        # This will store the converted FTD port groups
+        self.ftd_port_groups = []
+        
+        # Build a lookup of group name -> member list for flattening nested groups
+        self.group_members = {}
+        self._build_group_lookup()
     
-    def _parse_port_list(self, port_value: Any) -> List[str]:
+    def _build_group_lookup(self):
         """
-        Parse FortiGate port value into a list of individual ports/ranges.
+        Build a lookup dictionary of group names to their members.
+        This is used to flatten nested groups.
+        """
+        service_groups = self.fg_config.get('firewall_service_group', [])
         
-        FortiGate can specify ports as:
-        - Single int: 80
-        - Single string: "80" or "80-443"
-        - Colon-separated string: "80:443:8080" or "80-90:443-445"
-        - List: [80, 443, 8080] or ["80-90", "443-445"]
-        - List of mixed: [8300-8301, 8500-8501, 8086]
+        for group_dict in service_groups:
+            group_name = list(group_dict.keys())[0]
+            properties = group_dict[group_name]
+            
+            # Get members and normalize to list
+            members_raw = properties.get('member', [])
+            if isinstance(members_raw, str):
+                members_list = [members_raw]
+            elif isinstance(members_raw, list):
+                members_list = members_raw
+            else:
+                members_list = []
+            
+            # Store with sanitized name
+            self.group_members[sanitize_name(group_name)] = [sanitize_name(m) for m in members_list]
+    
+    def _is_group(self, name: str) -> bool:
+        """
+        Check if a name refers to a group (not an individual service object).
         
         Args:
-            port_value: The port value from FortiGate config
+            name: The sanitized object/group name to check
             
         Returns:
-            List of individual port strings (each suitable for one FTD object)
+            True if the name is a group, False if it's an individual object
         """
-        if port_value is None:
-            return []
+        return name in self.group_members
+    
+    def _flatten_members(self, members: List[str], visited: set = None) -> List[str]: # pyright: ignore[reportArgumentType]
+        """
+        Recursively flatten a list of members, expanding any nested groups.
         
-        ports = []
+        Args:
+            members: List of member names (may include group names)
+            visited: Set of already-visited group names (prevents infinite loops)
+            
+        Returns:
+            List of individual object names (no groups)
+        """
+        if visited is None:
+            visited = set()
         
-        # Case 1: It's a list
-        if isinstance(port_value, list):
-            for item in port_value:
-                # Each item could be an int, a string with a single port/range,
-                # or a string with colon-separated ports
-                item_str = str(item)
-                if ':' in item_str:
-                    # Split colon-separated values
-                    ports.extend(item_str.split(':'))
-                else:
-                    ports.append(item_str)
+        flattened = []
         
-        # Case 2: It's a string (possibly colon-separated)
-        elif isinstance(port_value, str):
-            if ':' in port_value:
-                ports = port_value.split(':')
+        for member in members:
+            if self._is_group(member):
+                # This member is a group - expand it
+                if member in visited:
+                    # Circular reference - skip to prevent infinite loop
+                    print(f"    Warning: Circular reference detected for group '{member}', skipping")
+                    continue
+                
+                # Mark as visited
+                visited.add(member)
+                
+                # Get the group's members and recursively flatten
+                nested_members = self.group_members.get(member, [])
+                expanded = self._flatten_members(nested_members, visited)
+                
+                print(f"    Flattening nested group '{member}' -> {len(expanded)} objects")
+                flattened.extend(expanded)
             else:
-                ports = [port_value]
+                # This is an individual object - add it
+                flattened.append(member)
         
-        # Case 3: It's a single integer
-        elif isinstance(port_value, int):
-            ports = [str(port_value)]
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_flattened = []
+        for item in flattened:
+            if item not in seen:
+                seen.add(item)
+                unique_flattened.append(item)
         
-        # Case 4: Something else - convert to string
-        else:
-            ports = [str(port_value)]
-        
-        # Clean up each port (strip whitespace)
-        ports = [p.strip() for p in ports if p.strip()]
-        
-        return ports
+        return unique_flattened
     
     def convert(self) -> List[Dict]:
         """
-        Main conversion method - converts all FortiGate services to FTD port objects.
+        Main conversion method - converts all FortiGate service groups to FTD format.
         
         CONVERSION PROCESS:
-        1. Extract the 'firewall_service_custom' list from FortiGate config
-        2. Loop through each service entry
-        3. Extract the service name and properties
-        4. Parse TCP and UDP port lists
-        5. Create separate FTD port objects for EACH port/range
-        6. Handle special protocols (IP, ICMP) - skip them
-        7. Return the complete list of converted port objects
+        1. Extract the 'firewall_service_group' list from FortiGate config
+        2. Loop through each group entry
+        3. Extract the group name (the dictionary key)
+        4. Extract the group properties (uuid, member, color, etc.)
+        5. Normalize the 'member' field to always be a list
+        6. Expand members that were split (add both _TCP and _UDP versions)
+        7. Create FTD portobjectgroup structure
+        8. Return the complete list of converted groups
         
         Returns:
-            List of dictionaries, each representing an FTD port object
+            List of dictionaries, each representing an FTD port object group
         """
         # ====================================================================
-        # STEP 1: Extract service objects from FortiGate configuration
+        # STEP 1: Extract service groups from FortiGate configuration
         # ====================================================================
-        services = self.fg_config.get('firewall_service_custom', [])
+        service_groups = self.fg_config.get('firewall_service_group', [])
         
-        if not services:
-            print("Warning: No service objects found in FortiGate configuration")
-            print("  Expected key: 'firewall_service_custom'")
+        if not service_groups:
+            print("Warning: No service groups found in FortiGate configuration")
+            print("  Expected key: 'firewall_service_group'")
             return []
         
-        # This list will accumulate all converted port objects
-        port_objects = []
+        # This list will accumulate all converted groups
+        port_groups = []
         
         # ====================================================================
-        # STEP 2: Process each FortiGate service object
+        # STEP 2: Process each FortiGate service group
         # ====================================================================
-        for service_dict in services:
+        for group_dict in service_groups:
             # ================================================================
-            # STEP 2A: Extract the service name and properties
+            # STEP 2A: Extract the group name
             # ================================================================
-            service_name = list(service_dict.keys())[0]
-            properties = service_dict[service_name]
-            sanitized_name = sanitize_name(service_name)
-            
-            # ================================================================
-            # STEP 2B: Check the protocol type
-            # ================================================================
-            protocol = properties.get('protocol', '').upper()
-            
-            # Skip non-TCP/UDP protocols (IP, ICMP, etc.)
-            if protocol in ['IP', 'ICMP', 'ICMP6']:
-                print(f"  Skipped: {service_name} (Protocol: {protocol} - not a port-based service)")
-                self.skipped_count += 1
-                continue
+            group_name = list(group_dict.keys())[0]
+            sanitized_group_name = sanitize_name(group_name)
             
             # ================================================================
-            # STEP 2C: Parse TCP and UDP port lists
+            # STEP 2B: Extract the group properties
             # ================================================================
-            tcp_ports = self._parse_port_list(properties.get('tcp-portrange', None))
-            udp_ports = self._parse_port_list(properties.get('udp-portrange', None))
-            
-            # ================================================================
-            # STEP 2D: Create FTD port objects
-            # ================================================================
-            has_tcp = len(tcp_ports) > 0
-            has_udp = len(udp_ports) > 0
-            
-            if not has_tcp and not has_udp:
-                print(f"  Skipped: {service_name} (No TCP or UDP ports defined)")
-                self.skipped_count += 1
-                continue
-            
-            # Track if this service was split
-            total_objects = len(tcp_ports) + len(udp_ports)
-            needs_numbering = total_objects > 1
-            
-            if has_tcp and has_udp:
-                self.split_count += 1
-            
-            if total_objects > 1:
-                self.multi_port_split_count += 1
-            
-            # Counter for object numbering
-            obj_counter = 1
-            
-            # Track FTD object names for this service
-            ftd_object_names = []
-            
-            # Create TCP objects
-            for port in tcp_ports:
-                # Determine the object name
-                if needs_numbering:
-                    obj_name = f"{sanitized_name}_TCP_{obj_counter}"
-                elif has_udp:
-                    # Has both TCP and UDP but only one of each
-                    obj_name = f"{sanitized_name}_TCP"
-                else:
-                    # Only TCP, single port
-                    obj_name = sanitized_name
-                
-                port_obj = {
-                    "name": obj_name,
-                    "isSystemDefined": False,
-                    "port": str(port),
-                    "type": "tcpportobject"
-                }
-                port_objects.append(port_obj)
-                ftd_object_names.append(obj_name)
-                self.tcp_count += 1
-                obj_counter += 1
-            
-            # Create UDP objects
-            for port in udp_ports:
-                # Determine the object name
-                if needs_numbering:
-                    obj_name = f"{sanitized_name}_UDP_{obj_counter}"
-                elif has_tcp:
-                    # Has both TCP and UDP but only one of each
-                    obj_name = f"{sanitized_name}_UDP"
-                else:
-                    # Only UDP, single port
-                    obj_name = sanitized_name
-                
-                port_obj = {
-                    "name": obj_name,
-                    "isSystemDefined": False,
-                    "port": str(port),
-                    "type": "udpportobject"
-                }
-                port_objects.append(port_obj)
-                ftd_object_names.append(obj_name)
-                self.udp_count += 1
-                obj_counter += 1
-            
-            # Store the mapping of FortiGate name -> FTD names
-            self.service_name_mapping[sanitized_name] = ftd_object_names
+            properties = group_dict[group_name]
             
             # ================================================================
-            # STEP 2E: Print conversion details
+            # STEP 2C: Extract and normalize the member list
             # ================================================================
-            if total_objects == 1:
-                proto = "TCP" if has_tcp else "UDP"
-                port = tcp_ports[0] if has_tcp else udp_ports[0]
-                if service_name != sanitized_name:
-                    print(f"  Converted: {service_name} -> {sanitized_name} [{proto} port {port}]")
-                else:
-                    print(f"  Converted: {sanitized_name} [{proto} port {port}]")
+            members_raw = properties.get('member', [])
+            
+            # Normalize to list format
+            if isinstance(members_raw, str):
+                members_list = [sanitize_name(members_raw)]
+            elif isinstance(members_raw, list):
+                members_list = [sanitize_name(m) for m in members_raw]
             else:
-                print(f"  Converted: {service_name} -> {total_objects} objects:", end="")
-                if has_tcp:
-                    print(f" {len(tcp_ports)} TCP", end="")
-                if has_udp:
-                    print(f" {len(udp_ports)} UDP", end="")
+                print(f"  Warning: Group '{group_name}' has unexpected member format")
+                members_list = []
+            
+            # ================================================================
+            # STEP 2D: FLATTEN nested groups
+            # ================================================================
+            # FTD does NOT allow groups inside groups, so we need to expand
+            # any nested groups into their individual objects
+            flattened_members = self._flatten_members(members_list)
+            
+            # ================================================================
+            # STEP 2E: Expand members that were split into multiple FTD objects
+            # ================================================================
+            expanded_members = []
+            
+            for member_name in flattened_members:
+                # Check if this service was split into multiple FTD objects
+                if member_name in self.service_name_mapping:
+                    # Use the mapping to get all FTD object names
+                    ftd_names = self.service_name_mapping[member_name]
+                    expanded_members.extend(ftd_names)
+                    if len(ftd_names) > 1:
+                        print(f"    Expanded: {member_name} -> {len(ftd_names)} objects")
+                elif member_name in self.split_services:
+                    # DEPRECATED: Old way - just add _TCP and _UDP suffixes
+                    expanded_members.append(f"{member_name}_TCP")
+                    expanded_members.append(f"{member_name}_UDP")
+                    print(f"    Expanded (legacy): {member_name} -> {member_name}_TCP, {member_name}_UDP")
+                else:
+                    # This service was not split, use as-is
+                    expanded_members.append(member_name)
+            
+            # ================================================================
+            # STEP 2F: Convert members to FTD object format
+            # ================================================================
+            ftd_members = []
+            for member_name in expanded_members:
+                # Determine type based on naming convention
+                # Check for _TCP or _UDP anywhere in the name (handles _TCP_1, _UDP_2, etc.)
+                if '_TCP' in member_name:
+                    member_type = "tcpportobject"
+                elif '_UDP' in member_name:
+                    member_type = "udpportobject"
+                else:
+                    # Default to TCP if we can't determine
+                    member_type = "tcpportobject"
+                
+                member_obj = {
+                    "name": member_name,
+                    "type": member_type
+                }
+                ftd_members.append(member_obj)
+            
+            # ================================================================
+            # STEP 2G: Create the FTD port group structure
+            # ================================================================
+            ftd_group = {
+                "name": sanitized_group_name,
+                "isSystemDefined": False,
+                "objects": ftd_members,
+                "type": "portobjectgroup"
+            }
+            
+            # Add the converted group to our result list
+            port_groups.append(ftd_group)
+            
+            # ================================================================
+            # STEP 2H: Print conversion details for user feedback
+            # ================================================================
+            original_count = len(members_list)
+            final_count = len(ftd_members)
+            
+            if group_name != sanitized_group_name:
+                print(f"  Converted: {group_name} -> {sanitized_group_name} ({final_count} members)", end="")
+            else:
+                print(f"  Converted: {sanitized_group_name} ({final_count} members)", end="")
+            
+            if final_count != original_count:
+                print(f" [flattened/expanded from {original_count} entries]")
+            else:
                 print()
-                # Print details for each object
-                for port_obj in port_objects[-total_objects:]:
-                    print(f"    -> {port_obj['name']}: {port_obj['port']}")
         
         # ====================================================================
         # STEP 3: Store results and return
         # ====================================================================
-        self.ftd_port_objects = port_objects
-        return port_objects
+        self.ftd_port_groups = port_groups
+        return port_groups
     
-    def get_statistics(self) -> Dict[str, int]:
+    def set_split_services(self, split_services: Set[str] = None,  # pyright: ignore[reportArgumentType]
+                           service_name_mapping: Dict[str, List[str]] = None): # pyright: ignore[reportArgumentType]
         """
-        Get conversion statistics for reporting.
+        Update the service expansion information.
+        
+        This should be called by the main script after converting service objects,
+        so the group converter knows which members need to be expanded.
+        
+        Args:
+            split_services: (DEPRECATED) Set of service names that have both TCP and UDP versions
+            service_name_mapping: Dict mapping FortiGate service names to list of FTD object names
+        """
+        if split_services is not None:
+            self.split_services = split_services
+        if service_name_mapping is not None:
+            self.service_name_mapping = service_name_mapping
+    
+    def get_group_count(self) -> int:
+        """
+        Get the number of service groups that were converted.
         
         Returns:
-            Dictionary with counts of TCP, UDP, split, and skipped services
+            Integer count of converted groups
         """
-        return {
-            "total_objects": len(self.ftd_port_objects),
-            "tcp_objects": self.tcp_count,
-            "udp_objects": self.udp_count,
-            "split_services": self.split_count,  # Services with both TCP and UDP
-            "multi_port_services": self.multi_port_split_count,  # Services with multiple ports
-            "skipped_services": self.skipped_count
-        }
-    
-    def get_service_name_mapping(self) -> Dict[str, List[str]]:
-        """
-        Get a mapping of original FortiGate service names to FTD object names.
-        
-        This is used by the ServiceGroupConverter to expand group members
-        to the correct FTD object names.
-        
-        Returns:
-            Dict mapping FortiGate service name -> list of FTD object names
-            Example: {"LR_CLUST": ["LR_CLUST_TCP_1", "LR_CLUST_TCP_2", "LR_CLUST_UDP_3"]}
-        """
-        return self.service_name_mapping
+        return len(self.ftd_port_groups)
 
 
 # =============================================================================
@@ -360,60 +376,41 @@ if __name__ == '__main__':
     It's useful for testing the converter without running the main script.
     
     To test this module standalone:
-        python service_converter.py
+        python service_group_converter.py
     """
     
     # Sample FortiGate configuration for testing
-    # Including the LR_CLUST example with multiple ports
     test_config = {
-        'firewall_service_custom': [
+        'firewall_service_group': [
             {
-                'ALL': {
-                    'uuid': '11111111-2222-3333-8888-000000000014',
-                    'category': 'General',
-                    'protocol': 'IP',
-                    'color': 1
-                }
-            },
-            {
-                'HTTP': {
+                'Email Access': {
                     'uuid': '11111111-2222-3333-8888-000000000013',
-                    'category': 'Web Access',
-                    'color': 13,
-                    'tcp-portrange': 80
+                    'member': ["DNS", "IMAP", "IMAPS", "POP3", "POP3S", "SMTP"]
                 }
             },
             {
-                'DNS': {
+                'Web Access': {
                     'uuid': '11111111-2222-3333-8888-000000000013',
-                    'category': 'Network Services',
-                    'color': 13,
-                    'tcp-portrange': 53,
-                    'udp-portrange': 53
+                    'member': ["DNS", "HTTP", "HTTPS"]
                 }
             },
             {
-                'LR_CLUST': {
-                    'uuid': '11111111-2222-3333-8888-000000000015',
-                    'color': 1,
-                    'tcp-portrange': ['8300-8301', '8500-8501', '13100-13202', '8086', '8110-8112', '14502-14503', '9200-9400'],
-                    'udp-portrange': '8300-8301'
-                }
-            },
-            {
-                'Multi_Port_Service': {
-                    'uuid': '11111111-2222-3333-8888-000000000016',
-                    'tcp-portrange': [80, 443, 8080]
+                'Windows AD': {
+                    'uuid': '11111111-2222-3333-8888-000000000013',
+                    'member': ["DNS", "Kerberos", "SAMBA", "SMB"]
                 }
             }
         ]
     }
     
+    # Simulate that DNS and HTTPS were split into TCP and UDP
+    split_services = {"DNS", "HTTPS"}
+    
     # Create converter instance
-    converter = ServiceConverter(test_config)
+    converter = ServiceGroupConverter(test_config, split_services)
     
     # Run conversion
-    print("Testing Service Converter with Multiple Ports...")
+    print("Testing Service Group Converter...")
     print("="*60)
     result = converter.convert()
     
@@ -422,10 +419,5 @@ if __name__ == '__main__':
     print("="*60)
     import json
     print(json.dumps(result, indent=2))
-    
-    # Display statistics
-    print("\nStatistics:")
-    print("="*60)
-    stats = converter.get_statistics()
-    for key, value in stats.items():
-        print(f"  {key}: {value}")
+    print("\n" + "="*60)
+    print(f"Total groups converted: {len(result)}")
