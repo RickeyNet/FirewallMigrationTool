@@ -56,8 +56,10 @@ pip install pyyaml requests urllib3
 
 ### Download required libraries from internet connected device:
 
-```bash
+```bash For Windows PowerShell
 pip install pyyaml requests urllib3
+py -3.9 -m pip install pyyaml requests urllib3
+
 ```
 
 ### Test that Python can find the libraries:
@@ -75,6 +77,7 @@ cd ftd_migration_packages
 
 # Download packages and their dependencies
 pip download pyyaml requests urllib3
+py -3.9 -m pip download pyyaml requests urllib3
 ```
 
 This will download files like:
@@ -93,12 +96,18 @@ This will download files like:
 
 3. Check if Python paths are added:
 ```bash
+-CMD Prompt
 echo %path%
+
+-PowerShell
+$Env:Path -split ";"
+
+
 ```
 
 4. Or manually add to PATH via Environment Variables:
-   - `C:\Program Files\Python3xx`
-   - `C:\Program Files\Python3xx\Scripts`
+   - `C:\Users\<name>\AppData\Local\Programs\Python\Python39\`
+   - `C:\Users\<name>\AppData\Local\Programs\Python\Python39\Scripts`
    - (May require logout/login or reboot)
 
 5. Test Python installation:
