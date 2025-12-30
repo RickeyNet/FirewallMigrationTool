@@ -381,8 +381,10 @@ Examples:
     print(f"  - Services split into TCP+UDP: {service_stats['split_services']}")
     if service_stats.get('multi_port_services', 0) > 0:
         print(f"  - Services split due to multiple ports: {service_stats['multi_port_services']}")
+    if service_stats.get('icmp_skipped', 0) > 0:
+        print(f"  - Skipped (ICMP/non-port protocols): {service_stats['icmp_skipped']}")
     if service_stats['skipped_services'] > 0:
-        print(f"  - Skipped (non-port protocols): {service_stats['skipped_services']}")
+        print(f"  - Skipped (no ports defined): {service_stats['skipped_services']}")
     
     # ========================================================================
     # STEP 8: Get service name mapping for group processing
@@ -400,6 +402,11 @@ Examples:
     if split_services:
         print(f"\n  Services that were split: {', '.join(sorted(split_services))}")
     
+    # Get the set of skipped services (ICMP, etc.) to filter from groups
+    skipped_services = service_converter.get_skipped_services()
+    if skipped_services:
+        print(f"  Services skipped (will be filtered from groups): {', '.join(sorted(skipped_services))}")
+    
     # ========================================================================
     # STEP 9: Convert service port groups
     # ========================================================================
@@ -410,7 +417,8 @@ Examples:
     # Update the service group converter with the service name mapping
     service_group_converter.set_split_services(
         split_services=split_services,
-        service_name_mapping=service_name_mapping
+        service_name_mapping=service_name_mapping,
+        skipped_services=skipped_services
     )
     
     # Convert FortiGate service groups to FTD port groups

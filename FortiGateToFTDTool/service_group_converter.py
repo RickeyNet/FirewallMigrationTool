@@ -85,7 +85,8 @@ class ServiceGroupConverter:
     
     def __init__(self, fortigate_config: Dict[str, Any], 
                  split_services: Set[str] = None, # pyright: ignore[reportArgumentType]
-                 service_name_mapping: Dict[str, List[str]] = None): # pyright: ignore[reportArgumentType]
+                 service_name_mapping: Dict[str, List[str]] = None, # pyright: ignore[reportArgumentType]
+                 skipped_services: Set[str] = None): # pyright: ignore[reportArgumentType]
         """
         Initialize the converter with FortiGate configuration data.
         
@@ -95,6 +96,8 @@ class ServiceGroupConverter:
             split_services: (DEPRECATED) Set of service names that were split into TCP and UDP
             service_name_mapping: Dict mapping FortiGate service names to list of FTD object names
                                  Example: {"LR_CLUST": ["LR_CLUST_TCP_1", "LR_CLUST_TCP_2", "LR_CLUST_UDP_3"]}
+            skipped_services: Set of service names that were skipped (ICMP, etc.) and should be
+                            filtered out of groups
         """
         # Store the entire FortiGate configuration
         self.fg_config = fortigate_config
@@ -106,6 +109,9 @@ class ServiceGroupConverter:
         # This handles services split into multiple ports AND TCP/UDP splits
         self.service_name_mapping = service_name_mapping or {}
         
+        # Set of services that were skipped (ICMP, etc.) - filter these from groups
+        self.skipped_services = skipped_services or set()
+
         # This will store the converted FTD port groups
         self.ftd_port_groups = []
         
@@ -262,41 +268,59 @@ class ServiceGroupConverter:
             flattened_members = self._flatten_members(members_list)
             
             # ================================================================
-            # STEP 2E: Expand members that were split into multiple FTD objects
+            # STEP 2E: Filter out skipped services (ICMP, etc.)
             # ================================================================
+            filtered_members = []
+            for member_name in flattened_members:
+                if member_name in self.skipped_services:
+                    print(f"    Filtered out: {member_name} (ICMP/non-port service)")
+                else:
+                    filtered_members.append(member_name)
+
+            # ================================================================
+            # STEP 2F: Expand members that were split into multiple FTD objects
+            # ================================================================
+            # expanded_members now contains tuples of (name, type)
             expanded_members = []
             
-            for member_name in flattened_members:
+            for member_name in filtered_members:
                 # Check if this service was split into multiple FTD objects
                 if member_name in self.service_name_mapping:
-                    # Use the mapping to get all FTD object names
-                    ftd_names = self.service_name_mapping[member_name]
-                    expanded_members.extend(ftd_names)
-                    if len(ftd_names) > 1:
-                        print(f"    Expanded: {member_name} -> {len(ftd_names)} objects")
+                    # Use the mapping to get all FTD objects (list of (name, type) tuples)
+                    ftd_objects = self.service_name_mapping[member_name]
+                    expanded_members.extend(ftd_objects)
+                    if len(ftd_objects) > 1:
+                        print(f"    Expanded: {member_name} -> {len(ftd_objects)} objects")
                 elif member_name in self.split_services:
                     # DEPRECATED: Old way - just add _TCP and _UDP suffixes
-                    expanded_members.append(f"{member_name}_TCP")
-                    expanded_members.append(f"{member_name}_UDP")
+                    expanded_members.append((f"{member_name}_TCP", "tcpportobject"))
+                    expanded_members.append((f"{member_name}_UDP", "udpportobject"))
                     print(f"    Expanded (legacy): {member_name} -> {member_name}_TCP, {member_name}_UDP")
                 else:
-                    # This service was not split, use as-is
-                    expanded_members.append(member_name)
+                    # This service was not in our mapping - might be a built-in FTD service
+                    # Try to determine type from name, default to TCP
+                    if '_UDP' in member_name:
+                        expanded_members.append((member_name, "udpportobject"))
+                    else:
+                        expanded_members.append((member_name, "tcpportobject"))
             
             # ================================================================
-            # STEP 2F: Convert members to FTD object format
+            # STEP 2G: Convert members to FTD object format
             # ================================================================
             ftd_members = []
-            for member_name in expanded_members:
-                # Determine type based on naming convention
-                # Check for _TCP or _UDP anywhere in the name (handles _TCP_1, _UDP_2, etc.)
-                if '_TCP' in member_name:
-                    member_type = "tcpportobject"
-                elif '_UDP' in member_name:
-                    member_type = "udpportobject"
+            for member_info in expanded_members:
+                # Handle both tuple format (name, type) and legacy string format
+                if isinstance(member_info, tuple):
+                    member_name, member_type = member_info
                 else:
-                    # Default to TCP if we can't determine
-                    member_type = "tcpportobject"
+                    # Legacy fallback - shouldn't happen but just in case
+                    member_name = member_info
+                    if '_TCP' in member_name:
+                        member_type = "tcpportobject"
+                    elif '_UDP' in member_name:
+                        member_type = "udpportobject"
+                    else:
+                        member_type = "tcpportobject"
                 
                 member_obj = {
                     "name": member_name,
@@ -305,7 +329,7 @@ class ServiceGroupConverter:
                 ftd_members.append(member_obj)
             
             # ================================================================
-            # STEP 2G: Create the FTD port group structure
+            # STEP 2H: Create the FTD port group structure
             # ================================================================
             ftd_group = {
                 "name": sanitized_group_name,
@@ -318,7 +342,7 @@ class ServiceGroupConverter:
             port_groups.append(ftd_group)
             
             # ================================================================
-            # STEP 2H: Print conversion details for user feedback
+            # STEP 2I: Print conversion details for user feedback
             # ================================================================
             original_count = len(members_list)
             final_count = len(ftd_members)
@@ -340,7 +364,9 @@ class ServiceGroupConverter:
         return port_groups
     
     def set_split_services(self, split_services: Set[str] = None,  # pyright: ignore[reportArgumentType]
-                           service_name_mapping: Dict[str, List[str]] = None): # pyright: ignore[reportArgumentType]
+                           service_name_mapping: Dict[str, List[str]] = None, # pyright: ignore[reportArgumentType]
+                           skipped_services: Set[str] = None): # pyright: ignore[reportArgumentType]
+
         """
         Update the service expansion information.
         
@@ -350,11 +376,14 @@ class ServiceGroupConverter:
         Args:
             split_services: (DEPRECATED) Set of service names that have both TCP and UDP versions
             service_name_mapping: Dict mapping FortiGate service names to list of FTD object names
+            skipped_services: Set of service names that were skipped (ICMP, etc.) 
         """
         if split_services is not None:
             self.split_services = split_services
         if service_name_mapping is not None:
             self.service_name_mapping = service_name_mapping
+        if skipped_services is not None:
+            self.skipped_services = skipped_services
     
     def get_group_count(self) -> int:
         """

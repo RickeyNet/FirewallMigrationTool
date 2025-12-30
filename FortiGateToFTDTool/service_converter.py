@@ -44,7 +44,7 @@ FTD JSON OUTPUT FORMAT:
 """
 
 import re
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any, Set
 
 def sanitize_name(name: str) -> str:
     """
@@ -101,10 +101,14 @@ class ServiceConverter:
         self.split_count = 0  # Services that were split into TCP and UDP
         self.multi_port_split_count = 0  # Services split due to multiple ports
         self.skipped_count = 0  # Services that couldn't be converted
-        
+        self.icmp_skipped_count = 0 # ICMP/non-port services skipped
+
         # Mapping of FortiGate service name -> list of FTD object names created
         # Used by ServiceGroupConverter to expand group members correctly
         self.service_name_mapping = {}
+        # Set of service names that were skipped (ICMP, etc.)
+        # Used by ServiceGroupConverter to filter these out of groups
+        self.skipped_services = set()
     
     def _parse_port_list(self, port_value: Any) -> List[str]:
         """
@@ -205,10 +209,28 @@ class ServiceConverter:
             # ================================================================
             protocol = properties.get('protocol', '').upper()
             
-            # Skip non-TCP/UDP protocols (IP, ICMP, etc.)
-            if protocol in ['IP', 'ICMP', 'ICMP6']:
+            # List of protocols to skip (not port-based services)
+            skip_protocols = ['IP', 'ICMP', 'ICMP6', 'ICMPV6', 'IPIP', 'GRE', 'ESP', 'AH']
+            
+            if protocol in skip_protocols:
                 print(f"  Skipped: {service_name} (Protocol: {protocol} - not a port-based service)")
-                self.skipped_count += 1
+                self.icmp_skipped_count += 1
+                self.skipped_services.add(sanitized_name)
+                continue
+            
+            # Also check for ICMP-specific fields (some FortiGate configs use these)
+            if 'icmptype' in properties or 'icmpcode' in properties:
+                print(f"  Skipped: {service_name} (ICMP service - not supported in FTD port objects)")
+                self.icmp_skipped_count += 1
+                self.skipped_services.add(sanitized_name)
+                continue
+            
+            # Check if protocol-number field indicates ICMP (protocol 1) or ICMPv6 (protocol 58)
+            protocol_number = properties.get('protocol-number', None)
+            if protocol_number in [1, 58, '1', '58']:
+                print(f"  Skipped: {service_name} (ICMP protocol number {protocol_number})")
+                self.icmp_skipped_count += 1
+                self.skipped_services.add(sanitized_name)
                 continue
             
             # ================================================================
@@ -226,6 +248,7 @@ class ServiceConverter:
             if not has_tcp and not has_udp:
                 print(f"  Skipped: {service_name} (No TCP or UDP ports defined)")
                 self.skipped_count += 1
+                self.skipped_services.add(sanitized_name)
                 continue
             
             # Track if this service was split
@@ -238,60 +261,65 @@ class ServiceConverter:
             if total_objects > 1:
                 self.multi_port_split_count += 1
             
-            # Counter for object numbering
-            obj_counter = 1
+            # Counter for object numbering - separate counters for TCP and UDP
+            tcp_counter = 1
+            udp_counter = 1
             
-            # Track FTD object names for this service
-            ftd_object_names = []
+            # Track FTD objects for this service: list of (name, type) tuples
+            ftd_object_info = []
             
             # Create TCP objects
             for port in tcp_ports:
                 # Determine the object name
-                if needs_numbering:
-                    obj_name = f"{sanitized_name}_TCP_{obj_counter}"
+                if len(tcp_ports) > 1:
+                    # Multiple TCP ports - number them
+                    obj_name = f"{sanitized_name}_TCP_{tcp_counter}"
                 elif has_udp:
-                    # Has both TCP and UDP but only one of each
+                    # Has both TCP and UDP but only one TCP
                     obj_name = f"{sanitized_name}_TCP"
                 else:
-                    # Only TCP, single port
+                    # Only TCP, single port - use base name
                     obj_name = sanitized_name
                 
+                obj_type = "tcpportobject"
                 port_obj = {
                     "name": obj_name,
                     "isSystemDefined": False,
                     "port": str(port),
-                    "type": "tcpportobject"
+                    "type": obj_type
                 }
                 port_objects.append(port_obj)
-                ftd_object_names.append(obj_name)
+                ftd_object_info.append((obj_name, obj_type))
                 self.tcp_count += 1
-                obj_counter += 1
+                tcp_counter += 1
             
             # Create UDP objects
             for port in udp_ports:
                 # Determine the object name
-                if needs_numbering:
-                    obj_name = f"{sanitized_name}_UDP_{obj_counter}"
+                if len(udp_ports) > 1:
+                    # Multiple UDP ports - number them
+                    obj_name = f"{sanitized_name}_UDP_{udp_counter}"
                 elif has_tcp:
-                    # Has both TCP and UDP but only one of each
+                    # Has both TCP and UDP but only one UDP
                     obj_name = f"{sanitized_name}_UDP"
                 else:
-                    # Only UDP, single port
+                    # Only UDP, single port - use base name
                     obj_name = sanitized_name
                 
+                obj_type = "udpportobject"
                 port_obj = {
                     "name": obj_name,
                     "isSystemDefined": False,
                     "port": str(port),
-                    "type": "udpportobject"
+                    "type": obj_type
                 }
                 port_objects.append(port_obj)
-                ftd_object_names.append(obj_name)
+                ftd_object_info.append((obj_name, obj_type))
                 self.udp_count += 1
-                obj_counter += 1
+                udp_counter += 1
             
             # Store the mapping of FortiGate name -> FTD names
-            self.service_name_mapping[sanitized_name] = ftd_object_names
+            self.service_name_mapping[sanitized_name] = ftd_object_info
             
             # ================================================================
             # STEP 2E: Print conversion details
@@ -333,7 +361,8 @@ class ServiceConverter:
             "udp_objects": self.udp_count,
             "split_services": self.split_count,  # Services with both TCP and UDP
             "multi_port_services": self.multi_port_split_count,  # Services with multiple ports
-            "skipped_services": self.skipped_count
+            "skipped_services": self.skipped_count,  # Services with no ports defined
+            "icmp_skipped": self.icmp_skipped_count  # ICMP and other non-port protocols
         }
     
     def get_service_name_mapping(self) -> Dict[str, List[str]]:
@@ -348,6 +377,18 @@ class ServiceConverter:
             Example: {"LR_CLUST": ["LR_CLUST_TCP_1", "LR_CLUST_TCP_2", "LR_CLUST_UDP_3"]}
         """
         return self.service_name_mapping
+    
+    def get_skipped_services(self) -> Set[str]:
+        """
+        Get the set of service names that were skipped (ICMP, etc.).
+        
+        This is used by the ServiceGroupConverter to filter these
+        services out of groups.
+        
+        Returns:
+            Set of sanitized service names that were skipped
+        """
+        return self.skipped_services
 
 
 # =============================================================================

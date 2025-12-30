@@ -1,3 +1,0 @@
-12/19/2025
-last thing that was being fixed is the format of service objects for things like ping and icmp mtu.
-these objects need to be created all seperately for the request and the reply. Will need to restructure the converter to encompass this distinction.
