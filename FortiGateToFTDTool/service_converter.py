@@ -61,8 +61,15 @@ def sanitize_name(name: str) -> str:
     """
     if name is None:
         return ""
-    # Replace any character that isn't alphanumeric or underscore with underscore
-    return re.sub(r'[^a-zA-Z0-9_]', '_', str(name))
+    # Convert to string in case it's not
+    name = str(name)
+    # Replace any non-alphanumeric character (except underscore) with underscore
+    sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', name)
+    # Remove consecutive underscores
+    sanitized = re.sub(r'_+', '_', sanitized)
+    # Remove leading/trailing underscores
+    sanitized = sanitized.strip('_')
+    return sanitized
 
 
 

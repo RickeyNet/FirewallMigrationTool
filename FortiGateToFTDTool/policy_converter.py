@@ -60,7 +60,8 @@ IMPORTANT NOTES:
 """
 
 import re
-from typing import Dict, List, Any, Set
+from typing import Dict, List, Any, Set, Tuple
+
 
 def sanitize_name(name: str) -> str:
     """
@@ -73,14 +74,17 @@ def sanitize_name(name: str) -> str:
         name: Original object name (may contain spaces, dashes, etc.)
         
     Returns:
-        Sanitized name with only alphanumeric characters and underscores
+        Sanitized name safe for FTD
     """
-    if name is None:
-        return ""
-    # Replace any character that isn't alphanumeric or underscore with underscore
-    return re.sub(r'[^a-zA-Z0-9_]', '_', str(name)).upper()
-
-
+    # Convert to string in case it's not
+    name = str(name)
+    # Replace any non-alphanumeric character (except underscore) with underscore
+    sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', name)
+    # Remove consecutive underscores
+    sanitized = re.sub(r'_+', '_', sanitized)
+    # Remove leading/trailing underscores
+    sanitized = sanitized.strip('_')
+    return sanitized
 
 
 class PolicyConverter:
@@ -97,21 +101,51 @@ class PolicyConverter:
     """
     
     def __init__(self, fortigate_config: Dict[str, Any], 
-                 split_services: Set[str] = None): # pyright: ignore[reportArgumentType]
+                 split_services: Set[str] = None, # pyright: ignore[reportArgumentType]
+                 service_name_mapping: Dict[str, List[Tuple[str, str]]] = None, # pyright: ignore[reportArgumentType]
+                 skipped_services: Set[str] = None, # pyright: ignore[reportArgumentType]
+                 address_name_mapping: Dict[str, List[str]] = None, # pyright: ignore[reportArgumentType]
+                 address_group_members: Dict[str, List[str]] = None, # pyright: ignore[reportArgumentType]
+                 address_groups: Set[str] = None, # pyright: ignore[reportArgumentType]
+                 service_groups: Set[str] = None): # pyright: ignore[reportArgumentType]
         """
         Initialize the converter with FortiGate configuration data.
         
         Args:
             fortigate_config: Dictionary containing the complete parsed FortiGate YAML
                              Expected to have a 'firewall_policy' key
-            split_services: Set of service names that were split into TCP and UDP
-                          (e.g., {"DNS", "HTTPS"} if these had both TCP and UDP)
+            split_services: (DEPRECATED) Set of service names that were split into TCP and UDP
+            service_name_mapping: Dict mapping FortiGate service names to list of (FTD name, type) tuples
+                                 Example: {"DNS": [("DNS_TCP", "tcpportobject"), ("DNS_UDP", "udpportobject")]}
+            skipped_services: Set of service names that were skipped (ICMP, etc.)
+            address_name_mapping: Dict mapping FortiGate address names to sanitized FTD names
+            address_group_members: Dict mapping group names to their flattened member lists
+            address_groups: Set of address group names (to set correct type in rules)
+            service_groups: Set of service group names (to set correct type in rules)
         """
         # Store the entire FortiGate configuration
         self.fg_config = fortigate_config
         
-        # Store the set of services that were split into TCP and UDP
+        # DEPRECATED: Old way of tracking split services
         self.split_services = split_services or set()
+        
+        # NEW: Mapping of FortiGate service name -> list of (FTD name, type) tuples
+        self.service_name_mapping = service_name_mapping or {}
+        
+        # Set of services that were skipped (ICMP, etc.)
+        self.skipped_services = skipped_services or set()
+        
+        # Mapping of FortiGate address names to sanitized FTD names
+        self.address_name_mapping = address_name_mapping or {}
+        
+        # Mapping of group names to their flattened member lists
+        self.address_group_members = address_group_members or {}
+        
+        # Set of address group names (sanitized)
+        self.address_groups = address_groups or set()
+        
+        # Set of service group names (sanitized)
+        self.service_groups = service_groups or set()
         
         # This will store the converted FTD access rules
         self.ftd_access_rules = []
@@ -168,7 +202,8 @@ class PolicyConverter:
             # ================================================================
             # STEP 2B: Extract basic policy information
             # ================================================================
-            policy_name = properties.get('name', f'Policy_{policy_id}')
+            policy_name_raw = properties.get('name', f'Policy_{policy_id}')
+            policy_name = sanitize_name(policy_name_raw)
             action = properties.get('action', 'deny')
             
             # ================================================================
@@ -217,11 +252,8 @@ class PolicyConverter:
             # ================================================================
             # STEP 2G: Create the FTD access rule structure
             # ================================================================
-            # Sanitize the policy name to replace spaces with underscores
-            sanitized_policy_name = sanitize_name(policy_name)
-            
             ftd_rule = {
-                "name": sanitized_policy_name,
+                "name": policy_name,
                 "ruleId": rule_id_counter,
                 "sourceZones": ftd_source_zones,
                 "destinationZones": ftd_dest_zones,
@@ -246,12 +278,8 @@ class PolicyConverter:
             src_count = len(ftd_source_networks)
             dst_count = len(ftd_dest_networks)
             svc_count = len(ftd_dest_ports)
-            if policy_name != sanitized_policy_name:
-                print(f"  Converted: [{policy_id}] {policy_name} -> {sanitized_policy_name} [{ftd_action}] "
-                      f"(Src:{src_count} Dst:{dst_count} Svc:{svc_count})")
-            else:
-                print(f"  Converted: [{policy_id}] {sanitized_policy_name} -> {ftd_action} "
-                      f"(Src:{src_count} Dst:{dst_count} Svc:{svc_count})")
+            print(f"  Converted: [{policy_id}] {policy_name} -> {ftd_action} "
+                  f"(Src:{src_count} Dst:{dst_count} Svc:{svc_count})")
         
         # ====================================================================
         # STEP 3: Store results and return
@@ -328,7 +356,7 @@ class PolicyConverter:
                 continue
             
             zone_obj = {
-                "name": sanitize_name(zone_name),
+                "name": zone_name,
                 "type": "securityzone"
             }
             zone_objects.append(zone_obj)
@@ -352,29 +380,51 @@ class PolicyConverter:
             if addr_name.lower() in ['all', 'any']:
                 continue
             
-            # Determine if this is likely a group or single object
-            # In a real implementation, you might look this up
-            # For now, we'll assume it could be either
-            network_obj = {
-                "name": sanitize_name(addr_name),
-                "type": "networkobject"  # Could also be "networkobjectgroup"
-            }
-            network_objects.append(network_obj)
+            # Sanitize the address name
+            sanitized_name = sanitize_name(addr_name)
+            
+            # Check if this is a flattened group - if so, expand to individual members
+            if sanitized_name in self.address_group_members:
+                # This was a group that got flattened - add all individual members
+                for member_name in self.address_group_members[sanitized_name]:
+                    network_obj = {
+                        "name": member_name,
+                        "type": "networkobject"
+                    }
+                    network_objects.append(network_obj)
+            else:
+                # Check if we have a mapping for this name
+                if sanitized_name in self.address_name_mapping:
+                    ftd_name = self.address_name_mapping[sanitized_name]
+                else:
+                    ftd_name = sanitized_name
+                
+                # Determine type - is this a group or individual object?
+                if sanitized_name in self.address_groups:
+                    obj_type = "networkobjectgroup"
+                else:
+                    obj_type = "networkobject"
+                
+                network_obj = {
+                    "name": ftd_name,
+                    "type": obj_type
+                }
+                network_objects.append(network_obj)
         
         return network_objects
     
-    def _expand_services(self, services: List[str]) -> List[str]:
+    def _expand_services(self, services: List[str]) -> List[Tuple[str, str]]:
         """
-        Expand services that were split into TCP and UDP versions.
+        Expand services using the service_name_mapping.
         
-        If a service in the list was split (has both TCP and UDP ports),
-        replace it with both the _TCP and _UDP versions.
+        Looks up each service in the mapping to get the actual FTD object names
+        and types. Filters out skipped services (ICMP, etc.).
         
         Args:
             services: List of FortiGate service names
             
         Returns:
-            List of expanded service names
+            List of (name, type) tuples for FTD port objects
         """
         expanded = []
         
@@ -384,56 +434,91 @@ class PolicyConverter:
                 continue
             
             # Sanitize the service name
-            sanitized_service = sanitize_name(service)
+            sanitized_name = sanitize_name(service)
             
-            if service in self.split_services:
-                # This service was split, add both versions with sanitized name
-                expanded.append(f"{sanitized_service}_TCP")
-                expanded.append(f"{sanitized_service}_UDP")
+            # Skip if this service was skipped (ICMP, etc.)
+            if sanitized_name in self.skipped_services:
+                print(f"    Filtered out service: {service} (ICMP/non-port service)")
+                continue
+            
+            # Check if this is a service GROUP
+            if sanitized_name in self.service_groups:
+                expanded.append((sanitized_name, "portobjectgroup"))
+            # Check if this service is in our mapping (individual service)
+            elif sanitized_name in self.service_name_mapping:
+                # Get all FTD objects for this service (list of (name, type) tuples)
+                ftd_objects = self.service_name_mapping[sanitized_name]
+                expanded.extend(ftd_objects)
+            elif service in self.split_services:
+                # DEPRECATED: Old way - just add _TCP and _UDP suffixes
+                expanded.append((f"{sanitized_name}_TCP", "tcpportobject"))
+                expanded.append((f"{sanitized_name}_UDP", "udpportobject"))
             else:
-                # Service was not split, use sanitized name
-                expanded.append(sanitized_service)
+                # Service not in mapping - use sanitized name, guess type from name
+                if '_UDP' in sanitized_name:
+                    expanded.append((sanitized_name, "udpportobject"))
+                else:
+                    expanded.append((sanitized_name, "tcpportobject"))
         
         return expanded
     
-    def _create_port_objects(self, service_names: List[str]) -> List[Dict]:
+    def _create_port_objects(self, service_info: List[Tuple[str, str]]) -> List[Dict]:
         """
-        Create FTD port object references from FortiGate service names.
+        Create FTD port object references from expanded service info.
         
         Args:
-            service_names: List of FortiGate service names (possibly expanded)
+            service_info: List of (name, type) tuples from _expand_services
             
         Returns:
             List of FTD port object reference dictionaries
         """
         port_objects = []
         
-        for service_name in service_names:
-            # Determine type based on naming convention
-            if service_name.endswith('_TCP'):
-                port_type = "tcpportobject"
-            elif service_name.endswith('_UDP'):
-                port_type = "udpportobject"
-            else:
-                # Unknown - could be either or a group, default to tcpportobject
-                port_type = "tcpportobject"
-            
+        for name, obj_type in service_info:
             port_obj = {
-                "name": service_name,
-                "type": port_type
+                "name": name,
+                "type": obj_type
             }
             port_objects.append(port_obj)
         
         return port_objects
     
-    def set_split_services(self, split_services: Set[str]):
+    def set_split_services(self, split_services: Set[str] = None, # pyright: ignore[reportArgumentType]
+                           service_name_mapping: Dict[str, List[Tuple[str, str]]] = None, # pyright: ignore[reportArgumentType]
+                           skipped_services: Set[str] = None, # pyright: ignore[reportArgumentType]
+                           address_name_mapping: Dict[str, str] = None, # pyright: ignore[reportArgumentType]
+                           address_group_members: Dict[str, List[str]] = None, # pyright: ignore[reportArgumentType]
+                           address_groups: Set[str] = None, # pyright: ignore[reportArgumentType]
+                           service_groups: Set[str] = None): # pyright: ignore[reportArgumentType]
         """
-        Update the set of services that were split into TCP and UDP.
+        Update the service and address mappings.
+        
+        This should be called by the main script after converting service and address objects,
+        so the policy converter knows how to expand references.
         
         Args:
-            split_services: Set of service names that have both TCP and UDP versions
+            split_services: (DEPRECATED) Set of service names that have both TCP and UDP versions
+            service_name_mapping: Dict mapping FortiGate service names to list of (FTD name, type) tuples
+            skipped_services: Set of service names that were skipped (ICMP, etc.)
+            address_name_mapping: Dict mapping FortiGate address names to sanitized FTD names
+            address_group_members: Dict mapping group names to their flattened member lists
+            address_groups: Set of address group names (to set correct type in rules)
+            service_groups: Set of service group names (to set correct type in rules)
         """
-        self.split_services = split_services
+        if split_services is not None:
+            self.split_services = split_services
+        if service_name_mapping is not None:
+            self.service_name_mapping = service_name_mapping
+        if skipped_services is not None:
+            self.skipped_services = skipped_services
+        if address_name_mapping is not None:
+            self.address_name_mapping = address_name_mapping
+        if address_group_members is not None:
+            self.address_group_members = address_group_members
+        if address_groups is not None:
+            self.address_groups = address_groups
+        if service_groups is not None:
+            self.service_groups = service_groups
     
     def get_statistics(self) -> Dict[str, int]:
         """

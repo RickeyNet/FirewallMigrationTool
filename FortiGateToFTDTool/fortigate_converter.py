@@ -361,6 +361,11 @@ Examples:
     network_groups = address_group_converter.convert()
     
     print(f"[OK] Converted {len(network_groups)} address groups")
+
+    # Build set of address group names for policy converter
+    address_groups = set()
+    for group in network_groups:
+        address_groups.add(group['name'])
     
     # ========================================================================
     # STEP 7: Convert service port objects
@@ -425,6 +430,11 @@ Examples:
     port_groups = service_group_converter.convert()
     
     print(f"[OK] Converted {len(port_groups)} port groups")
+
+    # Build set of service group names for policy converter
+    service_groups = set()
+    for group in port_groups:
+        service_groups.add(group['name'])
     
     # ========================================================================
     # STEP 10: Convert firewall policies to access rules
@@ -433,9 +443,14 @@ Examples:
     print("Converting Firewall Policies...")
     print("-"*60)
     
-    # Update the policy converter with the list of split services
-    # TODO: Policy converter may also need updating for multi-port services
-    policy_converter.set_split_services(split_services)
+    # Update the policy converter with service and address mappings
+    policy_converter.set_split_services(
+        split_services=split_services,
+        service_name_mapping=service_name_mapping, # pyright: ignore[reportArgumentType]
+        skipped_services=skipped_services,
+        address_groups=address_groups,
+        service_groups=service_groups
+    )
     
     # Convert FortiGate policies to FTD access rules
     access_rules = policy_converter.convert()
