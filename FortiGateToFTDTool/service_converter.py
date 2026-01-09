@@ -71,8 +71,45 @@ def sanitize_name(name: str) -> str:
     sanitized = sanitized.strip('_')
     return sanitized
 
+# FTD System-Defined Services - these names are reserved and cannot be used
+# If a FortiGate service has the same name, we'll add "_Custom" suffix
+FTD_BUILTIN_UDP_SERVICES = {
+    'DNS': '53',           # DNS over UDP
+    'NFSD_UDP': '2049',
+    'NTP_UDP': '123',
+    'RADIUS': '1645',
+    'RIP': '520',
+    'SIP': '5060',
+    'SNMP': '161',
+    'SYSLOG': '514',
+    'TFTP': '69',
+}
 
+FTD_BUILTIN_TCP_SERVICES = {
+    'AOL': '5190',
+    'Bittorrent': '6881-6889',
+    'DNS': '53',           # DNS over TCP
+    'FTP': '21',
+    'HTTP': '80',
+    'HTTPS': '443',
+    'IMAP': '143',
+    'LDAP': '389',
+    'NFSD_TCP': '2049',
+    'NTP_TCP': '123',
+    'POP_2': '109',
+    'POP_3': '110',
+    'SMTP': '25',
+    'SMTPS': '465',
+    'SSH': '22',
+    'TELNET': '23',
+}
 
+# Combined set of all built-in service names (sanitized)
+FTD_BUILTIN_SERVICES = set()
+for name in FTD_BUILTIN_UDP_SERVICES.keys():
+    FTD_BUILTIN_SERVICES.add(sanitize_name(name))
+for name in FTD_BUILTIN_TCP_SERVICES.keys():
+    FTD_BUILTIN_SERVICES.add(sanitize_name(name))
 
 class ServiceConverter:
     """
@@ -288,6 +325,12 @@ class ServiceConverter:
                     # Only TCP, single port - use base name
                     obj_name = sanitized_name
                 
+                # Check if this name conflicts with FTD built-in services
+                if obj_name in FTD_BUILTIN_SERVICES:
+                    original_name = obj_name
+                    obj_name = f"{obj_name}_Custom"
+                    print(f"    Renamed: {original_name} -> {obj_name} (conflicts with FTD built-in)")
+
                 obj_type = "tcpportobject"
                 port_obj = {
                     "name": obj_name,
@@ -313,6 +356,12 @@ class ServiceConverter:
                     # Only UDP, single port - use base name
                     obj_name = sanitized_name
                 
+                # Check if this name conflicts with FTD built-in services
+                if obj_name in FTD_BUILTIN_SERVICES:
+                    original_name = obj_name
+                    obj_name = f"{obj_name}_Custom"
+                    print(f"    Renamed: {original_name} -> {obj_name} (conflicts with FTD built-in)")
+
                 obj_type = "udpportobject"
                 port_obj = {
                     "name": obj_name,
