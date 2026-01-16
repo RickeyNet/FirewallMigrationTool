@@ -40,7 +40,7 @@ import sys
 import time
 import getpass
 import urllib3
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 # Disable SSL warnings for self-signed certificates
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -193,24 +193,42 @@ class FTDBulkDelete:
             print(f"  Error: {e}")
             return []
     
-    def delete_object(self, endpoint: str, object_id: str) -> bool:
-        """Delete a single object by ID."""
+    def delete_object(self, endpoint: str, object_id: str) -> Tuple[bool, str]:
+        """Delete a single object by ID.
+        
+        Returns:
+            Tuple of (success: bool, error_message: str)
+        """
         url = f"{self.base_url}{endpoint}/{object_id}"
         
         try:
             response = self.session.delete(url, timeout=30)
             
             if response.status_code in [200, 204]:
-                return True
+                return True, ""
             elif response.status_code == 404:
-                return True  # Already gone
+                return True, "already deleted"  # Already gone
+            elif response.status_code == 422:
+                # Unprocessable - get the actual error
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
+                    return False, error_msg
+                except:
+                    return False, f"HTTP 422: {response.text[:100]}"
+            elif response.status_code == 400:
+                # Bad request - often means object is in use
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
+                    return False, error_msg
+                except:
+                    return False, f"HTTP 400: {response.text[:100]}"
             else:
-                if self.debug:
-                    print(f" (HTTP {response.status_code})")
-                return False
+                return False, f"HTTP {response.status_code}"
                 
-        except requests.exceptions.RequestException:
-            return False
+        except requests.exceptions.RequestException as e:
+            return False, str(e)
     
     def delete_all_custom_objects(self, endpoint: str, object_type: str, dry_run: bool = False) -> bool:
         """
@@ -267,6 +285,7 @@ class FTDBulkDelete:
         
         success_count = 0
         fail_count = 0
+        failed_objects = []  # Track failed objects for retry info
         
         for i, obj in enumerate(custom_objects, 1):
             name = obj.get('name', 'UNNAMED')
@@ -283,14 +302,18 @@ class FTDBulkDelete:
             else:
                 print(f"  [{i}/{len(custom_objects)}] Deleting: {name}...", end=" ")
                 
-                success = self.delete_object(endpoint, obj_id)
+                success, error_msg = self.delete_object(endpoint, obj_id)
                 
                 if success:
-                    print("[OK]")
+                    if error_msg == "already deleted":
+                        print("[OK] (already deleted)")
+                    else:
+                        print("[OK]")
                     success_count += 1
                 else:
-                    print("[ERROR]")
+                    print(f"[ERROR] {error_msg}")
                     fail_count += 1
+                    failed_objects.append((name, error_msg))
                 
                 time.sleep(0.2)  # Rate limiting
         
@@ -300,6 +323,14 @@ class FTDBulkDelete:
         print(f"\n  Summary:")
         print(f"    Deleted: {success_count}")
         print(f"    Failed: {fail_count}")
+        
+        # Show failed objects summary if any
+        if failed_objects:
+            print(f"\n  Failed objects:")
+            for name, error in failed_objects[:10]:
+                print(f"    - {name}: {error}")
+            if len(failed_objects) > 10:
+                print(f"    ... and {len(failed_objects) - 10} more")
         
         return fail_count == 0
     
@@ -438,28 +469,198 @@ class FTDBulkDelete:
         return fail_count == 0
     
     def delete_all_subinterfaces(self, dry_run: bool = False) -> bool:
-        """Delete all subinterfaces."""
-        return self.delete_all_custom_objects(
-            "/devices/default/subinterfaces",
-            "Subinterfaces",
-            dry_run
-        )
+        """
+        Delete all subinterfaces.
+        
+        Subinterfaces must be deleted BEFORE their parent interfaces
+        (physical or etherchannel).
+        """
+        print(f"\n{'='*60}")
+        print("Processing Subinterfaces")
+        print(f"{'='*60}")
+        
+        # Get all subinterfaces
+        all_subinterfaces = self.get_all_objects("/devices/default/subinterfaces")
+        
+        if not all_subinterfaces:
+            print("  No subinterfaces found")
+            return True
+        
+        print(f"\n  Found {len(all_subinterfaces)} subinterfaces")
+        
+        # Show what will be deleted
+        print(f"\n  Subinterfaces to delete:")
+        for intf in all_subinterfaces[:10]:
+            name = intf.get('name', 'UNNAMED')
+            hardware = intf.get('hardwareName', 'Unknown')
+            vlan = intf.get('subIntfId', '?')
+            print(f"    - {name} ({hardware} VLAN {vlan})")
+        
+        if len(all_subinterfaces) > 10:
+            print(f"    ... and {len(all_subinterfaces) - 10} more")
+        
+        # Delete subinterfaces
+        print(f"\n  {'[DRY RUN] Would delete' if dry_run else 'Deleting'} {len(all_subinterfaces)} subinterfaces...")
+        
+        success_count = 0
+        fail_count = 0
+        
+        for i, intf in enumerate(all_subinterfaces, 1):
+            name = intf.get('name', 'UNNAMED')
+            obj_id = intf.get('id')
+            
+            if dry_run:
+                print(f"  [{i}/{len(all_subinterfaces)}] Would delete: {name}")
+                success_count += 1
+            else:
+                print(f"  [{i}/{len(all_subinterfaces)}] Deleting: {name}...", end=" ")
+                
+                success, error_msg = self.delete_object("/devices/default/subinterfaces", obj_id) # pyright: ignore[reportArgumentType]
+                
+                if success:
+                    print("[OK]")
+                    success_count += 1
+                else:
+                    print(f"[ERROR] {error_msg}")
+                    fail_count += 1
+                
+                time.sleep(0.2)
+        
+        print(f"\n  Summary: {success_count} deleted, {fail_count} failed")
+        return fail_count == 0
     
     def delete_all_etherchannels(self, dry_run: bool = False) -> bool:
-        """Delete all EtherChannel interfaces."""
-        return self.delete_all_custom_objects(
-            "/devices/default/etherchannelinterfaces",
-            "EtherChannels",
-            dry_run
-        )
+        """
+        Delete all EtherChannel interfaces.
+        
+        NOTE: Subinterfaces on etherchannels must be deleted first.
+        This method will attempt to remove member interfaces before deletion.
+        """
+        print(f"\n{'='*60}")
+        print("Processing EtherChannels")
+        print(f"{'='*60}")
+        
+        # Get all etherchannels
+        all_etherchannels = self.get_all_objects("/devices/default/etherchannelinterfaces")
+        
+        if not all_etherchannels:
+            print("  No etherchannels found")
+            return True
+        
+        print(f"\n  Found {len(all_etherchannels)} etherchannels")
+        
+        # Show what will be deleted
+        print(f"\n  EtherChannels to delete:")
+        for intf in all_etherchannels[:10]:
+            name = intf.get('name', 'UNNAMED')
+            hardware = intf.get('hardwareName', 'Unknown')
+            members = intf.get('selectedInterfaces', [])
+            member_count = len(members) if members else 0
+            print(f"    - {name} ({hardware}, {member_count} members)")
+        
+        if len(all_etherchannels) > 10:
+            print(f"    ... and {len(all_etherchannels) - 10} more")
+        
+        # Delete etherchannels
+        print(f"\n  {'[DRY RUN] Would delete' if dry_run else 'Deleting'} {len(all_etherchannels)} etherchannels...")
+        
+        success_count = 0
+        fail_count = 0
+        
+        for i, intf in enumerate(all_etherchannels, 1):
+            name = intf.get('name', 'UNNAMED')
+            obj_id = intf.get('id')
+            hardware = intf.get('hardwareName', 'Unknown')
+            
+            if dry_run:
+                print(f"  [{i}/{len(all_etherchannels)}] Would delete: {name} ({hardware})")
+                success_count += 1
+            else:
+                print(f"  [{i}/{len(all_etherchannels)}] Deleting: {name} ({hardware})...", end=" ")
+                
+                # Try to delete directly
+                success, error_msg = self.delete_object("/devices/default/etherchannelinterfaces", obj_id) # type: ignore
+                
+                if success:
+                    print("[OK]")
+                    success_count += 1
+                else:
+                    # If it failed, it might have subinterfaces - show the error
+                    print(f"[ERROR] {error_msg}")
+                    fail_count += 1
+                
+                time.sleep(0.3)
+        
+        print(f"\n  Summary: {success_count} deleted, {fail_count} failed")
+        
+        if fail_count > 0:
+            print("\n  TIP: If etherchannels failed to delete, try:")
+            print("    1. Delete subinterfaces first: --delete-subinterfaces")
+            print("    2. Then delete etherchannels: --delete-etherchannels")
+        
+        return fail_count == 0
     
     def delete_all_bridge_groups(self, dry_run: bool = False) -> bool:
-        """Delete all bridge group interfaces."""
-        return self.delete_all_custom_objects(
-            "/devices/default/bridgegroupinterfaces",
-            "Bridge Groups",
-            dry_run
-        )
+        """
+        Delete all bridge group interfaces.
+        
+        NOTE: Bridge groups may have member interfaces that need to be
+        removed first.
+        """
+        print(f"\n{'='*60}")
+        print("Processing Bridge Groups")
+        print(f"{'='*60}")
+        
+        # Get all bridge groups
+        all_bridge_groups = self.get_all_objects("/devices/default/bridgegroupinterfaces")
+        
+        if not all_bridge_groups:
+            print("  No bridge groups found")
+            return True
+        
+        print(f"\n  Found {len(all_bridge_groups)} bridge groups")
+        
+        # Show what will be deleted
+        print(f"\n  Bridge groups to delete:")
+        for intf in all_bridge_groups[:10]:
+            name = intf.get('name', 'UNNAMED')
+            bvi_id = intf.get('bridgeGroupId', '?')
+            members = intf.get('selectedInterfaces', [])
+            member_count = len(members) if members else 0
+            print(f"    - {name} (BVI{bvi_id}, {member_count} members)")
+        
+        if len(all_bridge_groups) > 10:
+            print(f"    ... and {len(all_bridge_groups) - 10} more")
+        
+        # Delete bridge groups
+        print(f"\n  {'[DRY RUN] Would delete' if dry_run else 'Deleting'} {len(all_bridge_groups)} bridge groups...")
+        
+        success_count = 0
+        fail_count = 0
+        
+        for i, intf in enumerate(all_bridge_groups, 1):
+            name = intf.get('name', 'UNNAMED')
+            obj_id = intf.get('id')
+            
+            if dry_run:
+                print(f"  [{i}/{len(all_bridge_groups)}] Would delete: {name}")
+                success_count += 1
+            else:
+                print(f"  [{i}/{len(all_bridge_groups)}] Deleting: {name}...", end=" ")
+                
+                success, error_msg = self.delete_object("/devices/default/bridgegroupinterfaces", obj_id) # pyright: ignore[reportArgumentType]
+                
+                if success:
+                    print("[OK]")
+                    success_count += 1
+                else:
+                    print(f"[ERROR] {error_msg}")
+                    fail_count += 1
+                
+                time.sleep(0.3)
+        
+        print(f"\n  Summary: {success_count} deleted, {fail_count} failed")
+        return fail_count == 0
     
     def deploy_changes(self) -> bool:
         """Deploy pending changes."""
