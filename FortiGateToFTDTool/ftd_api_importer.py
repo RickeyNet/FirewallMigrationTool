@@ -459,11 +459,9 @@ class FTDAPIClient:
         Physical interfaces already exist in FTD - we update them with
         name, description, IP address, etc.
         
-        IMPORTANT: This preserves existing hardware settings:
-        - speed (e.g., "AUTO", "DETECT_SFP", "TEN_GIGABIT")
-        - duplex (e.g., "FULL", "HALF", "AUTO")
-        - fecMode (e.g., "AUTO", "CL74", "CL91")
-        - autoNegotiation (True/False)
+        IMPORTANT: This method handles:
+        - Converting switchport mode to routed mode (required for L3 config)
+        - Preserving existing hardware settings (speed, duplex, FEC, auto-negotiation)
         
         Args:
             intf: Dictionary containing physical interface data
@@ -483,6 +481,31 @@ class FTDAPIClient:
         # Merge our updates with the existing interface
         intf_id = existing.get('id') # pyright: ignore[reportOptionalMemberAccess]
         intf_version = existing.get('version') # pyright: ignore[reportOptionalMemberAccess]
+        intf_type = existing.get('type', 'physicalinterface') # pyright: ignore[reportOptionalMemberAccess]
+        
+        # Check if interface is in switchport mode
+        current_mode = existing.get('mode', None) # pyright: ignore[reportOptionalMemberAccess]
+        is_switchport = current_mode == 'SWITCHPORT' or existing.get('switchPortMode') is not None # pyright: ignore[reportOptionalMemberAccess]
+        
+        # If interface is a switchport and we want to configure it as routed,
+        # we need to change it to routed mode first
+        if is_switchport:
+            print(f"\n      [INFO] {hardware_name} is in switchport mode, converting to routed mode...", end=" ")
+            
+            convert_success, convert_msg = self._convert_switchport_to_routed(existing) # pyright: ignore[reportArgumentType]
+            if not convert_success:
+                self.stats["physical_interfaces_failed"] += 1
+                return False, f"Failed to convert from switchport: {convert_msg}"
+            
+            print("[OK]")
+            
+            # Re-fetch the interface after mode change to get updated version
+            success, existing = self.get_physical_interface(hardware_name) # pyright: ignore[reportArgumentType]
+            if not success:
+                self.stats["physical_interfaces_failed"] += 1
+                return False, f"Failed to re-fetch interface after mode change: {existing}"
+            
+            intf_id = existing.get('id') # pyright: ignore[reportOptionalMemberAccess]
         
         # Start with the existing interface configuration
         # This preserves ALL existing settings including hardware config
@@ -509,6 +532,11 @@ class FTDAPIClient:
         if 'mtu' in intf and intf['mtu'] is not None:
             update_payload['mtu'] = intf['mtu']
         
+        # Ensure mode is set to ROUTED for L3 interfaces
+        # (This should already be set after conversion, but ensure it)
+        if 'ipv4' in intf and intf['ipv4'] is not None:
+            update_payload['mode'] = 'ROUTED'
+        
         # PRESERVE existing hardware settings - do NOT overwrite these
         # These are typically already configured correctly on the FTD
         # and should not be changed by the migration
@@ -519,6 +547,12 @@ class FTDAPIClient:
         for setting in hardware_settings:
             if setting in existing: # pyright: ignore[reportOperatorIssue]
                 update_payload[setting] = existing[setting] # pyright: ignore[reportOptionalSubscript]
+        
+        # Remove switchport-specific fields if present (they're not valid in routed mode)
+        switchport_fields = ['switchPortMode', 'switchPortConfig', 'nativeVlan', 
+                            'allowedVlans', 'voiceVlan', 'spanningTreePortfast']
+        for field in switchport_fields:
+            update_payload.pop(field, None)
         
         endpoint = f"{self.base_url}/devices/default/interfaces/{intf_id}"
         
@@ -541,6 +575,61 @@ class FTDAPIClient:
                 
         except requests.exceptions.RequestException as e:
             self.stats["physical_interfaces_failed"] += 1
+            return False, str(e)
+    
+    def _convert_switchport_to_routed(self, intf: Dict) -> Tuple[bool, str]:
+        """
+        Convert a physical interface from switchport mode to routed mode.
+        
+        This is required before configuring L3 settings (IP address, etc.)
+        on an interface that is in switchport mode by default.
+        
+        Args:
+            intf: The existing interface configuration from FTD
+            
+        Returns:
+            Tuple of (success: bool, error_message: str)
+        """
+        intf_id = intf.get('id')
+        
+        if not intf_id:
+            return False, "Interface has no ID"
+        
+        # Build a minimal payload to change the mode
+        # We need to preserve required fields but change mode to ROUTED
+        convert_payload = intf.copy()
+        
+        # Set mode to ROUTED
+        convert_payload['mode'] = 'ROUTED'
+        
+        # Remove switchport-specific fields
+        switchport_fields = ['switchPortMode', 'switchPortConfig', 'nativeVlan', 
+                            'allowedVlans', 'voiceVlan', 'spanningTreePortfast',
+                            'stpGuardType', 'stpPathCost', 'stpPortPriority']
+        for field in switchport_fields:
+            convert_payload.pop(field, None)
+        
+        # Clear any VLAN-related config
+        convert_payload.pop('vlanId', None)
+        
+        endpoint = f"{self.base_url}/devices/default/interfaces/{intf_id}"
+        
+        try:
+            response = self.session.put(endpoint, json=convert_payload, timeout=30)
+            
+            if response.status_code in [200, 201]:
+                return True, ""
+            elif response.status_code == 422:
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
+                    return False, error_msg
+                except:
+                    return False, f"HTTP 422: {response.text[:200]}"
+            else:
+                return False, f"HTTP {response.status_code}: {response.text[:200]}"
+                
+        except requests.exceptions.RequestException as e:
             return False, str(e)
         
     def create_subinterface(self, intf: Dict) -> Tuple[bool, Optional[str]]:

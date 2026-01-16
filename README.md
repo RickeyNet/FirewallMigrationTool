@@ -456,37 +456,21 @@ python ftd_api_importer.py --host 192.168.1.1 --username admin --deploy
 ---
 
 #### Option B: Step-by-Step Import (Recommended for Production)
-
-Import one type at a time, verify each step:
-
 ```bash
-# Step 1: Import address objects
-python ftd_api_importer.py --host 192.168.1.1 -u admin --only-address-objects
-# Verify in FDM: Objects > Network
+# Selective imports - Interfaces
+python ftd_api_importer.py --host IP -u admin --only-physical-interfaces
+python ftd_api_importer.py --host IP -u admin --only-etherchannels
+python ftd_api_importer.py --host IP -u admin --only-bridge-groups
+python ftd_api_importer.py --host IP -u admin --only-subinterfaces
 
-# Step 2: Import address groups
-python ftd_api_importer.py --host 192.168.1.1 -u admin --only-address-groups
-# Verify in FDM: Objects > Network
-
-# Step 3: Import service objects
-python ftd_api_importer.py --host 192.168.1.1 -u admin --only-service-objects
-# Verify in FDM: Objects > Ports
-
-# Step 4: Import service groups
-python ftd_api_importer.py --host 192.168.1.1 -u admin --only-service-groups
-# Verify in FDM: Objects > Ports
-
-# Step 5: Import static routes
-python ftd_api_importer.py --host 192.168.1.1 -u admin --only-routes
-# Verify in FDM: Routing > Static Routes
-
-# Step 6: Import access rules
-python ftd_api_importer.py --host 192.168.1.1 -u admin --only-rules
-# Verify in FDM: Policies > Access Control
-
-# Step 7: Deploy all changes
-python ftd_api_importer.py --host 192.168.1.1 -u admin --deploy
-```
+# Selective imports - Objects
+python ftd_api_importer.py --host IP -u admin --only-address-objects
+python ftd_api_importer.py --host IP -u admin --only-address-groups
+python ftd_api_importer.py --host IP -u admin --only-service-objects
+python ftd_api_importer.py --host IP -u admin --only-service-groups
+python ftd_api_importer.py --host IP -u admin --only-routes
+python ftd_api_importer.py --host IP -u admin --only-rules
+````
 
 **Pros:** Maximum control, easy to troubleshoot  
 **Cons:** More time-consuming  
