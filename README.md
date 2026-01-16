@@ -23,6 +23,7 @@ This toolset converts FortiGate firewall configurations to Cisco FTD (Firepower 
 - ✅ Address Groups (network groups)
 - ✅ Service Port Objects (TCP/UDP ports)
 - ✅ Service Port Groups (port groups)
+- ✅ Interfaces (physical, subinterfaces, etherchannels, bridge groups)
 - ✅ Static Routes
 - ✅ Firewall Policies (access rules)
 
@@ -134,20 +135,22 @@ python -c "import yaml, requests, urllib3; print('All libraries installed!')"
 
 ### Step 1: Download All Script Files
 
-Create a working directory and save all 9 Python files:
-
-```
+### Your Working Directory Should Look Like:
+`````
 FortiGate-FTD-Migration/
-├── fortigate_converter.py          # Main conversion script
-├── address_converter.py            # Converts address objects
-├── address_group_converter.py      # Converts address groups
-├── service_converter.py            # Converts service objects
-├── service_group_converter.py      # Converts service groups
-├── policy_converter.py             # Converts firewall policies
-├── route_converter.py              # Converts static routes
-├── ftd_api_importer.py             # FTD API import script
-└── ftd_api_cleanup.py              # FTD bulk delete/cleanup script
-```
+├── fortigate_converter.py          # Main converter
+├── address_converter.py            # Module
+├── address_group_converter.py      # Module
+├── service_converter.py            # Module
+├── service_group_converter.py      # Module
+├── policy_converter.py             # Module
+├── route_converter.py              # Module
+├── interface_converter.py          # Module - Interface conversion
+├── ftd_api_importer.py            # API importer
+├── ftd_api_cleanup.py             # Bulk delete/cleanup utility
+├── fortigate_config.yaml          # Your FortiGate YAML (input)
+└── ftd_config_*.json              # Generated FTD JSON files (output)
+`````
 
 ### Step 2: Install Dependencies
 
@@ -260,17 +263,41 @@ python fortigate_converter.py fortigate_config.yaml -o my_ftd_config --pretty
 
 ### Step 3: Review Generated Files
 
-The script creates **7 JSON files**:
+The script creates **11 JSON files**:
 
-| File | Description |
-|------|-------------|
-| `ftd_config_address_objects.json` | Network objects (individual IPs, subnets) |
-| `ftd_config_address_groups.json` | Network groups (collections of addresses) |
-| `ftd_config_service_objects.json` | Port objects (TCP/UDP services) - Note: Services with both TCP and UDP are split into separate objects |
-| `ftd_config_service_groups.json` | Port groups (collections of services) |
-| `ftd_config_static_routes.json` | Static routes |
-| `ftd_config_access_rules.json` | Firewall access rules (policies) |
-| `ftd_config_summary.json` | Conversion statistics and summary |
+1. **`ftd_config_address_objects.json`**
+   - Network objects (individual IPs, subnets)
+   
+2. **`ftd_config_address_groups.json`**
+   - Network groups (collections of addresses)
+   
+3. **`ftd_config_service_objects.json`**
+   - Port objects (TCP/UDP services)
+   - Note: Services with both TCP and UDP are split into separate objects
+   
+4. **`ftd_config_service_groups.json`**
+   - Port groups (collections of services)
+
+5. **`ftd_config_physical_interfaces.json`**
+   - Physical interface configurations (PUT requests to update existing)
+   
+6. **`ftd_config_etherchannels.json`**
+   - EtherChannel/Port-channel interfaces (POST requests to create)
+   
+7. **`ftd_config_bridge_groups.json`**
+   - Bridge group (BVI) interfaces (POST requests to create)
+   
+8. **`ftd_config_subinterfaces.json`**
+   - VLAN subinterfaces (POST requests to create)
+   
+9. **`ftd_config_static_routes.json`**
+   - Static routes
+   
+10. **`ftd_config_access_rules.json`**
+    - Firewall access rules (policies)
+   
+11. **`ftd_config_summary.json`**
+    - Conversion statistics and summary
 
 ### Step 4: Verify Conversion Output
 
@@ -322,10 +349,10 @@ Converting Address Objects...
 
 ### Common Conversion Issues
 
-| Issue | Message | Solution |
-|-------|---------|----------|
-| Empty values | `Skipped: Empty_Object (empty value)` | Automatically skipped. Review original FortiGate config. |
-| Split services | `Split: DNS -> DNS_TCP and DNS_UDP` | Normal behavior. FTD requires separate TCP and UDP objects. |
+| Issue            | Message                                                 | Solution                                                   |
+|------------------|---------------------------------------------------------|------------------------------------------------------------|
+| Empty values     | `Skipped: Empty_Object (empty value)`                   | Automatically skipped. Review original FortiGate config.   |
+| Split services   | `Split: DNS -> DNS_TCP and DNS_UDP`                     | Normal behavior. FTD requires separate TCP and UDP objects.|
 | Unmatched routes | `Warning: No address object found for gateway 10.0.1.1` | Create the missing address object before importing routes. |
 
 ### Name Sanitization
@@ -358,6 +385,33 @@ When a name is sanitized, the console output will show the transformation:
 Converted: Blocked IPs -> Blocked_IPs (3 members)
 Converted: My Custom Rule -> My_Custom_Rule [PERMIT] (Src:2 Dst:1 Svc:3)
 ```
+### Step 5: Review Interface Conversion
+
+The interface converter maps FortiGate interfaces to FTD interfaces:
+
+**Interface Type Mapping:**
+
+| FortiGate Type | FTD Type | API Method |
+|----------------|----------|------------|
+| Physical port (port1, port2) | physicalinterface | PUT (update) |
+| Aggregate (type: aggregate) | etherchannelinterface | POST (create) |
+| Switch (type: switch) | bridgegroupinterface | POST (create) |
+| VLAN (has vlanid:) | subinterface | POST (create) |
+
+**Port Mapping (FortiGate 500E to FTD 3120):**
+- port2 → Ethernet1/1
+- port6 → Ethernet1/3
+- port5 → Ethernet1/13
+- port7 → Ethernet1/14
+- x1 → Ethernet1/15
+- x2 → Ethernet1/16
+
+**Note:** Ethernet1/2 is reserved for HA and is skipped.
+
+**Skipped Interfaces:**
+- ha, mgmt, modem (system interfaces)
+- ssl.root, naf.root, l2t.root (virtual interfaces)
+- s1, s2, vw1, vw2 (FortiGate-specific)
 
 ---
 
@@ -569,14 +623,14 @@ python ftd_api_importer.py --host 192.168.1.1 -u admin --deploy
 
 **Check each object type in FDM:**
 
-| Object Type | FDM Location |
-|-------------|--------------|
-| Network Objects | Objects > Network > Networks |
-| Network Groups | Objects > Network > Network Groups |
-| Port Objects | Objects > Ports > TCP Ports / UDP Ports |
-| Port Groups | Objects > Ports > Port Groups |
-| Static Routes | Routing > Static Routes |
-| Access Rules | Policies > Access Control > Access Rules |
+| Object Type     | FDM Location                             |
+|-----------------|------------------------------------------|
+| Network Objects | Objects > Network > Networks             |
+| Network Groups  | Objects > Network > Network Groups       |
+| Port Objects    | Objects > Ports > TCP Ports / UDP Ports  |
+| Port Groups     | Objects > Ports > Port Groups            |
+| Static Routes   | Routing > Static Routes                  |
+| Access Rules    | Policies > Access Control > Access Rules |
 
 ---
 
@@ -597,38 +651,31 @@ The `ftd_api_cleanup.py` script allows you to bulk delete custom objects from FT
 
 ### Cleanup Commands
 
-#### Dry Run Mode (Preview without deleting)
-
-**Always run dry-run first to see what will be deleted:**
-
+#### Cleanup Commands
 ```bash
-# Preview what address objects would be deleted
-python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-address-objects --dry-run
+# Dry run - preview what would be deleted
+python ftd_api_cleanup.py --host IP -u admin --delete-all --dry-run
 
-# Preview deleting everything
-python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-all --dry-run
-```
+# Delete all custom objects (everything)
+python ftd_api_cleanup.py --host IP -u admin --delete-all
 
-#### Delete Specific Object Types
+# Delete specific object types
+python ftd_api_cleanup.py --host IP -u admin --delete-address-objects
+python ftd_api_cleanup.py --host IP -u admin --delete-address-groups
+python ftd_api_cleanup.py --host IP -u admin --delete-service-objects
+python ftd_api_cleanup.py --host IP -u admin --delete-service-groups
+python ftd_api_cleanup.py --host IP -u admin --delete-routes
+python ftd_api_cleanup.py --host IP -u admin --delete-rules
 
-```bash
-# Delete all custom address objects
-python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-address-objects
+# Delete/reset interfaces
+python ftd_api_cleanup.py --host IP -u admin --delete-all-interfaces
+python ftd_api_cleanup.py --host IP -u admin --delete-subinterfaces
+python ftd_api_cleanup.py --host IP -u admin --delete-etherchannels
+python ftd_api_cleanup.py --host IP -u admin --delete-bridge-groups
+python ftd_api_cleanup.py --host IP -u admin --reset-physical-interfaces
 
-# Delete all custom address groups
-python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-address-groups
-
-# Delete all custom service objects (TCP and UDP)
-python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-service-objects
-
-# Delete all custom service groups
-python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-service-groups
-
-# Delete all custom static routes
-python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-routes
-
-# Delete all custom access rules
-python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-rules
+# Delete and deploy
+python ftd_api_cleanup.py --host IP -u admin --delete-all --deploy
 ```
 
 #### Delete Everything
@@ -956,28 +1003,40 @@ python ftd_api_cleanup.py --help
 **Import Order Matters:**
 
 ```
-1. Address Objects (no dependencies)
+1. Import physical interfaces first (PUT - updates existing)
    ↓
-2. Address Groups (references Address Objects)
+2. Import etherchannels second (POST - creates new)
    ↓
-3. Service Objects (no dependencies)
+3. Import bridge groups third (POST - creates new)
    ↓
-4. Service Groups (references Service Objects)
+4. Import subinterfaces fourth (POST - creates new)
    ↓
-5. Static Routes (references Address Objects)
+5. Address Objects (no dependencies)
    ↓
-6. Access Rules (references everything above)
+6. Address Groups (references Address Objects)
+   ↓
+7. Service Objects (no dependencies)
+   ↓
+8. Service Groups (references Service Objects)
+   ↓
+9. Static Routes (references Address Objects)
+   ↓
+10. Access Rules (references everything above)
 ```
 
-**Cleanup Order (Reverse):**
-```
+**Deletion Order (reverse of import):**
+`````
 1. Access Rules
 2. Static Routes
-3. Service Groups
-4. Service Objects
-5. Address Groups
-6. Address Objects
-```
+3. Subinterfaces
+4. EtherChannels
+5. Bridge Groups
+6. Physical Interfaces (reset only - cannot delete)
+7. Service Groups
+8. Service Objects
+9. Address Groups
+10. Address Objects
+`````
 
 ### D. Support and Resources
 
@@ -997,23 +1056,30 @@ python ftd_api_cleanup.py --help
 ---
 
 ## Quick Start Checklist
-
-```
+`````
 □ Install Python 3.6+
 □ Install libraries: pip install pyyaml requests urllib3
 □ Download all 9 script files to one folder
 □ Export FortiGate config as YAML
 □ Backup FTD configuration
 □ Run conversion: python fortigate_converter.py config.yaml --pretty
-□ Review generated JSON files and summary
+□ Review generated JSON files and summary (11 files total)
 □ Test import with subset (optional but recommended)
-□ Import to FTD: python ftd_api_importer.py --host IP -u admin
+□ Import interfaces first: python ftd_api_importer.py --host IP -u admin --only-physical-interfaces
+□ Import remaining objects: python ftd_api_importer.py --host IP -u admin
 □ Verify objects in FDM web interface
 □ Deploy configuration
 □ Test traffic flows
 □ Document any issues
 □ Celebrate successful migration! 🎉
-```
+`````
+
+**Cleanup (if needed to start over):**
+`````
+□ Run cleanup: python ftd_api_cleanup.py --host IP -u admin --delete-all --dry-run
+□ Review what will be deleted
+□ Execute cleanup: python ftd_api_cleanup.py --host IP -u admin --delete-all --deploy
+`````
 
 ---
 

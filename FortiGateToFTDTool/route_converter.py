@@ -97,7 +97,7 @@ class RouteConverter:
     6. Handling special cases (blackhole routes, default routes)
     """
     
-    def __init__(self, fortigate_config: Dict[str, Any], network_objects: List[Dict] = None): # pyright: ignore[reportArgumentType]
+    def __init__(self, fortigate_config: Dict[str, Any], network_objects: List[Dict] = None, interface_name_mapping: Dict[str, str] = None): # pyright: ignore[reportArgumentType]
         """
         Initialize the converter with FortiGate configuration data.
         
@@ -106,12 +106,16 @@ class RouteConverter:
                              Expected to have a 'router_static' key with route data
             network_objects: List of already-converted FTD network objects
                            Used to match route destinations/gateways to existing objects
+            interface_name_mapping: Dict mapping FortiGate interface names to FTD interface names
         """
         # Store the entire FortiGate configuration
         self.fg_config = fortigate_config
         
         # Store the list of network objects for lookup
         self.network_objects = network_objects or []
+
+        # Store interface name mapping
+        self.interface_name_mapping = interface_name_mapping or {}
         
         # Build a lookup dictionary: IP/CIDR -> object name
         # This allows us to quickly find the object name for a given IP
@@ -239,7 +243,20 @@ class RouteConverter:
             # ================================================================
             # STEP 2E: Extract interface/device
             # ================================================================
-            interface_name = properties.get('device', 'unknown')
+            # Extract interface/device name and map to FTD name
+            fg_interface_name = properties.get('device', 'unknown')
+            
+            # Map FortiGate interface name to FTD interface name
+            if fg_interface_name in self.interface_name_mapping:
+                ftd_interface_name = self.interface_name_mapping[fg_interface_name]
+            else:
+                # Try matching by alias (some FortiGate configs use alias in routes)
+                ftd_interface_name = self.interface_name_mapping.get(
+                    fg_interface_name, 
+                    fg_interface_name.lower().replace('-', '_')  # Sanitize as fallback
+                )
+            
+            interface_name = ftd_interface_name
             
             # ================================================================
             # STEP 2F: Extract metric/distance
@@ -257,7 +274,7 @@ class RouteConverter:
             
             # Sanitize all names to replace spaces with underscores
             sanitized_route_name = sanitize_name(route_name)
-            sanitized_interface_name = sanitize_name(interface_name)
+            sanitized_interface_name = sanitize_name(interface_name) # pyright: ignore[reportArgumentType]
             sanitized_dst_name = sanitize_name(dst_name)
             sanitized_gateway_name = sanitize_name(gateway_name)
             

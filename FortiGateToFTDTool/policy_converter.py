@@ -107,7 +107,8 @@ class PolicyConverter:
                  address_name_mapping: Dict[str, List[str]] = None, # pyright: ignore[reportArgumentType]
                  address_group_members: Dict[str, List[str]] = None, # pyright: ignore[reportArgumentType]
                  address_groups: Set[str] = None, # pyright: ignore[reportArgumentType]
-                 service_groups: Set[str] = None): # pyright: ignore[reportArgumentType]
+                 service_groups: Set[str] = None, # pyright: ignore[reportArgumentType]
+                 interface_name_mapping: Dict[str, str] = None): # pyright: ignore[reportArgumentType]
         """
         Initialize the converter with FortiGate configuration data.
         
@@ -122,6 +123,7 @@ class PolicyConverter:
             address_group_members: Dict mapping group names to their flattened member lists
             address_groups: Set of address group names (to set correct type in rules)
             service_groups: Set of service group names (to set correct type in rules)
+            interface_name_mapping: Dict mapping FortiGate interface names to FTD names
         """
         # Store the entire FortiGate configuration
         self.fg_config = fortigate_config
@@ -146,6 +148,9 @@ class PolicyConverter:
         
         # Set of service group names (sanitized)
         self.service_groups = service_groups or set()
+
+        # Interface name mapping for zones
+        self.interface_name_mapping = interface_name_mapping or {}
         
         # This will store the converted FTD access rules
         self.ftd_access_rules = []
@@ -339,24 +344,21 @@ class PolicyConverter:
             return [str(value)]
     
     def _create_zone_objects(self, zone_names: List[str]) -> List[Dict]:
-        """
-        Create FTD security zone objects from FortiGate interface names.
-        
-        Args:
-            zone_names: List of FortiGate interface names
-            
-        Returns:
-            List of FTD zone object dictionaries
-        """
         zone_objects = []
         
         for zone_name in zone_names:
-            # Skip 'any' as it means no zone restriction
             if zone_name.lower() == 'any':
                 continue
             
+            # Map FortiGate interface/zone name to FTD interface name
+            ftd_zone_name = self.interface_name_mapping.get(zone_name, zone_name)
+            
+            # Sanitize if not found in mapping
+            if ftd_zone_name == zone_name:
+                ftd_zone_name = zone_name.lower().replace('-', '_').replace(' ', '_')
+            
             zone_obj = {
-                "name": zone_name,
+                "name": ftd_zone_name,
                 "type": "securityzone"
             }
             zone_objects.append(zone_obj)
@@ -489,7 +491,8 @@ class PolicyConverter:
                            address_name_mapping: Dict[str, str] = None, # pyright: ignore[reportArgumentType]
                            address_group_members: Dict[str, List[str]] = None, # pyright: ignore[reportArgumentType]
                            address_groups: Set[str] = None, # pyright: ignore[reportArgumentType]
-                           service_groups: Set[str] = None): # pyright: ignore[reportArgumentType]
+                           service_groups: Set[str] = None, # pyright: ignore[reportArgumentType]
+                           interface_name_mapping: Dict[str, str] = None): # pyright: ignore[reportArgumentType]
         """
         Update the service and address mappings.
         
@@ -519,6 +522,8 @@ class PolicyConverter:
             self.address_groups = address_groups
         if service_groups is not None:
             self.service_groups = service_groups
+        if interface_name_mapping is not None:
+            self.interface_name_mapping = interface_name_mapping
     
     def get_statistics(self) -> Dict[str, int]:
         """

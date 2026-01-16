@@ -76,6 +76,7 @@ try:
     from service_group_converter import ServiceGroupConverter
     from policy_converter import PolicyConverter
     from route_converter import RouteConverter
+    from interface_converter import InterfaceConverter
 except ImportError as e:
     print("\n" + "="*60)
     print("ERROR: Missing converter module files!")
@@ -88,7 +89,8 @@ except ImportError as e:
     print("  4. service_group_converter.py")
     print("  5. policy_converter.py")
     print("  6. route_converter.py")
-    print("  7. fortigate_converter.py (this file)")
+    print("  7. interface_converter.py")
+    print("  8. fortigate_converter.py (this file)")
     print("\n" + "="*60)
     sys.exit(1)
 
@@ -326,6 +328,32 @@ Examples:
     
     # Create converter instance for firewall policies
     policy_converter = PolicyConverter(fg_config)
+
+    # Create converter instance for interfaces
+    interface_converter = InterfaceConverter(fg_config)
+    
+    # ========================================================================
+    # STEP 4B: Convert interfaces FIRST (needed for routes and policies)
+    # ========================================================================
+    print("\n" + "-"*60)
+    print("Converting Interfaces...")
+    print("-"*60)
+    
+    # Convert FortiGate interfaces to FTD format
+    interface_results = interface_converter.convert()
+    
+    # Get the interface name mapping for routes and policies
+    interface_name_mapping = interface_converter.get_interface_mapping()
+    
+    # Get statistics
+    intf_stats = interface_converter.get_statistics()
+    print(f"\n[OK] Interface conversion complete:")
+    print(f"  - Physical interfaces to update: {intf_stats['physical_updated']}")
+    print(f"  - EtherChannels to create: {intf_stats['etherchannels_created']}")
+    print(f"  - Bridge groups to create: {intf_stats['bridge_groups_created']}")
+    print(f"  - Subinterfaces to create: {intf_stats['subinterfaces_created']}")
+    if intf_stats['skipped'] > 0:
+        print(f"  - Skipped: {intf_stats['skipped']}")
     
     # Note: Route converter will be initialized later after address objects are converted
     
@@ -347,7 +375,7 @@ Examples:
     # ========================================================================
     # Now that we have the address objects, we can initialize the route converter
     # The route converter needs these to map route destinations/gateways to actual object names
-    route_converter = RouteConverter(fg_config, network_objects)
+    route_converter = RouteConverter(fg_config, network_objects, interface_name_mapping)
     
     # ========================================================================
     # STEP 6: Convert address groups
@@ -449,7 +477,8 @@ Examples:
         service_name_mapping=service_name_mapping, # pyright: ignore[reportArgumentType]
         skipped_services=skipped_services,
         address_groups=address_groups,
-        service_groups=service_groups
+        service_groups=service_groups,
+        interface_name_mapping=interface_name_mapping
     )
     
     # Convert FortiGate policies to FTD access rules
@@ -503,6 +532,44 @@ Examples:
     summary_output = f"{args.output}_summary.json"
     
     try:
+        # ====================================================================
+        # Save physical interfaces (PUT requests)
+        # ====================================================================
+        physical_interfaces_output = f"{args.output}_physical_interfaces.json"
+        with open(physical_interfaces_output, 'w') as f:
+            if args.pretty:
+                json.dump(interface_results['physical_interfaces'], f, indent=2)
+            else:
+                json.dump(interface_results['physical_interfaces'], f)
+        print(f"[OK] Physical interfaces saved to: {physical_interfaces_output}")
+        
+        # Save etherchannels (POST requests)
+        etherchannels_output = f"{args.output}_etherchannels.json"
+        with open(etherchannels_output, 'w') as f:
+            if args.pretty:
+                json.dump(interface_results['etherchannels'], f, indent=2)
+            else:
+                json.dump(interface_results['etherchannels'], f)
+        print(f"[OK] EtherChannels saved to: {etherchannels_output}")
+        
+        # Save bridge groups (POST requests)
+        bridge_groups_output = f"{args.output}_bridge_groups.json"
+        with open(bridge_groups_output, 'w') as f:
+            if args.pretty:
+                json.dump(interface_results['bridge_groups'], f, indent=2)
+            else:
+                json.dump(interface_results['bridge_groups'], f)
+        print(f"[OK] Bridge groups saved to: {bridge_groups_output}")
+        
+        # Save subinterfaces (POST requests)
+        subinterfaces_output = f"{args.output}_subinterfaces.json"
+        with open(subinterfaces_output, 'w') as f:
+            if args.pretty:
+                json.dump(interface_results['subinterfaces'], f, indent=2)
+            else:
+                json.dump(interface_results['subinterfaces'], f)
+        print(f"[OK] Subinterfaces saved to: {subinterfaces_output}")
+        
         # ====================================================================
         # Save address objects
         # ====================================================================

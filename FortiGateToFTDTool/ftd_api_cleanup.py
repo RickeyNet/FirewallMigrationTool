@@ -303,6 +303,164 @@ class FTDBulkDelete:
         
         return fail_count == 0
     
+    def reset_physical_interface(self, intf: Dict, dry_run: bool = False) -> bool:
+        """
+        Reset a physical interface to default (unconfigured) state.
+        
+        Physical interfaces cannot be deleted, only reset to defaults.
+        This clears the name, IP address, and disables the interface.
+        
+        Args:
+            intf: Interface object from FTD
+            dry_run: If True, only show what would be reset
+            
+        Returns:
+            True if successful
+        """
+        intf_id = intf.get('id')
+        hardware_name = intf.get('hardwareName', 'Unknown')
+        current_name = intf.get('name', '')
+        
+        if not intf_id:
+            return False
+        
+        if dry_run:
+            return True
+        
+        # Build reset payload - clear custom settings
+        reset_payload = intf.copy()
+        reset_payload['name'] = ''  # Clear logical name
+        reset_payload['enabled'] = False  # Disable interface
+        reset_payload['ipv4'] = None  # Clear IP address
+        reset_payload['description'] = ''  # Clear description
+        
+        # PUT request to update
+        endpoint = f"{self.base_url}/devices/default/interfaces/{intf_id}"
+        
+        try:
+            response = self.session.put(endpoint, json=reset_payload, timeout=30)
+            
+            if response.status_code in [200, 201, 204]:
+                return True
+            else:
+                if self.debug:
+                    print(f" (HTTP {response.status_code})")
+                return False
+                
+        except requests.exceptions.RequestException:
+            return False
+    
+    def reset_all_physical_interfaces(self, dry_run: bool = False) -> bool:
+        """
+        Reset ALL physical interfaces to default state.
+        
+        Args:
+            dry_run: If True, only show what would be reset
+            
+        Returns:
+            True if successful
+        """
+        print(f"\n{'='*60}")
+        print("Processing Physical Interfaces (Reset to Default)")
+        print(f"{'='*60}")
+        
+        # Get all interfaces
+        all_interfaces = self.get_all_objects("/devices/default/interfaces")
+        
+        if not all_interfaces:
+            print("  No interfaces found")
+            return True
+        
+        # Filter to only physical interfaces that have been configured
+        # (have a name or IP address set)
+        configured_interfaces = []
+        for intf in all_interfaces:
+            intf_type = intf.get('type', '')
+            name = intf.get('name', '')
+            ipv4 = intf.get('ipv4')
+            hardware = intf.get('hardwareName', '')
+            
+            # Only process physical interfaces that have configuration
+            if intf_type == 'physicalinterface' and (name or ipv4):
+                # Skip management interface
+                if 'Management' in hardware or 'mgmt' in hardware.lower():
+                    continue
+                configured_interfaces.append(intf)
+        
+        print(f"\n  Found {len(all_interfaces)} total interfaces")
+        print(f"  Configured (non-default) interfaces: {len(configured_interfaces)}")
+        
+        if not configured_interfaces:
+            print("  No configured interfaces to reset")
+            return True
+        
+        # Show what will be reset
+        print(f"\n  Interfaces to reset:")
+        for intf in configured_interfaces[:10]:
+            hardware = intf.get('hardwareName', 'Unknown')
+            name = intf.get('name', '(unnamed)')
+            print(f"    - {hardware}: {name}")
+        
+        if len(configured_interfaces) > 10:
+            print(f"    ... and {len(configured_interfaces) - 10} more")
+        
+        # Reset interfaces
+        print(f"\n  {'[DRY RUN] Would reset' if dry_run else 'Resetting'} {len(configured_interfaces)} interfaces...")
+        
+        success_count = 0
+        fail_count = 0
+        
+        for i, intf in enumerate(configured_interfaces, 1):
+            hardware = intf.get('hardwareName', 'Unknown')
+            name = intf.get('name', '(unnamed)')
+            
+            if dry_run:
+                print(f"  [{i}/{len(configured_interfaces)}] Would reset: {hardware} ({name})")
+                success_count += 1
+            else:
+                print(f"  [{i}/{len(configured_interfaces)}] Resetting: {hardware} ({name})...", end=" ")
+                
+                success = self.reset_physical_interface(intf, dry_run)
+                
+                if success:
+                    print("[OK]")
+                    success_count += 1
+                else:
+                    print("[ERROR]")
+                    fail_count += 1
+                
+                time.sleep(0.2)
+        
+        print(f"\n  Summary:")
+        print(f"    Reset: {success_count}")
+        print(f"    Failed: {fail_count}")
+        
+        return fail_count == 0
+    
+    def delete_all_subinterfaces(self, dry_run: bool = False) -> bool:
+        """Delete all subinterfaces."""
+        return self.delete_all_custom_objects(
+            "/devices/default/subinterfaces",
+            "Subinterfaces",
+            dry_run
+        )
+    
+    def delete_all_etherchannels(self, dry_run: bool = False) -> bool:
+        """Delete all EtherChannel interfaces."""
+        return self.delete_all_custom_objects(
+            "/devices/default/etherchannelinterfaces",
+            "EtherChannels",
+            dry_run
+        )
+    
+    def delete_all_bridge_groups(self, dry_run: bool = False) -> bool:
+        """Delete all bridge group interfaces."""
+        return self.delete_all_custom_objects(
+            "/devices/default/bridgegroupinterfaces",
+            "Bridge Groups",
+            dry_run
+        )
+    
     def deploy_changes(self) -> bool:
         """Deploy pending changes."""
         print(f"\n{'='*60}")
@@ -365,14 +523,22 @@ Examples:
     parser.add_argument('--delete-service-groups', action='store_true', help='Delete all service groups')
     parser.add_argument('--delete-routes', action='store_true', help='Delete all static routes')
     parser.add_argument('--delete-rules', action='store_true', help='Delete all access rules')
+    parser.add_argument('--delete-subinterfaces', action='store_true', help='Delete all subinterfaces')
+    parser.add_argument('--delete-etherchannels', action='store_true', help='Delete all EtherChannels')
+    parser.add_argument('--delete-bridge-groups', action='store_true', help='Delete all bridge groups')
+    parser.add_argument('--reset-physical-interfaces', action='store_true', help='Reset physical interfaces to default')
     parser.add_argument('--delete-all', action='store_true', help='Delete ALL custom objects (everything)')
+    parser.add_argument('--delete-all-interfaces', action='store_true', help='Delete/reset ALL interface configs')
     
     args = parser.parse_args()
     
     # Check if at least one delete option is selected
     if not any([args.delete_address_objects, args.delete_address_groups, 
                 args.delete_service_objects, args.delete_service_groups,
-                args.delete_routes, args.delete_rules, args.delete_all]):
+                args.delete_routes, args.delete_rules, args.delete_all,
+                args.delete_subinterfaces, args.delete_etherchannels,
+                args.delete_bridge_groups, args.reset_physical_interfaces,
+                args.delete_all_interfaces]):
         parser.error("Must specify at least one --delete-* option")
     
     # Prompt for password
@@ -431,6 +597,20 @@ Examples:
             "Static Routes",
             args.dry_run
         )
+    
+    # Delete interfaces BEFORE objects (interfaces may reference objects)
+    # Order: subinterfaces -> etherchannels -> bridge groups -> physical reset
+    if args.delete_all or args.delete_all_interfaces or args.delete_subinterfaces:
+        client.delete_all_subinterfaces(args.dry_run)
+    
+    if args.delete_all or args.delete_all_interfaces or args.delete_etherchannels:
+        client.delete_all_etherchannels(args.dry_run)
+    
+    if args.delete_all or args.delete_all_interfaces or args.delete_bridge_groups:
+        client.delete_all_bridge_groups(args.dry_run)
+    
+    if args.delete_all or args.delete_all_interfaces or args.reset_physical_interfaces:
+        client.reset_all_physical_interfaces(args.dry_run)
     
     if args.delete_all or args.delete_service_groups:
         client.delete_all_custom_objects(
