@@ -70,11 +70,13 @@ class FTDAPIClient:
             username: FDM username (typically 'admin')
             password: FDM password
             verify_ssl: Whether to verify SSL certificates (False for self-signed)
+            debug: Enable debug output
         """
         self.host = host
         self.username = username
         self.password = password
         self.verify_ssl = verify_ssl
+        self.debug = False  # Will be set by caller if needed
         
         # Base URL for FDM API
         self.base_url = f"https://{host}/api/fdm/latest"
@@ -86,6 +88,17 @@ class FTDAPIClient:
         # Authentication token (obtained after login)
         self.access_token = None
         self.refresh_token = None
+        
+        # =================================================================
+        # REFERENCE CACHES - Prefetch and cache name->id mappings
+        # =================================================================
+        # These caches store FTD object references to avoid repeated API calls
+        # Format: hardware_name -> {id, type, name, ...full object}
+        self._physical_interface_cache = {}      # Ethernet1/1 -> {id: xxx, ...}
+        self._etherchannel_cache = {}            # Port-channel1 -> {id: xxx, ...}
+        self._security_zone_cache = {}           # zone_name -> {id: xxx, ...}
+        self._network_object_cache = {}          # object_name -> {id: xxx, ...}
+        self._caches_populated = False
         
         # Track statistics
         self.stats = {
@@ -120,6 +133,155 @@ class FTDAPIClient:
             "bridge_groups_failed": 0,
             "bridge_groups_skipped": 0
         }
+    
+    # =========================================================================
+    # REFERENCE CACHING METHODS
+    # =========================================================================
+    
+    def prefetch_interface_cache(self):
+        """
+        Prefetch and cache all physical interfaces and etherchannels.
+        
+        This should be called ONCE before importing subinterfaces to avoid
+        repeated API calls for parent interface lookups.
+        """
+        if self._caches_populated:
+            return
+        
+        print("  Prefetching interface references...")
+        
+        # Fetch all physical interfaces
+        endpoint = f"{self.base_url}/devices/default/interfaces"
+        try:
+            response = self.session.get(endpoint, params={"limit": 200}, timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                interfaces = data.get("items", [])
+                for intf in interfaces:
+                    hardware_name = intf.get('hardwareName', '')
+                    if hardware_name:
+                        self._physical_interface_cache[hardware_name] = intf
+                print(f"    Cached {len(self._physical_interface_cache)} physical interfaces")
+        except Exception as e:
+            print(f"    Warning: Failed to cache physical interfaces: {e}")
+        
+        # Fetch all etherchannels
+        endpoint = f"{self.base_url}/devices/default/etherchannelinterfaces"
+        try:
+            response = self.session.get(endpoint, params={"limit": 100}, timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                etherchannels = data.get("items", [])
+                for ec in etherchannels:
+                    hardware_name = ec.get('hardwareName', '')
+                    if hardware_name:
+                        self._etherchannel_cache[hardware_name] = ec
+                print(f"    Cached {len(self._etherchannel_cache)} etherchannels")
+        except Exception as e:
+            print(f"    Warning: Failed to cache etherchannels: {e}")
+        
+        self._caches_populated = True
+    
+    def get_cached_physical_interface(self, hardware_name: str) -> Tuple[bool, Optional[Dict]]:
+        """
+        Get a physical interface from cache (or fetch if not cached).
+        
+        Args:
+            hardware_name: FTD hardware name (e.g., 'Ethernet1/1')
+            
+        Returns:
+            Tuple of (found: bool, interface_dict or error_message)
+        """
+        # Check cache first
+        if hardware_name in self._physical_interface_cache:
+            return True, self._physical_interface_cache[hardware_name]
+        
+        # Not in cache - do a direct lookup and cache it
+        success, result = self.get_physical_interface(hardware_name)
+        if success and isinstance(result, dict):
+            self._physical_interface_cache[hardware_name] = result
+        return success, result
+    
+    def get_cached_etherchannel(self, hardware_name: str) -> Tuple[bool, Optional[Dict]]:
+        """
+        Get an etherchannel from cache (or fetch if not cached).
+        
+        Args:
+            hardware_name: FTD hardware name (e.g., 'Port-channel1')
+            
+        Returns:
+            Tuple of (found: bool, etherchannel_dict or error_message)
+        """
+        # Check cache first
+        if hardware_name in self._etherchannel_cache:
+            return True, self._etherchannel_cache[hardware_name]
+        
+        # Not in cache - do a direct lookup and cache it
+        success, result = self._get_etherchannel_by_hardware(hardware_name)
+        if success and isinstance(result, dict):
+            self._etherchannel_cache[hardware_name] = result
+        return success, result
+    
+    def populate_physical_interface_cache(self):
+        """
+        Fetch all existing physical interfaces and cache them by hardwareName for quick lookup.
+        Caching behavior:
+        - Only caches objects where type == 'physicalinterface'
+        - Keyed by hardwareName (e.g., 'Ethernet1/1')
+        - Overwrites any prior cache contents
+
+        Returns:
+            None
+        """
+        print("  Fetching existing physical interfaces from FTD for update detection...")
+        endpoint = f"{self.base_url}/devices/default/interfaces"
+
+        self._physical_interface_cache.clear()
+
+        offset = 0
+        limit = 200  # higher limit = fewer round-trips; safe for typical interface counts
+
+        try:
+            while True:
+                params = {"offset": offset, "limit": limit}
+                response = self.session.get(endpoint, params=params, timeout=30)
+
+                if response.status_code != 200:
+                    print(f"[WARN] Could not fetch interfaces list: {response.status_code}")
+                    print(f"       {response.text}")
+                    return
+
+                data = response.json()
+                items = data.get("items", [])
+                if not items:
+                    break
+
+                for intf in items:
+                    # Only keep physical interfaces in this cache
+                    if intf.get("type") != "physicalinterface":
+                        continue
+
+                    hw = intf.get("hardwareName")
+                    if hw:
+                        self._physical_interface_cache[hw] = intf
+
+                paging = data.get("paging", {})
+                if not paging.get("next"):
+                    break
+
+                offset += limit
+
+            print(f"    Cached {len(self._physical_interface_cache)} existing physical interfaces")
+        except Exception as e:
+            print(f"[WARN] Exception while fetching physical interfaces: {e}")
+    
+    def clear_caches(self):
+        """Clear all reference caches."""
+        self._physical_interface_cache.clear()
+        self._etherchannel_cache.clear()
+        self._security_zone_cache.clear()
+        self._network_object_cache.clear()
+        self._caches_populated = False
     
     def authenticate(self) -> bool:
         """
@@ -170,69 +332,16 @@ class FTDAPIClient:
                     "Accept": "application/json"
                 })
                 
-                print("[OK] Authentication successful")
+                print("âœ“ Authentication successful")
                 return True
             else:
-                print(f"[ERROR] Authentication failed: {response.status_code}")
+                print(f"FAIL Authentication failed: {response.status_code}")
                 print(f"  Response: {response.text}")
                 return False
                 
         except requests.exceptions.RequestException as e:
-            print(f"[ERROR] Connection error: {e}")
+            print(f"FAIL Connection error: {e}")
             return False
-    
-    def _extract_error_message(self, response_or_data) -> str:
-        """
-        Extract a human-readable error message from an API response.
-        
-        Args:
-            response_or_data: Either a requests.Response object or a dict of parsed JSON
-            
-        Returns:
-            String containing the error message
-        """
-        try:
-            # If it's a Response object, try to parse JSON
-            if hasattr(response_or_data, 'json'):
-                try:
-                    data = response_or_data.json()
-                except:
-                    return response_or_data.text[:500] if response_or_data.text else "Unknown error"
-            else:
-                data = response_or_data
-            
-            # Try different error message formats that FTD API might return
-            # Format 1: {"error": {"messages": [{"description": "..."}]}}
-            if 'error' in data:
-                error_obj = data['error']
-                if 'messages' in error_obj and error_obj['messages']:
-                    messages = []
-                    for msg in error_obj['messages']:
-                        if isinstance(msg, dict):
-                            desc = msg.get('description', '')
-                            code = msg.get('code', '')
-                            if desc:
-                                messages.append(f"{code}: {desc}" if code else desc)
-                        elif isinstance(msg, str):
-                            messages.append(msg)
-                    if messages:
-                        return " | ".join(messages)
-                if 'message' in error_obj:
-                    return error_obj['message']
-            
-            # Format 2: {"message": "..."}
-            if 'message' in data:
-                return data['message']
-            
-            # Format 3: {"description": "..."}
-            if 'description' in data:
-                return data['description']
-            
-            # Fallback: return the whole response as string (truncated)
-            return str(data)[:500]
-            
-        except Exception as e:
-            return f"Error parsing response: {str(e)}"
     
     def create_network_object(self, obj: Dict) -> Tuple[bool, Optional[str]]:
         """
@@ -256,7 +365,7 @@ class FTDAPIClient:
             elif response.status_code == 422:
                 # 422 Unprocessable Entity - usually means object already exists
                 error_data = response.json()
-                error_msg = self._extract_error_message(error_data)
+                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
                 
                 # Check if it's a duplicate/already exists error
                 if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
@@ -264,15 +373,15 @@ class FTDAPIClient:
                     return True, f"SKIPPED: {error_msg}"  # Return True to indicate it's not a failure
                 else:
                     self.stats["address_objects_failed"] += 1
-                    return False, f"HTTP {response.status_code}: {error_msg}"
+                    return False, error_msg
             else:
                 self.stats["address_objects_failed"] += 1
-                error_msg = self._extract_error_message(response)
-                return False, f"HTTP {response.status_code}: {error_msg}"
+                error_msg = response.text
+                return False, error_msg
                 
         except requests.exceptions.RequestException as e:
             self.stats["address_objects_failed"] += 1
-            return False, f"Request error: {str(e)}"
+            return False, str(e)
     
     def create_network_group(self, group: Dict) -> Tuple[bool, Optional[str]]:
         """
@@ -295,22 +404,22 @@ class FTDAPIClient:
                 return True, created_obj.get("id")
             elif response.status_code == 422:
                 error_data = response.json()
-                error_msg = self._extract_error_message(error_data)
+                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
                 
                 if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
                     self.stats["address_groups_skipped"] += 1
                     return True, f"SKIPPED: {error_msg}"
                 else:
                     self.stats["address_groups_failed"] += 1
-                    return False, f"HTTP {response.status_code}: {error_msg}"
+                    return False, error_msg
             else:
                 self.stats["address_groups_failed"] += 1
-                error_msg = self._extract_error_message(response)
-                return False, f"HTTP {response.status_code}: {error_msg}"
+                error_msg = response.text
+                return False, error_msg
                 
         except requests.exceptions.RequestException as e:
             self.stats["address_groups_failed"] += 1
-            return False, f"Request error: {str(e)}"
+            return False, str(e)
     
     def create_port_object(self, obj: Dict) -> Tuple[bool, Optional[str]]:
         """
@@ -342,22 +451,22 @@ class FTDAPIClient:
                 return True, created_obj.get("id")
             elif response.status_code == 422:
                 error_data = response.json()
-                error_msg = self._extract_error_message(error_data)
+                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
                 
                 if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
                     self.stats["port_objects_skipped"] += 1
                     return True, f"SKIPPED: {error_msg}"
                 else:
                     self.stats["port_objects_failed"] += 1
-                    return False, f"HTTP {response.status_code}: {error_msg}"
+                    return False, error_msg
             else:
                 self.stats["port_objects_failed"] += 1
-                error_msg = self._extract_error_message(response)
-                return False, f"HTTP {response.status_code}: {error_msg}"
+                error_msg = response.text
+                return False, error_msg
                 
         except requests.exceptions.RequestException as e:
             self.stats["port_objects_failed"] += 1
-            return False, f"Request error: {str(e)}"
+            return False, str(e)
     
     def create_port_group(self, group: Dict) -> Tuple[bool, Optional[str]]:
         """
@@ -380,22 +489,98 @@ class FTDAPIClient:
                 return True, created_obj.get("id")
             elif response.status_code == 422:
                 error_data = response.json()
-                error_msg = self._extract_error_message(error_data)
+                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
                 
                 if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
                     self.stats["port_groups_skipped"] += 1
                     return True, f"SKIPPED: {error_msg}"
                 else:
                     self.stats["port_groups_failed"] += 1
-                    return False, f"HTTP {response.status_code}: {error_msg}"
+                    return False, error_msg
             else:
                 self.stats["port_groups_failed"] += 1
-                error_msg = self._extract_error_message(response)
-                return False, f"HTTP {response.status_code}: {error_msg}"
+                error_msg = response.text
+                return False, error_msg
                 
         except requests.exceptions.RequestException as e:
             self.stats["port_groups_failed"] += 1
-            return False, f"Request error: {str(e)}"
+            return False, str(e)
+    
+    def create_static_route(self, route: Dict) -> Tuple[bool, Optional[str]]:
+        """
+        Create a static route in FTD.
+        
+        Args:
+            route: Dictionary containing static route data
+            
+        Returns:
+            Tuple of (success: bool, object_id: str or error message)
+        """
+        endpoint = f"{self.base_url}/devices/default/routing/staticrouteentries"
+        
+        try:
+            response = self.session.post(endpoint, json=route, timeout=30)
+            
+            if response.status_code in [200, 201]:
+                created_obj = response.json()
+                self.stats["routes_created"] += 1
+                return True, created_obj.get("id")
+            elif response.status_code == 422:
+                error_data = response.json()
+                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
+                
+                if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
+                    self.stats["routes_skipped"] += 1
+                    return True, f"SKIPPED: {error_msg}"
+                else:
+                    self.stats["routes_failed"] += 1
+                    return False, error_msg
+            else:
+                self.stats["routes_failed"] += 1
+                error_msg = response.text
+                return False, error_msg
+                
+        except requests.exceptions.RequestException as e:
+            self.stats["routes_failed"] += 1
+            return False, str(e)
+    
+    def create_access_rule(self, rule: Dict) -> Tuple[bool, Optional[str]]:
+        """
+        Create an access rule (firewall policy) in FTD.
+        
+        Args:
+            rule: Dictionary containing access rule data
+            
+        Returns:
+            Tuple of (success: bool, object_id: str or error message)
+        """
+        endpoint = f"{self.base_url}/policy/accesspolicies/default/accessrules"
+        
+        try:
+            response = self.session.post(endpoint, json=rule, timeout=30)
+            
+            if response.status_code in [200, 201]:
+                created_obj = response.json()
+                self.stats["rules_created"] += 1
+                return True, created_obj.get("id")
+            elif response.status_code == 422:
+                error_data = response.json()
+                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
+                
+                if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
+                    self.stats["rules_skipped"] += 1
+                    return True, f"SKIPPED: {error_msg}"
+                else:
+                    self.stats["rules_failed"] += 1
+                    return False, error_msg
+            else:
+                self.stats["rules_failed"] += 1
+                error_msg = response.text
+                return False, error_msg
+                
+        except requests.exceptions.RequestException as e:
+            self.stats["rules_failed"] += 1
+            return False, str(e)
     
     def get_physical_interface(self, hardware_name: str) -> Tuple[bool, Optional[Dict]]:
         """
@@ -451,7 +636,7 @@ class FTDAPIClient:
                 
         except requests.exceptions.RequestException as e:
             return False, str(e) # pyright: ignore[reportReturnType]
-        
+    
     def update_physical_interface(self, intf: Dict) -> Tuple[bool, Optional[str]]:
         """
         Update a physical interface in FTD (PUT request).
@@ -528,25 +713,28 @@ class FTDAPIClient:
         if 'ipv4' in intf and intf['ipv4'] is not None:
             update_payload['ipv4'] = intf['ipv4']
         
-        # Update MTU if provided
+        # Update MTU if provided (cap at 9000 - FTD maximum for most interfaces)
         if 'mtu' in intf and intf['mtu'] is not None:
-            update_payload['mtu'] = intf['mtu']
+            mtu_value = intf['mtu']
+            if mtu_value > 9000:
+                mtu_value = 9000
+            update_payload['mtu'] = mtu_value
         
         # Ensure mode is set to ROUTED for L3 interfaces
         # (This should already be set after conversion, but ensure it)
         if 'ipv4' in intf and intf['ipv4'] is not None:
             update_payload['mode'] = 'ROUTED'
         
-        # PRESERVE existing hardware settings - do NOT overwrite these
-        # These are typically already configured correctly on the FTD
-        # and should not be changed by the migration
-        hardware_settings = ['speed', 'duplex', 'fecMode', 'autoNegotiation', 
-                           'lacpMode', 'lacpPriority', 'flowControlSend', 
-                           'flowControlReceive', 'managementOnly', 'nveOnly']
+        # Ensure mode is set to ROUTED for L3 interfaces
+        # (This should already be set after conversion, but ensure it)
+        if 'ipv4' in intf and intf['ipv4'] is not None:
+            update_payload['mode'] = 'ROUTED'
         
-        for setting in hardware_settings:
-            if setting in existing: # pyright: ignore[reportOperatorIssue]
-                update_payload[setting] = existing[setting] # pyright: ignore[reportOptionalSubscript]
+        # SET hardware settings for migration
+        # Auto-negotiation: enabled
+        # Duplex: FULL
+        update_payload['autoNegotiation'] = True
+        update_payload['duplex'] = 'FULL'
         
         # Remove switchport-specific fields if present (they're not valid in routed mode)
         switchport_fields = ['switchPortMode', 'switchPortConfig', 'nativeVlan', 
@@ -631,82 +819,254 @@ class FTDAPIClient:
                 
         except requests.exceptions.RequestException as e:
             return False, str(e)
-        
+    
     def create_subinterface(self, intf: Dict) -> Tuple[bool, Optional[str]]:
         """
-        Create a subinterface in FTD.
+        Create a subinterface (VLAN interface) in FTD.
+        
+        Subinterfaces in FTD require a reference to their parent interface.
+        The parent can be a physical interface or an etherchannel.
+        
+        Endpoints:
+        - Physical interface parent: POST /devices/default/interfaces/{parentId}/subinterfaces
+        - EtherChannel parent: POST /devices/default/etherchannelinterfaces/{parentId}/subinterfaces
         
         Args:
             intf: Dictionary containing subinterface data
             
         Returns:
-            Tuple of (success: bool, interface_id or error message)
+            Tuple of (success: bool, object_id: str or error message)
         """
-        endpoint = f"{self.base_url}/devices/default/subinterfaces"
+        # Extract parent interface info from hardware name
+        # Hardware name format: "Ethernet1/1.100" or "Port-channel1.100"
+        hardware_name = intf.get('hardwareName', '')
+        
+        if '.' not in hardware_name:
+            self.stats["subinterfaces_failed"] += 1
+            return False, f"Invalid hardwareName format: {hardware_name} (expected parent.vlanid)"
+        
+        parent_hardware, vlan_str = hardware_name.rsplit('.', 1)
         
         try:
-            response = self.session.post(endpoint, json=intf, timeout=30)
+            vlan_id = int(vlan_str)
+        except ValueError:
+            self.stats["subinterfaces_failed"] += 1
+            return False, f"Invalid VLAN ID: {vlan_str}"
+        
+        # We need to find the parent interface ID
+        # Check if parent is an etherchannel (Port-channel) or physical interface
+        parent_is_etherchannel = parent_hardware.lower().startswith('port-channel')
+        
+        # USE CACHED LOOKUPS for performance
+        if parent_is_etherchannel:
+            # Try to find it as an etherchannel (from cache)
+            success, parent_intf = self.get_cached_etherchannel(parent_hardware)
+        else:
+            # Try to find it as a physical interface (from cache)
+            success, parent_intf = self.get_cached_physical_interface(parent_hardware)
+        
+        if not success:
+            # Parent interface not found - skip
+            self.stats["subinterfaces_skipped"] += 1
+            return True, f"SKIPPED: Parent interface {parent_hardware} not found"
+        
+        parent_id = parent_intf.get('id') # pyright: ignore[reportOptionalMemberAccess]
+        parent_type = parent_intf.get('type', 'physicalinterface') # pyright: ignore[reportOptionalMemberAccess]
+        
+        # Get interface name - ensure it's valid
+        subintf_name = intf.get('name', '')
+        if not subintf_name:
+            subintf_name = f"vlan{vlan_id}"
+        
+        # Get MTU (cap at 9000 - FTD maximum)
+        mtu_value = intf.get('mtu', 1500)
+        if mtu_value > 9000:
+            mtu_value = 9000
+        
+        # Build the subinterface payload - FTD FDM API format
+        subintf_payload = {
+            "name": subintf_name,
+            "subIntfId": vlan_id,
+            "vlanId": vlan_id,
+            "type": "subinterface",
+            "enabled": intf.get('enabled', True),
+            "managementOnly": False,
+            "mtu": mtu_value,
+            "parentInterface": {
+                "id": parent_id,
+                "type": parent_type
+            }
+        }
+        
+        # Add description if provided
+        if intf.get('description'):
+            subintf_payload['description'] = str(intf['description'])
+        
+        # Add IPv4 if provided
+        if intf.get('ipv4'):
+            ipv4_data = intf['ipv4']
+            ip_address_obj = ipv4_data.get('ipAddress', {})
+            
+            ip_addr = None
+            netmask = None
+            
+            if isinstance(ip_address_obj, dict):
+                ip_addr = ip_address_obj.get('ipAddress')
+                netmask = ip_address_obj.get('netmask')
+            
+            if ip_addr and netmask:
+                subintf_payload['ipv4'] = {
+                    "ipType": "STATIC",
+                    "defaultRouteUsingDHCP": False,
+                    "ipAddress": {
+                        "ipAddress": ip_addr,
+                        "netmask": netmask,
+                        "type": "haipv4address"
+                    },
+                    "type": "interfaceipv4"
+                }
+        
+        # Print debug info
+        if self.debug:
+            print(f"\n      [DEBUG] Subinterface payload: {subintf_payload}")
+        
+        # DIFFERENT ENDPOINTS for physical vs etherchannel parents
+        if parent_is_etherchannel:
+            # EtherChannel parent: /devices/default/etherchannelinterfaces/{parentId}/subinterfaces
+            endpoint = f"{self.base_url}/devices/default/etherchannelinterfaces/{parent_id}/subinterfaces"
+        else:
+            # Physical interface parent: /devices/default/interfaces/{parentId}/subinterfaces
+            endpoint = f"{self.base_url}/devices/default/interfaces/{parent_id}/subinterfaces"
+        
+        if self.debug:
+            print(f"      [DEBUG] Endpoint: {endpoint}")
+            print(f"      [DEBUG] Parent type: {'EtherChannel' if parent_is_etherchannel else 'Physical'}")
+        
+        try:
+            response = self.session.post(endpoint, json=subintf_payload, timeout=30)
             
             if response.status_code in [200, 201]:
-                created = response.json()
+                created_obj = response.json()
                 self.stats["subinterfaces_created"] += 1
-                return True, created.get('id')
+                return True, created_obj.get("id")
             elif response.status_code == 422:
-                error_data = response.json()
-                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
-                
-                if 'already exists' in error_msg.lower():
-                    self.stats["subinterfaces_skipped"] += 1
-                    return True, f"SKIPPED: {error_msg}"
-                else:
+                try:
+                    error_data = response.json()
+                    error_messages = error_data.get('error', {}).get('messages', [])
+                    if error_messages:
+                        error_msg = error_messages[0].get('description', '')
+                    else:
+                        error_msg = str(error_data)
+                    
+                    if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
+                        self.stats["subinterfaces_skipped"] += 1
+                        return True, f"SKIPPED: {error_msg}"
+                    
                     self.stats["subinterfaces_failed"] += 1
-                    return False, error_msg
+                    return False, f"422: {error_msg}"
+                except Exception:
+                    self.stats["subinterfaces_failed"] += 1
+                    return False, f"422: {response.text[:300]}"
             else:
                 self.stats["subinterfaces_failed"] += 1
-                return False, f"HTTP {response.status_code}: {response.text}"
+                return False, f"HTTP {response.status_code}: {response.text[:300]}"
                 
         except requests.exceptions.RequestException as e:
             self.stats["subinterfaces_failed"] += 1
             return False, str(e)
+    
+    def _get_etherchannel_by_hardware(self, hardware_name: str) -> Tuple[bool, Optional[Dict]]:
+        """
+        Get an etherchannel interface by hardware name.
         
+        Args:
+            hardware_name: Hardware name (e.g., 'Port-channel1')
+            
+        Returns:
+            Tuple of (success: bool, interface dict or error message)
+        """
+        endpoint = f"{self.base_url}/devices/default/etherchannelinterfaces"
+        search_name = hardware_name.lower().strip()
+        
+        try:
+            response = self.session.get(endpoint, timeout=30)
+            
+            if response.status_code == 200:
+                data = response.json()
+                interfaces = data.get('items', [])
+                
+                for intf in interfaces:
+                    intf_hardware = intf.get('hardwareName', '').lower().strip()
+                    if intf_hardware == search_name:
+                        return True, intf
+                
+                return False, f"EtherChannel {hardware_name} not found" # pyright: ignore[reportReturnType]
+            else:
+                return False, f"HTTP {response.status_code}" # pyright: ignore[reportReturnType]
+                
+        except requests.exceptions.RequestException as e:
+            return False, str(e) # pyright: ignore[reportReturnType]
+    
     def create_etherchannel(self, intf: Dict) -> Tuple[bool, Optional[str]]:
         """
-        Create an EtherChannel interface in FTD.
+        Create an EtherChannel (port-channel) interface in FTD.
         
         Args:
             intf: Dictionary containing etherchannel data
             
         Returns:
-            Tuple of (success: bool, interface_id or error message)
+            Tuple of (success: bool, object_id: str or error message)
         """
         endpoint = f"{self.base_url}/devices/default/etherchannelinterfaces"
         
-        # Need to resolve member interface IDs
+        # Cap MTU at 9000 if present
+        if 'mtu' in intf and intf['mtu'] is not None:
+            if intf['mtu'] > 9000:
+                intf['mtu'] = 9000
+        
+        # For etherchannels, we need to resolve member interface IDs
+        # Also get the speed from the first member interface
+        member_speed = None
         if 'memberInterfaces' in intf:
             resolved_members = []
             for member in intf['memberInterfaces']:
                 hardware_name = member.get('hardwareName')
-                if hardware_name:
-                    success, existing = self.get_physical_interface(hardware_name)
-                    if success:
-                        resolved_members.append({
-                            'id': existing.get('id'), # pyright: ignore[reportOptionalMemberAccess]
-                            'type': 'physicalinterface'
-                        })
+                success, existing = self.get_physical_interface(hardware_name)
+                if success:
+                    resolved_members.append({
+                        "id": existing.get('id'), # pyright: ignore[reportOptionalMemberAccess]
+                        "type": "physicalinterface"
+                    })
+                    # Get speed from first member interface
+                    if member_speed is None:
+                        member_speed = existing.get('speed') # pyright: ignore[reportOptionalMemberAccess]
+                else:
+                    print(f"    Warning: Could not resolve member {hardware_name}")
             intf['memberInterfaces'] = resolved_members
+        
+        # Set speed to match member interfaces (avoid AUTO speed error)
+        # If member speed was found, use it; otherwise default to TEN_GIGABITS_PER_SEC
+        if member_speed and member_speed != 'AUTO':
+            intf['speed'] = member_speed
+        elif 'speed' not in intf or intf.get('speed') == 'AUTO':
+            # Default to 10Gbps if no speed found or if AUTO was specified
+            intf['speed'] = 'TEN_GIGABITS_PER_SEC'
+        
+        # Set duplex to FULL
+        intf['duplex'] = 'FULL'
         
         try:
             response = self.session.post(endpoint, json=intf, timeout=30)
             
             if response.status_code in [200, 201]:
-                created = response.json()
+                created_obj = response.json()
                 self.stats["etherchannels_created"] += 1
-                return True, created.get('id')
+                return True, created_obj.get("id")
             elif response.status_code == 422:
                 error_data = response.json()
                 error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
                 
-                if 'already exists' in error_msg.lower():
+                if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
                     self.stats["etherchannels_skipped"] += 1
                     return True, f"SKIPPED: {error_msg}"
                 else:
@@ -714,36 +1074,42 @@ class FTDAPIClient:
                     return False, error_msg
             else:
                 self.stats["etherchannels_failed"] += 1
-                return False, f"HTTP {response.status_code}: {response.text}"
+                error_msg = response.text
+                return False, error_msg
                 
         except requests.exceptions.RequestException as e:
             self.stats["etherchannels_failed"] += 1
             return False, str(e)
-        
+    
     def create_bridge_group(self, intf: Dict) -> Tuple[bool, Optional[str]]:
         """
-        Create a bridge group interface in FTD.
+        Create a Bridge Group interface in FTD.
         
         Args:
             intf: Dictionary containing bridge group data
             
         Returns:
-            Tuple of (success: bool, interface_id or error message)
+            Tuple of (success: bool, object_id: str or error message)
         """
         endpoint = f"{self.base_url}/devices/default/bridgegroupinterfaces"
+        
+        # Cap MTU at 9000 if present
+        if 'mtu' in intf and intf['mtu'] is not None:
+            if intf['mtu'] > 9000:
+                intf['mtu'] = 9000
         
         try:
             response = self.session.post(endpoint, json=intf, timeout=30)
             
             if response.status_code in [200, 201]:
-                created = response.json()
+                created_obj = response.json()
                 self.stats["bridge_groups_created"] += 1
-                return True, created.get('id')
+                return True, created_obj.get("id")
             elif response.status_code == 422:
                 error_data = response.json()
                 error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
                 
-                if 'already exists' in error_msg.lower():
+                if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
                     self.stats["bridge_groups_skipped"] += 1
                     return True, f"SKIPPED: {error_msg}"
                 else:
@@ -751,87 +1117,12 @@ class FTDAPIClient:
                     return False, error_msg
             else:
                 self.stats["bridge_groups_failed"] += 1
-                return False, f"HTTP {response.status_code}: {response.text}"
+                error_msg = response.text
+                return False, error_msg
                 
         except requests.exceptions.RequestException as e:
             self.stats["bridge_groups_failed"] += 1
             return False, str(e)
-    
-    def create_static_route(self, route: Dict) -> Tuple[bool, Optional[str]]:
-        """
-        Create a static route in FTD.
-        
-        Args:
-            route: Dictionary containing static route data
-            
-        Returns:
-            Tuple of (success: bool, object_id: str or error message)
-        """
-        endpoint = f"{self.base_url}/devices/default/routing/staticrouteentries"
-        
-        try:
-            response = self.session.post(endpoint, json=route, timeout=30)
-            
-            if response.status_code in [200, 201]:
-                created_obj = response.json()
-                self.stats["routes_created"] += 1
-                return True, created_obj.get("id")
-            elif response.status_code == 422:
-                error_data = response.json()
-                error_msg = self._extract_error_message(error_data)
-                
-                if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
-                    self.stats["routes_skipped"] += 1
-                    return True, f"SKIPPED: {error_msg}"
-                else:
-                    self.stats["routes_failed"] += 1
-                    return False, f"HTTP {response.status_code}: {error_msg}"
-            else:
-                self.stats["routes_failed"] += 1
-                error_msg = self._extract_error_message(response)
-                return False, f"HTTP {response.status_code}: {error_msg}"
-                
-        except requests.exceptions.RequestException as e:
-            self.stats["routes_failed"] += 1
-            return False, f"Request error: {str(e)}"
-    
-    def create_access_rule(self, rule: Dict) -> Tuple[bool, Optional[str]]:
-        """
-        Create an access rule (firewall policy) in FTD.
-        
-        Args:
-            rule: Dictionary containing access rule data
-            
-        Returns:
-            Tuple of (success: bool, object_id: str or error message)
-        """
-        endpoint = f"{self.base_url}/policy/accesspolicies/default/accessrules"
-        
-        try:
-            response = self.session.post(endpoint, json=rule, timeout=30)
-            
-            if response.status_code in [200, 201]:
-                created_obj = response.json()
-                self.stats["rules_created"] += 1
-                return True, created_obj.get("id")
-            elif response.status_code == 422:
-                error_data = response.json()
-                error_msg = self._extract_error_message(error_data)
-                
-                if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
-                    self.stats["rules_skipped"] += 1
-                    return True, f"SKIPPED: {error_msg}"
-                else:
-                    self.stats["rules_failed"] += 1
-                    return False, f"HTTP {response.status_code}: {error_msg}"
-            else:
-                self.stats["rules_failed"] += 1
-                error_msg = self._extract_error_message(response)
-                return False, f"HTTP {response.status_code}: {error_msg}"
-                
-        except requests.exceptions.RequestException as e:
-            self.stats["rules_failed"] += 1
-            return False, f"Request error: {str(e)}"
     
     def deploy_changes(self) -> bool:
         """
@@ -853,17 +1144,17 @@ class FTDAPIClient:
             response = self.session.post(endpoint, json={}, timeout=30)
             
             if response.status_code in [200, 201, 202]:
-                print("[OK] Deployment initiated successfully")
+                print("âœ“ Deployment initiated successfully")
                 print("  Note: Deployment may take several minutes to complete")
                 print("  Check FDM web interface for deployment status")
                 return True
             else:
-                print(f"[ERROR] Deployment failed: {response.status_code}")
+                print(f"FAIL Deployment failed: {response.status_code}")
                 print(f"  Response: {response.text}")
                 return False
                 
         except requests.exceptions.RequestException as e:
-            print(f"[ERROR] Deployment error: {e}")
+            print(f"FAIL Deployment error: {e}")
             return False
     
     def print_statistics(self):
@@ -873,6 +1164,22 @@ class FTDAPIClient:
         print(f"\n{'='*60}")
         print("IMPORT STATISTICS")
         print(f"{'='*60}")
+        print(f"\nPhysical Interfaces:")
+        print(f"  Updated: {self.stats['physical_interfaces_updated']}")
+        print(f"  Skipped: {self.stats['physical_interfaces_skipped']}")
+        print(f"  Failed:  {self.stats['physical_interfaces_failed']}")
+        print(f"\nEtherChannels:")
+        print(f"  Created: {self.stats['etherchannels_created']}")
+        print(f"  Skipped: {self.stats['etherchannels_skipped']} (already exist)")
+        print(f"  Failed:  {self.stats['etherchannels_failed']}")
+        print(f"\nBridge Groups:")
+        print(f"  Created: {self.stats['bridge_groups_created']}")
+        print(f"  Skipped: {self.stats['bridge_groups_skipped']} (already exist)")
+        print(f"  Failed:  {self.stats['bridge_groups_failed']}")
+        print(f"\nSubinterfaces:")
+        print(f"  Created: {self.stats['subinterfaces_created']}")
+        print(f"  Skipped: {self.stats['subinterfaces_skipped']} (already exist)")
+        print(f"  Failed:  {self.stats['subinterfaces_failed']}")
         print(f"\nAddress Objects:")
         print(f"  Created: {self.stats['address_objects_created']}")
         print(f"  Skipped: {self.stats['address_objects_skipped']} (already exist)")
@@ -889,22 +1196,6 @@ class FTDAPIClient:
         print(f"  Created: {self.stats['port_groups_created']}")
         print(f"  Skipped: {self.stats['port_groups_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['port_groups_failed']}")
-        print(f"\nPhysical Interfaces:")
-        print(f"  Updated: {self.stats['physical_interfaces_updated']}")
-        print(f"  Skipped: {self.stats['physical_interfaces_skipped']}")
-        print(f"  Failed:  {self.stats['physical_interfaces_failed']}")
-        print(f"\nEtherChannels:")
-        print(f"  Created: {self.stats['etherchannels_created']}")
-        print(f"  Skipped: {self.stats['etherchannels_skipped']}")
-        print(f"  Failed:  {self.stats['etherchannels_failed']}")
-        print(f"\nBridge Groups:")
-        print(f"  Created: {self.stats['bridge_groups_created']}")
-        print(f"  Skipped: {self.stats['bridge_groups_skipped']}")
-        print(f"  Failed:  {self.stats['bridge_groups_failed']}")
-        print(f"\nSubinterfaces:")
-        print(f"  Created: {self.stats['subinterfaces_created']}")
-        print(f"  Skipped: {self.stats['subinterfaces_skipped']}")
-        print(f"  Failed:  {self.stats['subinterfaces_failed']}")
         print(f"\nStatic Routes:")
         print(f"  Created: {self.stats['routes_created']}")
         print(f"  Skipped: {self.stats['routes_skipped']} (already exist)")
@@ -931,10 +1222,10 @@ def load_json_file(filename: str) -> Optional[List[Dict]]:
             data = json.load(f)
             return data
     except FileNotFoundError:
-        print(f"[ERROR] File not found: {filename}")
+        print(f"FAIL File not found: {filename}")
         return None
     except json.JSONDecodeError as e:
-        print(f"[ERROR] Invalid JSON in {filename}: {e}")
+        print(f"FAIL Invalid JSON in {filename}: {e}")
         return None
 
 
@@ -969,11 +1260,11 @@ def import_address_objects(client: FTDAPIClient, filename: str) -> bool:
         success, result = client.create_network_object(obj)
         if success:
             if "SKIPPED" in str(result):
-                print("(already exists)")
+                print("SKIP (already exists)")
             else:
-                print("[OK]")
+                print("âœ“")
         else:
-            print(f"[ERROR]")
+            print(f"FAIL")
             print(f"      Error: {result}")
             all_success = False
         
@@ -983,14 +1274,13 @@ def import_address_objects(client: FTDAPIClient, filename: str) -> bool:
     return all_success
 
 
-def import_address_groups(client: FTDAPIClient, filename: str, debug: bool = False) -> bool:
+def import_address_groups(client: FTDAPIClient, filename: str) -> bool:
     """
     Import address groups from JSON file to FTD.
     
     Args:
         client: Authenticated FTD API client
         filename: Path to address groups JSON file
-        debug: If True, print the cleaned JSON before sending to API
         
     Returns:
         True if all imports successful, False if any failed
@@ -1011,28 +1301,16 @@ def import_address_groups(client: FTDAPIClient, filename: str, debug: bool = Fal
     for i, group in enumerate(groups, 1):
         name = group.get("name", "Unknown")
         
-        # Clean the group object - remove FortiGate-specific fields like uuid
-        # and ensure member objects only have name and type
-        cleaned_group = clean_group_object(group, group_type="network")
-        
-        # Debug: show what we're sending to the API
-        if debug:
-            print(f"\n  [DEBUG] Cleaned group JSON for '{name}':")
-            print(f"    {json.dumps(cleaned_group, indent=2)}")
+        # Clean the group object - ensure member objects only have name and type
+        cleaned_group = clean_group_object(group)
         
         print(f"  [{i}/{len(groups)}] Creating: {name}...", end=" ")
         
         success, result = client.create_network_group(cleaned_group)
         if success:
-            if "SKIPPED" in str(result):
-                print("(already exists)")
-            else:
-                print("[OK]")
+            print("âœ“")
         else:
-            print(f"[ERROR]")
-            print(f"      Error: {result}")
-            # On error, show what we tried to send
-            print(f"      Sent: {json.dumps(cleaned_group)}")
+            print(f"FAIL {result}")
             all_success = False
         
         time.sleep(0.2)
@@ -1040,94 +1318,45 @@ def import_address_groups(client: FTDAPIClient, filename: str, debug: bool = Fal
     return all_success
 
 
-def clean_group_object(group: Dict, group_type: str = "network") -> Dict:
+def clean_group_object(group: Dict) -> Dict:
     """
-    Clean a group object to ensure only FTD-compatible fields are included.
+    Clean a group object to ensure member references only have name and type.
     
-    FTD groups reference member objects by name only. This function removes
-    any FortiGate-specific fields like UUIDs, colors, comments, and ensures
-    member objects only have name and type.
+    FTD groups reference member objects by name only. Remove any UUIDs, IDs,
+    versions, or other fields that might cause "cannot find entity" errors.
     
     Args:
-        group: Group object dictionary from the converted JSON
-        group_type: Either "network" for address groups or "port" for service groups
+        group: Group object dictionary
         
     Returns:
-        Cleaned group object with only FTD-compatible fields
+        Cleaned group object
     """
-    # Start fresh with only the fields FTD needs
-    cleaned = {}
+    cleaned = group.copy()
     
-    # Copy only the essential fields for FTD
-    # Name is required
-    if "name" in group:
-        cleaned["name"] = group["name"]
-    
-    # isSystemDefined should be False for custom objects
-    cleaned["isSystemDefined"] = group.get("isSystemDefined", False)
-    
-    # Type is required
-    if group_type == "network":
-        cleaned["type"] = "networkobjectgroup"
-    else:
-        cleaned["type"] = "portobjectgroup"
-    
-    # Clean the member objects - keep ONLY name and type
-    if "objects" in group and isinstance(group["objects"], list):
+    # Clean the member objects in the "objects" array
+    if "objects" in cleaned and isinstance(cleaned["objects"], list):
         cleaned_members = []
-        for member in group["objects"]:
+        for member in cleaned["objects"]:
             if isinstance(member, dict):
-                member_name = member.get("name", "")
-                
-                # Determine the correct member type
-                if group_type == "network":
-                    member_type = "networkobject"
-                else:
-                    # For port groups, determine type from name or existing type
-                    # Check for _TCP or _UDP anywhere in name (handles _TCP_1, _UDP_2, etc.)
-                    if '_UDP' in str(member_name):
-                        member_type = "udpportobject"
-                    elif '_TCP' in str(member_name):
-                        member_type = "tcpportobject"
-                    else:
-                        # Try to preserve existing type, default to TCP
-                        member_type = member.get("type", "tcpportobject")
-                
-                # Keep ONLY name and type - remove everything else (uuid, id, version, etc.)
+                # Keep ONLY name and type - remove everything else
                 cleaned_member = {
-                    "name": member_name,
-                    "type": member_type
+                    "name": member.get("name"),
+                    "type": member.get("type", "networkobject")
                 }
                 cleaned_members.append(cleaned_member)
-            elif isinstance(member, str):
+            else:
                 # If member is just a string, convert to proper format
-                if group_type == "network":
-                    cleaned_members.append({
-                        "name": member,
-                        "type": "networkobject"
-                    })
-                else:
-                    # Determine type from name
-                    if '_UDP' in member:
-                        member_type = "udpportobject"
-                    else:
-                        member_type = "tcpportobject"
-                    cleaned_members.append({
-                        "name": member,
-                        "type": member_type
-                    })
+                cleaned_members.append({
+                    "name": str(member),
+                    "type": "networkobject"
+                })
         
         cleaned["objects"] = cleaned_members
-    else:
-        cleaned["objects"] = []
     
-    # Note: We intentionally DO NOT copy these FortiGate-specific fields:
-    # - uuid (FortiGate's internal identifier)
-    # - id (FortiGate's internal identifier)  
-    # - version (FortiGate versioning)
-    # - color (FortiGate UI color coding)
-    # - comment (could be added as description if needed)
-    # - member (FortiGate format - we use "objects" instead)
+    # Remove any UUID, id, or version fields from the group itself that came from FortiGate
+    cleaned.pop("uuid", None)
+    cleaned.pop("id", None) 
+    cleaned.pop("version", None)
     
     return cleaned
 
@@ -1163,9 +1392,9 @@ def import_service_objects(client: FTDAPIClient, filename: str) -> bool:
         
         success, result = client.create_port_object(obj)
         if success:
-            print("[OK]")
+            print("âœ“")
         else:
-            print(f"[ERROR] {result}")
+            print(f"FAIL {result}")
             all_success = False
         
         time.sleep(0.2)
@@ -1173,14 +1402,13 @@ def import_service_objects(client: FTDAPIClient, filename: str) -> bool:
     return all_success
 
 
-def import_service_groups(client: FTDAPIClient, filename: str, debug: bool = False) -> bool:
+def import_service_groups(client: FTDAPIClient, filename: str) -> bool:
     """
     Import service port groups from JSON file to FTD.
     
     Args:
         client: Authenticated FTD API client
         filename: Path to service groups JSON file
-        debug: If True, print the cleaned JSON before sending to API
         
     Returns:
         True if all imports successful, False if any failed
@@ -1201,58 +1429,45 @@ def import_service_groups(client: FTDAPIClient, filename: str, debug: bool = Fal
     for i, group in enumerate(groups, 1):
         name = group.get("name", "Unknown")
         
-        # Clean the group object - remove FortiGate-specific fields like uuid
-        # and ensure member objects only have name and type
-        cleaned_group = clean_group_object(group, group_type="port")
-        
-        # Debug: show what we're sending to the API
-        if debug:
-            print(f"\n  [DEBUG] Cleaned group JSON for '{name}':")
-            print(f"    {json.dumps(cleaned_group, indent=2)}")
+        # Clean the group object - ensure member objects only have name and type
+        cleaned_group = clean_group_object(group)
         
         print(f"  [{i}/{len(groups)}] Creating: {name}...", end=" ")
         
         success, result = client.create_port_group(cleaned_group)
         if success:
-            if "SKIPPED" in str(result):
-                print("(already exists)")
-            else:
-                print("[OK]")
+            print("âœ“")
         else:
-            print(f"[ERROR]")
-            print(f"      Error: {result}")
-            # On error, show what we tried to send
-            print(f"      Sent: {json.dumps(cleaned_group)}")
+            print(f"FAIL {result}")
             all_success = False
         
         time.sleep(0.2)
     
     return all_success
 
+
 def import_physical_interfaces(client: FTDAPIClient, filename: str) -> bool:
     """
-    Import/update physical interfaces from JSON file to FTD.
+    Update existing physical interfaces using PUT if they exist on the device.
+    Physical interfaces cannot be created via POST - they are pre-provisioned.
+    This function uses the pre-populated _physical_interface_cache to detect existing interfaces,
+    merges converted settings (name, description, IP, MTU, etc.) onto the real interface object,
+    and sends a PUT request.
     
-    Physical interfaces already exist in FTD - this updates them with
-    name, description, IP address configuration.
-    
-    NOTE: Interfaces that don't exist on the FTD (wrong model, disabled, etc.)
-    will be skipped with a warning instead of failing.
-    
-    NOTE: Existing hardware settings (speed, duplex, FEC, auto-negotiation)
-    are preserved and not overwritten.
+    NOTE: Interfaces not found on the FTD (wrong model, disabled ports, etc.) will be skipped.
+    NOTE: Hardware settings (speed, duplex, FEC, auto-neg) are preserved.
     
     Args:
         client: Authenticated FTD API client
         filename: Path to physical interfaces JSON file
         
     Returns:
-        True if all imports successful, False if any failed
+        True if all attempted updates were successful (skips don't count as failure)
     """
     print(f"\n{'-'*60}")
     print(f"Updating Physical Interfaces from {filename}")
     print(f"{'-'*60}")
-    print("  NOTE: Existing hardware settings (speed, duplex, FEC) will be preserved")
+    print("  NOTE: Auto-negotiation=ENABLED, Duplex=FULL will be set")
     print("  NOTE: Interfaces not found on FTD will be skipped")
     
     interfaces = load_json_file(filename)
@@ -1263,6 +1478,9 @@ def import_physical_interfaces(client: FTDAPIClient, filename: str) -> bool:
         print("  No physical interfaces to update")
         return True
     
+    # Cache physical interfaces once so we can do fast update detection by hardwareName
+    client.populate_physical_interface_cache()
+    
     all_success = True
     skipped_count = 0
     updated_count = 0
@@ -1271,31 +1489,71 @@ def import_physical_interfaces(client: FTDAPIClient, filename: str) -> bool:
     for i, intf in enumerate(interfaces, 1):
         name = intf.get("name", "Unknown")
         hardware = intf.get("hardwareName", "Unknown")
-        print(f"  [{i}/{len(interfaces)}] Updating: {name} ({hardware})...", end=" ")
-        
-        success, result = client.update_physical_interface(intf)
-        if success:
-            if "SKIPPED" in str(result):
-                print(f"[SKIP] (not found on FTD)")
-                skipped_count += 1
-            else:
-                print("[OK]")
+        print(f"  [{i}/{len(interfaces)}] Processing: {name} ({hardware})...", end=" ")
+
+        if not hardware or hardware not in client._physical_interface_cache:
+            print("[SKIP] (not present on this FTD model)")
+            skipped_count += 1
+            continue
+
+        # Start with full existing object from cache (preserves id, version, read-only fields)
+        existing = client._physical_interface_cache[hardware].copy()
+
+        # Merge fields we want to change
+        update_keys = ["name", "description", "mtu", "enabled", "managementOnly", "mode", "monitorInterface"]
+        for key in update_keys:
+            if key in intf:
+                existing[key] = intf[key]
+
+        # Full replace IPv4/IPv6 blocks if present
+        if "ipv4" in intf:
+            existing["ipv4"] = intf["ipv4"]
+        if "ipv6" in intf:
+            existing["ipv6"] = intf["ipv6"]
+
+        # PUT update
+        intf_id = existing["id"]
+        url = f"{client.base_url}/devices/default/interfaces/physicalinterfaces/{intf_id}"
+
+        try:
+            response = client.session.put(url, json=existing)
+            if response.status_code in (200, 202):
+                updated_obj = response.json()
+                # Refresh cache with latest version
+                client._physical_interface_cache[hardware] = updated_obj
+                new_name = updated_obj.get("name", name)
+                print(f"[OK] -> {new_name}")
                 updated_count += 1
-        else:
-            print(f"[FAIL] {result}")
+                client.stats["physical_interfaces_updated"] += 1
+            else:
+                print(f"[FAIL] {response.status_code}")
+                if client.debug:
+                    print(f"       {response.text}")
+                failed_count += 1
+                all_success = False
+        except Exception as e:
+            print(f"[FAIL] Exception: {e}")
             failed_count += 1
             all_success = False
-        
+
         time.sleep(0.2)
     
     # Print summary
-    print(f"\n  Summary: {updated_count} updated, {skipped_count} skipped, {failed_count} failed")
+    print(f"\n  Summary: {updated_count} updated, {skipped_count} skipped (not present), {failed_count} failed")
     
     return all_success
+
 
 def import_etherchannels(client: FTDAPIClient, filename: str) -> bool:
     """
     Import EtherChannel interfaces from JSON file to FTD.
+    
+    Args:
+        client: Authenticated FTD API client
+        filename: Path to etherchannels JSON file
+        
+    Returns:
+        True if all imports successful, False if any failed
     """
     print(f"\n{'-'*60}")
     print(f"Creating EtherChannels from {filename}")
@@ -1318,20 +1576,31 @@ def import_etherchannels(client: FTDAPIClient, filename: str) -> bool:
         success, result = client.create_etherchannel(intf)
         if success:
             if "SKIPPED" in str(result):
-                print("[SKIP] (already exists)")
+                if "already exists" in str(result).lower():
+                    print("SKIP (already exists)")
+                else:
+                    print(f"SKIP ({result.split('SKIPPED:')[-1].strip()[:50]})") # pyright: ignore[reportOptionalMemberAccess]
             else:
-                print("[OK]")
+                print("OK")
         else:
-            print(f"[FAIL] {result}")
+            print(f"FAIL {result}")
             all_success = False
         
         time.sleep(0.2)
     
     return all_success
 
+
 def import_bridge_groups(client: FTDAPIClient, filename: str) -> bool:
     """
-    Import bridge group interfaces from JSON file to FTD.
+    Import Bridge Group interfaces from JSON file to FTD.
+    
+    Args:
+        client: Authenticated FTD API client
+        filename: Path to bridge groups JSON file
+        
+    Returns:
+        True if all imports successful, False if any failed
     """
     print(f"\n{'-'*60}")
     print(f"Creating Bridge Groups from {filename}")
@@ -1353,20 +1622,31 @@ def import_bridge_groups(client: FTDAPIClient, filename: str) -> bool:
         success, result = client.create_bridge_group(intf)
         if success:
             if "SKIPPED" in str(result):
-                print("[SKIP] (already exists)")
+                if "already exists" in str(result).lower():
+                    print("SKIP (already exists)")
+                else:
+                    print(f"SKIP ({result.split('SKIPPED:')[-1].strip()[:50]})") # pyright: ignore[reportOptionalMemberAccess]
             else:
-                print("[OK]")
+                print("OK")
         else:
-            print(f"[FAIL] {result}")
+            print(f"FAIL {result}")
             all_success = False
         
         time.sleep(0.2)
     
     return all_success
 
+
 def import_subinterfaces(client: FTDAPIClient, filename: str) -> bool:
     """
-    Import subinterfaces from JSON file to FTD.
+    Import subinterfaces (VLANs) from JSON file to FTD.
+    
+    Args:
+        client: Authenticated FTD API client
+        filename: Path to subinterfaces JSON file
+        
+    Returns:
+        True if all imports successful, False if any failed
     """
     print(f"\n{'-'*60}")
     print(f"Creating Subinterfaces from {filename}")
@@ -1380,6 +1660,10 @@ def import_subinterfaces(client: FTDAPIClient, filename: str) -> bool:
         print("  No subinterfaces to create")
         return True
     
+    # PREFETCH AND CACHE all interface references ONCE
+    # This avoids repeated API calls when looking up parent interfaces
+    client.prefetch_interface_cache()
+    
     all_success = True
     for i, intf in enumerate(interfaces, 1):
         name = intf.get("name", "Unknown")
@@ -1390,16 +1674,23 @@ def import_subinterfaces(client: FTDAPIClient, filename: str) -> bool:
         success, result = client.create_subinterface(intf)
         if success:
             if "SKIPPED" in str(result):
-                print("[SKIP] (already exists)")
+                # Extract the reason from the result
+                if "Parent interface" in str(result):
+                    print("SKIP (parent not found)")
+                elif "already exists" in str(result).lower():
+                    print("SKIP (already exists)")
+                else:
+                    print(f"SKIP ({result.split('SKIPPED:')[-1].strip()[:50]})") # pyright: ignore[reportOptionalMemberAccess]
             else:
-                print("[OK]")
+                print("OK")
         else:
-            print(f"[FAIL] {result}")
+            print(f"FAIL {result}")
             all_success = False
         
         time.sleep(0.2)
     
     return all_success
+
 
 def import_static_routes(client: FTDAPIClient, filename: str) -> bool:
     """
@@ -1431,9 +1722,9 @@ def import_static_routes(client: FTDAPIClient, filename: str) -> bool:
         
         success, result = client.create_static_route(route)
         if success:
-            print("[OK]")
+            print("âœ“")
         else:
-            print(f"[ERROR] {result}")
+            print(f"FAIL {result}")
             all_success = False
         
         time.sleep(0.2)
@@ -1472,9 +1763,9 @@ def import_access_rules(client: FTDAPIClient, filename: str) -> bool:
         
         success, result = client.create_access_rule(rule)
         if success:
-            print("[OK]")
+            print("âœ“")
         else:
-            print(f"[ERROR] {result}")
+            print(f"FAIL {result}")
             all_success = False
         
         time.sleep(0.2)
@@ -1520,8 +1811,18 @@ Examples:
                        help='Automatically deploy changes after import')
     parser.add_argument('--skip-verify', action='store_true', default=True,
                        help='Skip SSL certificate verification (default: True)')
+    parser.add_argument('--debug', action='store_true',
+                       help='Enable debug output (shows API payloads)')
     
     # Selective import options - allows importing only specific object types
+    parser.add_argument('--only-physical-interfaces', action='store_true',
+                       help='Update only physical interfaces')
+    parser.add_argument('--only-etherchannels', action='store_true',
+                       help='Create only etherchannels')
+    parser.add_argument('--only-bridge-groups', action='store_true',
+                       help='Create only bridge groups')
+    parser.add_argument('--only-subinterfaces', action='store_true',
+                       help='Create only subinterfaces')
     parser.add_argument('--only-address-objects', action='store_true',
                        help='Import only address objects')
     parser.add_argument('--only-address-groups', action='store_true',
@@ -1530,14 +1831,6 @@ Examples:
                        help='Import only service objects')
     parser.add_argument('--only-service-groups', action='store_true',
                        help='Import only service groups')
-    parser.add_argument('--only-physical-interfaces', action='store_true',
-                       help='Import only physical interface updates')
-    parser.add_argument('--only-etherchannels', action='store_true',
-                       help='Import only etherchannels')
-    parser.add_argument('--only-bridge-groups', action='store_true',
-                       help='Import only bridge groups')
-    parser.add_argument('--only-subinterfaces', action='store_true',
-                       help='Import only subinterfaces')
     parser.add_argument('--only-routes', action='store_true',
                        help='Import only static routes')
     parser.add_argument('--only-rules', action='store_true',
@@ -1548,7 +1841,8 @@ Examples:
                        help='Import a specific JSON file (overrides --base and --only flags)')
     parser.add_argument('--type',
                        choices=['address-objects', 'address-groups', 'service-objects', 
-                               'service-groups', 'routes', 'rules'],
+                               'service-groups', 'routes', 'rules', 
+                               'physical-interfaces', 'etherchannels', 'bridge-groups', 'subinterfaces'],
                        help='Type of objects in the file (required with --file)')
     
     args = parser.parse_args()
@@ -1569,10 +1863,18 @@ Examples:
         verify_ssl=not args.skip_verify
     )
     
+    # Set debug mode if requested
+    if args.debug:
+        client.debug = True
+        print("[DEBUG MODE ENABLED]")
+    
     # Authenticate
     if not client.authenticate():
-        print("\n[ERROR] Authentication failed. Exiting.")
+        print("\nFAIL Authentication failed. Exiting.")
         return 1
+    
+    # Populate required caches before importing interfaces
+    client.populate_physical_interface_cache()
     
     # Determine what to import
     print(f"\n{'='*60}")
@@ -1607,7 +1909,7 @@ Examples:
             import_access_rules(client, args.file)
     
     # Check if any --only flags are set
-    elif any([args.only_physical_interfaces, args.only_etherchannels, 
+    elif any([args.only_physical_interfaces, args.only_etherchannels,
               args.only_bridge_groups, args.only_subinterfaces,
               args.only_address_objects, args.only_address_groups, 
               args.only_service_objects, args.only_service_groups,
@@ -1635,7 +1937,7 @@ Examples:
             print("  - Subinterfaces")
             import_subinterfaces(client, f"{args.base}_subinterfaces.json")
             imported_any = True
-
+        
         if args.only_address_objects:
             print("  - Address Objects")
             import_address_objects(client, f"{args.base}_address_objects.json")
@@ -1667,7 +1969,7 @@ Examples:
             imported_any = True
         
         if not imported_any:
-            print("\n[ERROR] No import flags specified. Nothing to import.")
+            print("\nFAIL No import flags specified. Nothing to import.")
             return 1
     
     # Default: Import everything in order
@@ -1677,41 +1979,41 @@ Examples:
         print("  2. EtherChannels (create)")
         print("  3. Bridge Groups (create)")
         print("  4. Subinterfaces (create)")
-        print("  1. Address Objects")
-        print("  2. Address Groups")
-        print("  3. Service Objects")
-        print("  4. Service Groups")
-        print("  5. Static Routes")
-        print("  6. Access Rules")
+        print("  5. Address Objects")
+        print("  6. Address Groups")
+        print("  7. Service Objects")
+        print("  8. Service Groups")
+        print("  9. Static Routes")
+        print("  10. Access Rules")
         
-        # Step 5: Import physical interface updates
+        # Step 1: Update physical interfaces
         import_physical_interfaces(client, f"{args.base}_physical_interfaces.json")
         
-        # Step 6: Import etherchannels
+        # Step 2: Create etherchannels
         import_etherchannels(client, f"{args.base}_etherchannels.json")
         
-        # Step 7: Import bridge groups
+        # Step 3: Create bridge groups
         import_bridge_groups(client, f"{args.base}_bridge_groups.json")
         
-        # Step 8: Import subinterfaces
+        # Step 4: Create subinterfaces
         import_subinterfaces(client, f"{args.base}_subinterfaces.json")
-
-        # Step 1: Import address objects
+        
+        # Step 5: Import address objects
         import_address_objects(client, f"{args.base}_address_objects.json")
         
-        # Step 2: Import address groups
+        # Step 6: Import address groups
         import_address_groups(client, f"{args.base}_address_groups.json")
         
-        # Step 3: Import service objects
+        # Step 7: Import service objects
         import_service_objects(client, f"{args.base}_service_objects.json")
         
-        # Step 4: Import service groups
+        # Step 8: Import service groups
         import_service_groups(client, f"{args.base}_service_groups.json")
-
-        # Step 5: Import static routes
+        
+        # Step 9: Import static routes
         import_static_routes(client, f"{args.base}_static_routes.json")
         
-        # Step 6: Import access rules
+        # Step 10: Import access rules
         import_access_rules(client, f"{args.base}_access_rules.json")
     
     # Print statistics

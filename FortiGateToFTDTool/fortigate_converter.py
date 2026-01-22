@@ -187,12 +187,30 @@ Examples:
   python fortigate_converter.py fortigate.yaml
   python fortigate_converter.py fortigate.yaml -o my_config
   python fortigate_converter.py fortigate.yaml --pretty
-  python fortigate_converter.py C:\\configs\\fortigate.yaml -o C:\\output\\ftd --pretty
+  python fortigate_converter.py fortigate.yaml --target-model ftd-1010
+  python fortigate_converter.py fortigate.yaml --target-model ftd-3120 --pretty
+  python fortigate_converter.py fortigate.yaml --list-models
+
+Supported FTD Models:
+  ftd-1010   - Cisco Firepower 1010 (8 ports, no HA)
+  ftd-1120   - Cisco Firepower 1120 (12 ports)
+  ftd-1140   - Cisco Firepower 1140 (12 ports)
+  ftd-2110   - Cisco Firepower 2110 (12 ports)
+  ftd-2120   - Cisco Firepower 2120 (12 ports)
+  ftd-2130   - Cisco Firepower 2130 (16 ports)
+  ftd-2140   - Cisco Firepower 2140 (16 ports)
+  ftd-3105   - Cisco Secure Firewall 3105 (8 ports, HA on Eth1/2)
+  ftd-3110   - Cisco Secure Firewall 3110 (16 ports, HA on Eth1/2)
+  ftd-3120   - Cisco Secure Firewall 3120 (16 ports, HA on Eth1/2) [default]
+  ftd-3130   - Cisco Secure Firewall 3130 (24 ports, HA on Eth1/2)
+  ftd-3140   - Cisco Secure Firewall 3140 (24 ports, HA on Eth1/2)
+  ftd-4215   - Cisco Secure Firewall 4215 (24 ports, HA on Eth1/2)
         """
     )
     
     # REQUIRED argument: The FortiGate YAML file to convert
     parser.add_argument('input_file', 
+                       nargs='?',  # Make optional so --list-models works
                        help='Path to FortiGate YAML configuration file')
     
     # OPTIONAL argument: Base name for output files (default: ftd_config)
@@ -205,8 +223,28 @@ Examples:
                        action='store_true',
                        help='Format JSON output with indentation for readability')
     
+    # OPTIONAL: Target FTD firewall model
+    parser.add_argument('-m', '--target-model',
+                       default='ftd-3120',
+                       help='Target FTD firewall model (default: ftd-3120). Use --list-models to see options.')
+    
+    # OPTIONAL: List supported models and exit
+    parser.add_argument('--list-models',
+                       action='store_true',
+                       help='List supported FTD firewall models and exit')
+    
     # Parse the arguments that the user provided
     args = parser.parse_args()
+    
+    # Handle --list-models
+    if args.list_models:
+        from interface_converter import print_supported_models
+        print_supported_models()
+        return 0
+    
+    # Validate input file is provided
+    if not args.input_file:
+        parser.error("input_file is required (unless using --list-models)")
     
     # ========================================================================
     # STEP 2: Display welcome banner
@@ -214,6 +252,7 @@ Examples:
     print("="*60)
     print("FortiGate to Cisco FTD Configuration Converter")
     print("="*60)
+    print(f"Target Model: {args.target_model}")
     
     # ========================================================================
     # STEP 3: Load the FortiGate YAML configuration file
@@ -328,9 +367,11 @@ Examples:
     
     # Create converter instance for firewall policies
     policy_converter = PolicyConverter(fg_config)
-
-    # Create converter instance for interfaces
-    interface_converter = InterfaceConverter(fg_config)
+    
+    # Create converter instance for interfaces with target model
+    interface_converter = InterfaceConverter(fg_config, target_model=args.target_model)
+    
+    # Note: Route converter will be initialized later after address objects are converted
     
     # ========================================================================
     # STEP 4B: Convert interfaces FIRST (needed for routes and policies)
@@ -355,8 +396,6 @@ Examples:
     if intf_stats['skipped'] > 0:
         print(f"  - Skipped: {intf_stats['skipped']}")
     
-    # Note: Route converter will be initialized later after address objects are converted
-    
     # ========================================================================
     # STEP 5: Convert address objects
     # ========================================================================
@@ -371,10 +410,11 @@ Examples:
     print(f"[OK] Converted {len(network_objects)} address objects")
     
     # ========================================================================
-    # STEP 5B: Initialize route converter with address objects
+    # STEP 5B: Initialize route converter with address objects and interface mapping
     # ========================================================================
-    # Now that we have the address objects, we can initialize the route converter
+    # Now that we have the address objects and interfaces, we can initialize the route converter
     # The route converter needs these to map route destinations/gateways to actual object names
+    # and to map interface names to FTD interface names
     route_converter = RouteConverter(fg_config, network_objects, interface_name_mapping)
     
     # ========================================================================
@@ -389,7 +429,7 @@ Examples:
     network_groups = address_group_converter.convert()
     
     print(f"[OK] Converted {len(network_groups)} address groups")
-
+    
     # Build set of address group names for policy converter
     address_groups = set()
     for group in network_groups:
@@ -458,7 +498,7 @@ Examples:
     port_groups = service_group_converter.convert()
     
     print(f"[OK] Converted {len(port_groups)} port groups")
-
+    
     # Build set of service group names for policy converter
     service_groups = set()
     for group in port_groups:
@@ -471,7 +511,7 @@ Examples:
     print("Converting Firewall Policies...")
     print("-"*60)
     
-    # Update the policy converter with service and address mappings
+    # Update the policy converter with service, address, and interface mappings
     policy_converter.set_split_services(
         split_services=split_services,
         service_name_mapping=service_name_mapping, # pyright: ignore[reportArgumentType]
@@ -522,54 +562,20 @@ Examples:
     print("-"*60)
     
     # Generate output filenames based on the base name provided
-    # If user specified "ftd_config", we create 7 separate files
+    # If user specified "ftd_config", we create separate files for each object type
     address_objects_output = f"{args.output}_address_objects.json"
     address_groups_output = f"{args.output}_address_groups.json"
     service_objects_output = f"{args.output}_service_objects.json"
     service_groups_output = f"{args.output}_service_groups.json"
     access_rules_output = f"{args.output}_access_rules.json"
     static_routes_output = f"{args.output}_static_routes.json"
+    physical_interfaces_output = f"{args.output}_physical_interfaces.json"
+    subinterfaces_output = f"{args.output}_subinterfaces.json"
+    etherchannels_output = f"{args.output}_etherchannels.json"
+    bridge_groups_output = f"{args.output}_bridge_groups.json"
     summary_output = f"{args.output}_summary.json"
     
     try:
-        # ====================================================================
-        # Save physical interfaces (PUT requests)
-        # ====================================================================
-        physical_interfaces_output = f"{args.output}_physical_interfaces.json"
-        with open(physical_interfaces_output, 'w') as f:
-            if args.pretty:
-                json.dump(interface_results['physical_interfaces'], f, indent=2)
-            else:
-                json.dump(interface_results['physical_interfaces'], f)
-        print(f"[OK] Physical interfaces saved to: {physical_interfaces_output}")
-        
-        # Save etherchannels (POST requests)
-        etherchannels_output = f"{args.output}_etherchannels.json"
-        with open(etherchannels_output, 'w') as f:
-            if args.pretty:
-                json.dump(interface_results['etherchannels'], f, indent=2)
-            else:
-                json.dump(interface_results['etherchannels'], f)
-        print(f"[OK] EtherChannels saved to: {etherchannels_output}")
-        
-        # Save bridge groups (POST requests)
-        bridge_groups_output = f"{args.output}_bridge_groups.json"
-        with open(bridge_groups_output, 'w') as f:
-            if args.pretty:
-                json.dump(interface_results['bridge_groups'], f, indent=2)
-            else:
-                json.dump(interface_results['bridge_groups'], f)
-        print(f"[OK] Bridge groups saved to: {bridge_groups_output}")
-        
-        # Save subinterfaces (POST requests)
-        subinterfaces_output = f"{args.output}_subinterfaces.json"
-        with open(subinterfaces_output, 'w') as f:
-            if args.pretty:
-                json.dump(interface_results['subinterfaces'], f, indent=2)
-            else:
-                json.dump(interface_results['subinterfaces'], f)
-        print(f"[OK] Subinterfaces saved to: {subinterfaces_output}")
-        
         # ====================================================================
         # Save address objects
         # ====================================================================
@@ -631,10 +637,57 @@ Examples:
         print(f"[OK] Static routes saved to: {static_routes_output}")
         
         # ====================================================================
+        # Save physical interfaces (for PUT updates)
+        # ====================================================================
+        with open(physical_interfaces_output, 'w') as f:
+            if args.pretty:
+                json.dump(interface_results['physical_interfaces'], f, indent=2)
+            else:
+                json.dump(interface_results['physical_interfaces'], f)
+        print(f"[OK] Physical interfaces saved to: {physical_interfaces_output}")
+        
+        # ====================================================================
+        # Save subinterfaces (for POST creation)
+        # ====================================================================
+        with open(subinterfaces_output, 'w') as f:
+            if args.pretty:
+                json.dump(interface_results['subinterfaces'], f, indent=2)
+            else:
+                json.dump(interface_results['subinterfaces'], f)
+        print(f"[OK] Subinterfaces saved to: {subinterfaces_output}")
+        
+        # ====================================================================
+        # Save etherchannels (for POST creation)
+        # ====================================================================
+        with open(etherchannels_output, 'w') as f:
+            if args.pretty:
+                json.dump(interface_results['etherchannels'], f, indent=2)
+            else:
+                json.dump(interface_results['etherchannels'], f)
+        print(f"[OK] EtherChannels saved to: {etherchannels_output}")
+        
+        # ====================================================================
+        # Save bridge groups (for POST creation)
+        # ====================================================================
+        with open(bridge_groups_output, 'w') as f:
+            if args.pretty:
+                json.dump(interface_results['bridge_groups'], f, indent=2)
+            else:
+                json.dump(interface_results['bridge_groups'], f)
+        print(f"[OK] Bridge groups saved to: {bridge_groups_output}")
+        
+        # ====================================================================
         # Save summary statistics
         # ====================================================================
         summary = {
             "conversion_summary": {
+                "interfaces": {
+                    "physical_updated": intf_stats['physical_updated'],
+                    "subinterfaces_created": intf_stats['subinterfaces_created'],
+                    "etherchannels_created": intf_stats['etherchannels_created'],
+                    "bridge_groups_created": intf_stats['bridge_groups_created'],
+                    "skipped": intf_stats['skipped']
+                },
                 "address_objects": len(network_objects),
                 "address_groups": len(network_groups),
                 "service_objects": {

@@ -339,7 +339,8 @@ class FTDBulkDelete:
         Reset a physical interface to default (unconfigured) state.
         
         Physical interfaces cannot be deleted, only reset to defaults.
-        This clears the name, IP address, and disables the interface.
+        This clears the name, IP address, description, resets MTU to 1500,
+        and disables the interface.
         
         Args:
             intf: Interface object from FTD
@@ -358,12 +359,22 @@ class FTDBulkDelete:
         if dry_run:
             return True
         
-        # Build reset payload - clear custom settings
+        # Build reset payload - clear custom settings and reset to defaults
         reset_payload = intf.copy()
         reset_payload['name'] = ''  # Clear logical name
         reset_payload['enabled'] = False  # Disable interface
         reset_payload['ipv4'] = None  # Clear IP address
         reset_payload['description'] = ''  # Clear description
+        reset_payload['mtu'] = 1500  # Reset MTU to default
+        
+        # Also reset mode to ROUTED if it was changed
+        # (some interfaces might be in SWITCHPORT mode)
+        if 'mode' in reset_payload:
+            reset_payload['mode'] = 'ROUTED'
+        
+        # Clear any security zone assignment
+        if 'securityZone' in reset_payload:
+            reset_payload['securityZone'] = None
         
         # PUT request to update
         endpoint = f"{self.base_url}/devices/default/interfaces/{intf_id}"
@@ -375,15 +386,25 @@ class FTDBulkDelete:
                 return True
             else:
                 if self.debug:
-                    print(f" (HTTP {response.status_code})")
+                    print(f" (HTTP {response.status_code}: {response.text[:100]})")
                 return False
                 
-        except requests.exceptions.RequestException:
+        except requests.exceptions.RequestException as e:
+            if self.debug:
+                print(f" (Error: {e})")
             return False
     
     def reset_all_physical_interfaces(self, dry_run: bool = False) -> bool:
         """
         Reset ALL physical interfaces to default state.
+        
+        Resets:
+        - Name (cleared)
+        - Description (cleared)
+        - IPv4 address (cleared)
+        - MTU (reset to 1500)
+        - Enabled (set to False)
+        - Security Zone (cleared)
         
         Args:
             dry_run: If True, only show what would be reset
@@ -394,6 +415,7 @@ class FTDBulkDelete:
         print(f"\n{'='*60}")
         print("Processing Physical Interfaces (Reset to Default)")
         print(f"{'='*60}")
+        print("  Reset includes: name, description, IP, MTU→1500, disabled")
         
         # Get all interfaces
         all_interfaces = self.get_all_objects("/devices/default/interfaces")
@@ -403,16 +425,17 @@ class FTDBulkDelete:
             return True
         
         # Filter to only physical interfaces that have been configured
-        # (have a name or IP address set)
+        # (have a name, IP address, or non-default MTU)
         configured_interfaces = []
         for intf in all_interfaces:
             intf_type = intf.get('type', '')
             name = intf.get('name', '')
             ipv4 = intf.get('ipv4')
             hardware = intf.get('hardwareName', '')
+            mtu = intf.get('mtu', 1500)
             
             # Only process physical interfaces that have configuration
-            if intf_type == 'physicalinterface' and (name or ipv4):
+            if intf_type == 'physicalinterface' and (name or ipv4 or mtu != 1500):
                 # Skip management interface
                 if 'Management' in hardware or 'mgmt' in hardware.lower():
                     continue
@@ -430,7 +453,9 @@ class FTDBulkDelete:
         for intf in configured_interfaces[:10]:
             hardware = intf.get('hardwareName', 'Unknown')
             name = intf.get('name', '(unnamed)')
-            print(f"    - {hardware}: {name}")
+            mtu = intf.get('mtu', 1500)
+            mtu_note = f" MTU:{mtu}" if mtu != 1500 else ""
+            print(f"    - {hardware}: {name}{mtu_note}")
         
         if len(configured_interfaces) > 10:
             print(f"    ... and {len(configured_interfaces) - 10} more")
@@ -468,33 +493,133 @@ class FTDBulkDelete:
         
         return fail_count == 0
     
+    def get_all_subinterfaces(self) -> List[Dict]:
+        """
+        Get all subinterfaces from FTD.
+        
+        Subinterfaces are accessed via their parent interface:
+        - Physical: GET /devices/default/interfaces/{parentId}/subinterfaces
+        - EtherChannel: GET /devices/default/etherchannelinterfaces/{parentId}/subinterfaces
+        
+        Returns:
+            List of all subinterfaces found
+        """
+        all_subinterfaces = []
+        
+        print("  Scanning for subinterfaces...")
+        
+        # Check under physical interfaces
+        # GET /devices/default/interfaces
+        interfaces = self.get_all_objects("/devices/default/interfaces")
+        
+        if interfaces:
+            for intf in interfaces:
+                intf_id = intf.get('id')
+                intf_type = intf.get('type', '')
+                intf_name = intf.get('hardwareName', intf.get('name', ''))
+                
+                # Only check physical interfaces (not etherchannels which are separate)
+                if intf_id and intf_type == 'physicalinterface':
+                    subintfs = self.get_all_objects(f"/devices/default/interfaces/{intf_id}/subinterfaces")
+                    if subintfs:
+                        for si in subintfs:
+                            si['_parent_id'] = intf_id
+                            si['_parent_name'] = intf_name
+                            si['_parent_type'] = 'physical'
+                        all_subinterfaces.extend(subintfs)
+                        
+                        if self.debug:
+                            print(f"    Found {len(subintfs)} subinterfaces under {intf_name}")
+        
+        # Check under etherchannels
+        # GET /devices/default/etherchannelinterfaces
+        etherchannels = self.get_all_objects("/devices/default/etherchannelinterfaces")
+        
+        if etherchannels:
+            for ec in etherchannels:
+                ec_id = ec.get('id')
+                ec_name = ec.get('hardwareName', ec.get('name', ''))
+                
+                if ec_id:
+                    subintfs = self.get_all_objects(f"/devices/default/etherchannelinterfaces/{ec_id}/subinterfaces")
+                    if subintfs:
+                        for si in subintfs:
+                            si['_parent_id'] = ec_id
+                            si['_parent_name'] = ec_name
+                            si['_parent_type'] = 'etherchannel'
+                        all_subinterfaces.extend(subintfs)
+                        
+                        if self.debug:
+                            print(f"    Found {len(subintfs)} subinterfaces under {ec_name}")
+        
+        return all_subinterfaces
+    
+    def delete_subinterface(self, subintf: Dict, dry_run: bool = False) -> Tuple[bool, str]:
+        """
+        Delete a single subinterface.
+        
+        Endpoints:
+        - Physical parent: DELETE /devices/default/interfaces/{parentId}/subinterfaces/{objId}
+        - EtherChannel parent: DELETE /devices/default/etherchannelinterfaces/{parentId}/subinterfaces/{objId}
+        
+        Args:
+            subintf: Subinterface object dictionary
+            dry_run: If True, don't actually delete
+            
+        Returns:
+            Tuple of (success, error_message)
+        """
+        obj_id = subintf.get('id')
+        parent_id = subintf.get('_parent_id')
+        parent_type = subintf.get('_parent_type', 'physical')
+        
+        if not obj_id:
+            return False, "No subinterface ID"
+        
+        if not parent_id:
+            return False, "No parent ID"
+        
+        if dry_run:
+            return True, ""
+        
+        # Use different endpoint based on parent type
+        if parent_type == 'etherchannel':
+            endpoint = f"/devices/default/etherchannelinterfaces/{parent_id}/subinterfaces"
+        else:
+            endpoint = f"/devices/default/interfaces/{parent_id}/subinterfaces"
+        
+        return self.delete_object(endpoint, obj_id)
+    
     def delete_all_subinterfaces(self, dry_run: bool = False) -> bool:
         """
         Delete all subinterfaces.
         
         Subinterfaces must be deleted BEFORE their parent interfaces
         (physical or etherchannel).
+        
+        Endpoint: DELETE /devices/default/interfaces/{parentId}/subinterfaces/{objId}
         """
         print(f"\n{'='*60}")
         print("Processing Subinterfaces")
         print(f"{'='*60}")
         
-        # Get all subinterfaces
-        all_subinterfaces = self.get_all_objects("/devices/default/subinterfaces")
+        # Get all subinterfaces from all parent interfaces
+        all_subinterfaces = self.get_all_subinterfaces()
         
         if not all_subinterfaces:
             print("  No subinterfaces found")
             return True
         
-        print(f"\n  Found {len(all_subinterfaces)} subinterfaces")
+        print(f"\n  Found {len(all_subinterfaces)} subinterfaces total")
         
         # Show what will be deleted
         print(f"\n  Subinterfaces to delete:")
         for intf in all_subinterfaces[:10]:
             name = intf.get('name', 'UNNAMED')
             hardware = intf.get('hardwareName', 'Unknown')
-            vlan = intf.get('subIntfId', '?')
-            print(f"    - {name} ({hardware} VLAN {vlan})")
+            vlan = intf.get('subIntfId', intf.get('vlanId', '?'))
+            parent = intf.get('_parent_name', 'unknown')
+            print(f"    - {name} ({hardware} VLAN {vlan}) [parent: {parent}]")
         
         if len(all_subinterfaces) > 10:
             print(f"    ... and {len(all_subinterfaces) - 10} more")
@@ -504,10 +629,10 @@ class FTDBulkDelete:
         
         success_count = 0
         fail_count = 0
+        failed_objects = []
         
         for i, intf in enumerate(all_subinterfaces, 1):
             name = intf.get('name', 'UNNAMED')
-            obj_id = intf.get('id')
             
             if dry_run:
                 print(f"  [{i}/{len(all_subinterfaces)}] Would delete: {name}")
@@ -515,7 +640,7 @@ class FTDBulkDelete:
             else:
                 print(f"  [{i}/{len(all_subinterfaces)}] Deleting: {name}...", end=" ")
                 
-                success, error_msg = self.delete_object("/devices/default/subinterfaces", obj_id) # pyright: ignore[reportArgumentType]
+                success, error_msg = self.delete_subinterface(intf, dry_run)
                 
                 if success:
                     print("[OK]")
@@ -523,10 +648,19 @@ class FTDBulkDelete:
                 else:
                     print(f"[ERROR] {error_msg}")
                     fail_count += 1
+                    failed_objects.append((name, error_msg))
                 
                 time.sleep(0.2)
         
         print(f"\n  Summary: {success_count} deleted, {fail_count} failed")
+        
+        if failed_objects:
+            print(f"\n  Failed subinterfaces:")
+            for name, error in failed_objects[:10]:
+                print(f"    - {name}: {error}")
+            if len(failed_objects) > 10:
+                print(f"    ... and {len(failed_objects) - 10} more")
+        
         return fail_count == 0
     
     def delete_all_etherchannels(self, dry_run: bool = False) -> bool:
@@ -579,7 +713,7 @@ class FTDBulkDelete:
                 print(f"  [{i}/{len(all_etherchannels)}] Deleting: {name} ({hardware})...", end=" ")
                 
                 # Try to delete directly
-                success, error_msg = self.delete_object("/devices/default/etherchannelinterfaces", obj_id) # type: ignore
+                success, error_msg = self.delete_object("/devices/default/etherchannelinterfaces", obj_id) # pyright: ignore[reportArgumentType]
                 
                 if success:
                     print("[OK]")
@@ -692,7 +826,7 @@ def main():
         description='Bulk delete ALL custom objects from Cisco FTD via FDM API',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-âš ï¸  WARNING: DELETES ALL CUSTOM OBJECTS OF SELECTED TYPES! âš ï¸
+[WARNING] DELETES ALL CUSTOM OBJECTS OF SELECTED TYPES! [WARNING]
 
 Examples:
   # Dry run - see what would be deleted
@@ -704,7 +838,19 @@ Examples:
   # Delete all rules
   python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-rules
   
-  # Delete everything
+  # Delete all interface configurations (subinterfaces, etherchannels, bridges, reset physical)
+  python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-all-interfaces
+  
+  # Delete just subinterfaces
+  python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-subinterfaces
+  
+  # Delete just etherchannels (port-channels)
+  python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-etherchannels
+  
+  # Reset physical interfaces to default (clear names, IPs, disable)
+  python ftd_api_cleanup.py --host 192.168.1.1 -u admin --reset-physical-interfaces
+  
+  # Delete everything (all objects AND interfaces)
   python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-all
         """
     )

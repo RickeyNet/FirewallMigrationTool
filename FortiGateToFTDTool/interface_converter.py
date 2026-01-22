@@ -30,6 +30,134 @@ import re
 from typing import Dict, List, Any, Set, Tuple, Optional
 
 
+# =============================================================================
+# FIREWALL MODEL DEFINITIONS
+# =============================================================================
+# Define supported FTD firewall models with their interface configurations
+
+FTD_MODELS = {
+    'ftd-1010': {
+        'name': 'Cisco Firepower 1010',
+        'total_ports': 8,
+        'port_prefix': 'Ethernet1/',
+        'ha_port': None,  # No dedicated HA port on 1010
+        'management_port': 'Management1/1',
+        'description': '8-port desktop firewall (Ethernet1/1 - Ethernet1/8)'
+    },
+    'ftd-1120': {
+        'name': 'Cisco Firepower 1120',
+        'total_ports': 12,
+        'port_prefix': 'Ethernet1/',
+        'ha_port': None,
+        'management_port': 'Management1/1',
+        'description': '12-port firewall (Ethernet1/1 - Ethernet1/12)'
+    },
+    'ftd-1140': {
+        'name': 'Cisco Firepower 1140',
+        'total_ports': 12,
+        'port_prefix': 'Ethernet1/',
+        'ha_port': None,
+        'management_port': 'Management1/1',
+        'description': '12-port firewall (Ethernet1/1 - Ethernet1/12)'
+    },
+    'ftd-2110': {
+        'name': 'Cisco Firepower 2110',
+        'total_ports': 12,
+        'port_prefix': 'Ethernet1/',
+        'ha_port': None,
+        'management_port': 'Management1/1',
+        'description': '12-port 1U firewall'
+    },
+    'ftd-2120': {
+        'name': 'Cisco Firepower 2120',
+        'total_ports': 12,
+        'port_prefix': 'Ethernet1/',
+        'ha_port': None,
+        'management_port': 'Management1/1',
+        'description': '12-port 1U firewall'
+    },
+    'ftd-2130': {
+        'name': 'Cisco Firepower 2130',
+        'total_ports': 16,
+        'port_prefix': 'Ethernet1/',
+        'ha_port': None,
+        'management_port': 'Management1/1',
+        'description': '16-port 1U firewall'
+    },
+    'ftd-2140': {
+        'name': 'Cisco Firepower 2140',
+        'total_ports': 16,
+        'port_prefix': 'Ethernet1/',
+        'ha_port': None,
+        'management_port': 'Management1/1',
+        'description': '16-port 1U firewall'
+    },
+    'ftd-3105': {
+        'name': 'Cisco Secure Firewall 3105',
+        'total_ports': 16,
+        'port_prefix': 'Ethernet1/',
+        'ha_port': 'Ethernet1/2',  # Typically port 2 for HA
+        'management_port': 'Management1/1',
+        'description': '16-port firewall (8 RJ45 + 8 SFP) with HA support'
+    },
+    'ftd-3110': {
+        'name': 'Cisco Secure Firewall 3110',
+        'total_ports': 16,
+        'port_prefix': 'Ethernet1/',
+        'ha_port': 'Ethernet1/2',
+        'management_port': 'Management1/1',
+        'description': '16-port firewall (8 RJ45 + 8 SFP) with HA'
+    },
+    'ftd-3120': {
+        'name': 'Cisco Secure Firewall 3120',
+        'total_ports': 16,
+        'port_prefix': 'Ethernet1/',
+        'ha_port': 'Ethernet1/2',
+        'management_port': 'Management1/1',
+        'description': '16-port firewall (8 RJ45 + 8 SFP) with HA'
+    },
+    'ftd-3130': {
+        'name': 'Cisco Secure Firewall 3130',
+        'total_ports': 24,
+        'port_prefix': 'Ethernet1/',
+        'ha_port': 'Ethernet1/2',
+        'management_port': 'Management1/1',
+        'description': '24-port firewall with HA'
+    },
+    'ftd-3140': {
+        'name': 'Cisco Secure Firewall 3140',
+        'total_ports': 24,
+        'port_prefix': 'Ethernet1/',
+        'ha_port': 'Ethernet1/2',
+        'management_port': 'Management1/1',
+        'description': '24-port firewall with HA'
+    },
+    'ftd-4215': {
+        'name': 'Cisco Secure Firewall 4215',
+        'total_ports': 24,
+        'port_prefix': 'Ethernet1/',
+        'ha_port': 'Ethernet1/2',
+        'management_port': 'Management1/1',
+        'description': '24-port enterprise firewall with HA'
+    }
+}
+
+def get_supported_models() -> list:
+    """Return list of supported firewall model names."""
+    return sorted(FTD_MODELS.keys())
+
+def print_supported_models():
+    """Print a table of supported firewall models."""
+    print("\nSupported FTD Firewall Models:")
+    print("=" * 70)
+    print(f"{'Model':<15} {'Name':<30} {'Ports':<8} {'HA Port':<12}")
+    print("-" * 70)
+    for model_id, info in sorted(FTD_MODELS.items()):
+        ha = info['ha_port'] if info['ha_port'] else 'None'
+        print(f"{model_id:<15} {info['name']:<30} {info['total_ports']:<8} {ha:<12}")
+    print("=" * 70)
+
+
 def sanitize_interface_name(name: str) -> str:
     """
     Sanitize interface names for FTD compatibility.
@@ -66,48 +194,35 @@ def sanitize_interface_name(name: str) -> str:
 class InterfaceConverter:
     """
     Converter class for transforming FortiGate interfaces to FTD format.
+    
+    Supports multiple FTD firewall models with automatic port mapping.
+    Use set_target_model() to configure for a specific firewall.
     """
     
-    # Default port mapping - FortiGate port name -> FTD hardware name
-    # This can be customized via set_port_mapping()
-    DEFAULT_PORT_MAPPING = {
-        # Explicit mappings (user-specified)
-        'port2': 'Ethernet1/1',
-        'port6': 'Ethernet1/3',
-        'port5': 'Ethernet1/13',
-        'port7': 'Ethernet1/14',
-        'x1': 'Ethernet1/15',
-        'x2': 'Ethernet1/16',
-    }
-    
-    # Ports to skip (reserved for other purposes)
-    SKIP_FTD_PORTS = {'Ethernet1/2'}  # Reserved for HA
-    
-    def __init__(self, fortigate_config: Dict[str, Any]):
+    def __init__(self, fortigate_config: Dict[str, Any], target_model: str = 'ftd-3120'):
         """
         Initialize the converter with FortiGate configuration data.
         
         Args:
             fortigate_config: Dictionary containing the complete parsed FortiGate YAML
                              Expected to have a 'system_interface' key
+            target_model: Target FTD firewall model (e.g., 'ftd-1010', 'ftd-3120')
+                         Use get_supported_models() to see available models
         """
         self.fg_config = fortigate_config
         
-        # Port mapping - can be customized
-        self.port_mapping = self.DEFAULT_PORT_MAPPING.copy()
-        self.skip_ftd_ports = self.SKIP_FTD_PORTS.copy()
+        # Set target model (this also sets up port mapping)
+        self.target_model = None
+        self.model_info = None
+        self.total_ports = 16  # Default
+        self.ha_port = None
+        self.skip_ftd_ports = set()
         
-        # Track which FTD ports have been assigned
-        self.assigned_ftd_ports = set(self.port_mapping.values())
-        self.assigned_ftd_ports.update(self.skip_ftd_ports)
+        # Port mapping - will be built dynamically
+        self.port_mapping = {}
         
-        # Available FTD ports for auto-assignment (in order)
-        # RJ45: Ethernet1/1-8, SFP: Ethernet1/9-16
-        self.available_ftd_ports = []
-        for i in range(1, 17):
-            port = f"Ethernet1/{i}"
-            if port not in self.assigned_ftd_ports:
-                self.available_ftd_ports.append(port)
+        # Set the target model (this builds the port mapping)
+        self.set_target_model(target_model)
         
         # Store converted interfaces
         self.physical_interfaces = []      # PUT requests
@@ -118,6 +233,11 @@ class InterfaceConverter:
         # Interface name mapping: FortiGate name -> FTD name (for routes/policies)
         self.interface_name_mapping = {}
         
+        # Track used subinterface names to avoid duplicates
+        self.used_subinterface_names = set()
+        
+        # Track statistics
+        
         # Track statistics
         self.stats = {
             'physical_updated': 0,
@@ -127,40 +247,91 @@ class InterfaceConverter:
             'skipped': 0
         }
     
+    def set_target_model(self, model: str):
+        """
+        Set the target FTD firewall model.
+        
+        This configures the available ports and HA port based on the model.
+        Interfaces are assigned starting from the LAST port and working down.
+        
+        Args:
+            model: FTD model identifier (e.g., 'ftd-1010', 'ftd-3120')
+        """
+        model = model.lower()
+        
+        if model not in FTD_MODELS:
+            print(f"Warning: Unknown model '{model}', using ftd-3120 as default")
+            print_supported_models()
+            model = 'ftd-3120'
+        
+        self.target_model = model
+        self.model_info = FTD_MODELS[model]
+        self.total_ports = self.model_info['total_ports']
+        self.ha_port = self.model_info['ha_port']
+        
+        # Set HA port to skip (if model has one)
+        self.skip_ftd_ports = set()
+        if self.ha_port:
+            self.skip_ftd_ports.add(self.ha_port)
+        
+        # Clear existing mapping
+        self.port_mapping = {}
+        
+        # Build available ports list (starting from LAST port, going DOWN)
+        # This allows adding interfaces from the end
+        self.available_ftd_ports = []
+        for i in range(self.total_ports, 0, -1):
+            port = f"Ethernet1/{i}"
+            if port not in self.skip_ftd_ports:
+                self.available_ftd_ports.append(port)
+        
+        # Track assigned ports
+        self.assigned_ftd_ports = set(self.skip_ftd_ports)
+        
+        print(f"  Target model: {self.model_info['name']}")
+        print(f"  Available ports: Ethernet1/1 - Ethernet1/{self.total_ports}")
+        if self.ha_port:
+            print(f"  HA port (skipped): {self.ha_port}")
+        print(f"  Port assignment order: Starting from Ethernet1/{self.total_ports} down to Ethernet1/1")
+    
     def set_port_mapping(self, mapping: Dict[str, str]):
         """
-        Set custom port mapping.
+        Set explicit port mapping for specific interfaces.
+        
+        Use this to override automatic assignment for specific interfaces.
         
         Args:
             mapping: Dict of FortiGate port name -> FTD hardware name
         """
-        self.port_mapping.update(mapping)
-        self.assigned_ftd_ports = set(self.port_mapping.values())
-        self.assigned_ftd_ports.update(self.skip_ftd_ports)
-        
-        # Rebuild available ports list
-        self.available_ftd_ports = []
-        for i in range(1, 17):
-            port = f"Ethernet1/{i}"
-            if port not in self.assigned_ftd_ports:
-                self.available_ftd_ports.append(port)
+        for fg_port, ftd_port in mapping.items():
+            # Validate the FTD port is within range for this model
+            try:
+                port_num = int(ftd_port.split('/')[-1])
+                if port_num > self.total_ports:
+                    print(f"  Warning: {ftd_port} exceeds available ports for {self.target_model} (max: Ethernet1/{self.total_ports})")
+                    continue
+            except:
+                pass
+            
+            self.port_mapping[fg_port] = ftd_port
+            self.assigned_ftd_ports.add(ftd_port)
+            
+            # Remove from available list if present
+            if ftd_port in self.available_ftd_ports:
+                self.available_ftd_ports.remove(ftd_port)
     
     def set_skip_ports(self, ports: Set[str]):
         """
-        Set FTD ports to skip (e.g., reserved for HA).
+        Set additional FTD ports to skip.
         
         Args:
             ports: Set of FTD hardware names to skip
         """
-        self.skip_ftd_ports = ports
+        self.skip_ftd_ports.update(ports)
         self.assigned_ftd_ports.update(ports)
         
-        # Rebuild available ports list
-        self.available_ftd_ports = []
-        for i in range(1, 17):
-            port = f"Ethernet1/{i}"
-            if port not in self.assigned_ftd_ports:
-                self.available_ftd_ports.append(port)
+        # Remove from available list
+        self.available_ftd_ports = [p for p in self.available_ftd_ports if p not in ports]
     
     def _get_ftd_hardware_name(self, fg_port: str) -> Optional[str]:
         """
@@ -199,6 +370,14 @@ class InterfaceConverter:
         """
         Main conversion method - converts all FortiGate interfaces to FTD format.
         
+        PORT ASSIGNMENT PRIORITY (for limited-port firewalls):
+        1. EtherChannels - Need physical member ports
+        2. Bridge Groups - Need physical member ports  
+        3. Physical interfaces WITH subinterfaces - Can carry multiple VLANs
+        4. Standalone physical interfaces - Only if ports available
+        
+        This priority ensures maximum utilization of limited ports.
+        
         Returns:
             Dictionary with keys:
             - 'physical_interfaces': List of PUT payloads for physical interfaces
@@ -207,6 +386,9 @@ class InterfaceConverter:
             - 'bridge_groups': List of POST payloads for bridge groups
         """
         interfaces = self.fg_config.get('system_interface', [])
+        
+        # Get switch interfaces (bridge groups) from separate section
+        switch_interfaces = self.fg_config.get('system_switch-interface', [])
         
         if not interfaces:
             print("Warning: No interfaces found in FortiGate configuration")
@@ -218,12 +400,26 @@ class InterfaceConverter:
                 'bridge_groups': []
             }
         
-        # First pass: identify interface types and build mappings
-        physical_ports = []
-        aggregate_ports = []
-        switch_ports = []
-        vlan_interfaces = []
+        if switch_interfaces:
+            print(f"  Found {len(switch_interfaces)} switch interfaces (bridge groups)")
         
+        # ====================================================================
+        # PHASE 1: Categorize all interfaces by type
+        # ====================================================================
+        physical_ports = []
+        aggregate_ports = []  # EtherChannels
+        switch_ports = []     # Bridge Groups (from system_switch-interface)
+        vlan_interfaces = []  # Subinterfaces
+        
+        # Process system_switch-interface section for bridge groups
+        for switch_dict in switch_interfaces:
+            switch_name = list(switch_dict.keys())[0]
+            switch_props = switch_dict[switch_name]
+            
+            if isinstance(switch_props, dict):
+                switch_ports.append((switch_name, switch_props))
+        
+        # Process system_interface section
         for intf_dict in interfaces:
             intf_name = list(intf_dict.keys())[0]
             properties = intf_dict[intf_name]
@@ -239,33 +435,114 @@ class InterfaceConverter:
                 vlan_interfaces.append((intf_name, properties))
             elif intf_type == 'aggregate':
                 aggregate_ports.append((intf_name, properties))
-            elif intf_type == 'switch':
-                switch_ports.append((intf_name, properties))
             elif intf_type == 'physical':
                 physical_ports.append((intf_name, properties))
-            # Skip tunnel, etc.
+            # Skip tunnel, loopback, etc.
         
-        # Second pass: Convert each type
+        # ====================================================================
+        # PHASE 2: Identify which physical interfaces have subinterfaces
+        # ====================================================================
+        # These get priority because they can carry multiple VLANs
+        parent_interfaces = set()
+        for vlan_name, vlan_props in vlan_interfaces:
+            parent = vlan_props.get('interface', '')
+            if parent:
+                parent_interfaces.add(parent)
         
-        # 1. Convert physical interfaces
-        print("\n  Converting Physical Interfaces...")
-        for fg_name, properties in physical_ports:
-            self._convert_physical_interface(fg_name, properties)
+        # Separate physical ports into those with and without subinterfaces
+        physical_with_subs = [(n, p) for n, p in physical_ports if n in parent_interfaces]
+        physical_standalone = [(n, p) for n, p in physical_ports if n not in parent_interfaces]
         
-        # 2. Convert aggregate interfaces (EtherChannels)
-        print("\n  Converting Aggregate Interfaces (EtherChannels)...")
+        # ====================================================================
+        # PHASE 3: Check available ports and warn if insufficient
+        # ====================================================================
+        # Count ports needed (rough estimate)
+        etherch_member_count = 0
+        for _, props in aggregate_ports:
+            members = props.get('member', [])
+            if isinstance(members, str):
+                etherch_member_count += 1
+            else:
+                etherch_member_count += len(members)
+        
+        bridge_member_count = 0
+        for _, props in switch_ports:
+            members = props.get('member', [])
+            if isinstance(members, str):
+                bridge_member_count += 1
+            else:
+                bridge_member_count += len(members)
+        
+        total_needed = (etherch_member_count + bridge_member_count + 
+                       len(physical_with_subs) + len(physical_standalone))
+        available = len(self.available_ftd_ports)
+        
+        print(f"\n  Port Analysis for {self.model_info['name']}:") # pyright: ignore[reportOptionalSubscript]
+        print(f"    Available FTD ports: {available}")
+        print(f"    FortiGate interfaces to convert:")
+        print(f"      - EtherChannel members: {etherch_member_count}")
+        print(f"      - Bridge Group members: {bridge_member_count}")
+        print(f"      - Physical with subinterfaces: {len(physical_with_subs)}")
+        print(f"      - Standalone physical: {len(physical_standalone)}")
+        print(f"    Total ports needed: {total_needed}")
+        
+        if total_needed > available:
+            print(f"\n  [WARNING] Not enough ports! Need {total_needed}, have {available}")
+            print(f"  [INFO] Using priority-based assignment:")
+            print(f"         1. EtherChannels (aggregate traffic)")
+            print(f"         2. Bridge Groups (switch ports)")
+            print(f"         3. Interfaces with subinterfaces (carry VLANs)")
+            print(f"         4. Standalone interfaces (if ports remain)")
+        
+        # ====================================================================
+        # PHASE 4: Convert in PRIORITY ORDER
+        # ====================================================================
+        
+        # PRIORITY 1: Convert aggregate interfaces (EtherChannels)
+        # These need member ports, so do first
+        print("\n  [Priority 1] Converting Aggregate Interfaces (EtherChannels)...")
         for fg_name, properties in aggregate_ports:
             self._convert_aggregate_interface(fg_name, properties)
         
-        # 3. Convert switch interfaces (Bridge Groups)
-        print("\n  Converting Switch Interfaces (Bridge Groups)...")
+        # PRIORITY 2: Convert switch interfaces (Bridge Groups)
+        # These also need member ports
+        print("\n  [Priority 2] Converting Switch Interfaces (Bridge Groups)...")
         for fg_name, properties in switch_ports:
             self._convert_switch_interface(fg_name, properties)
         
-        # 4. Convert VLAN interfaces (Subinterfaces)
-        print("\n  Converting VLAN Interfaces (Subinterfaces)...")
+        # PRIORITY 3: Convert physical interfaces THAT HAVE SUBINTERFACES
+        # These are valuable because one port can carry multiple VLANs
+        print("\n  [Priority 3] Converting Physical Interfaces with Subinterfaces...")
+        for fg_name, properties in physical_with_subs:
+            self._convert_physical_interface(fg_name, properties)
+        
+        # PRIORITY 4: Convert standalone physical interfaces
+        # Only if we have ports left
+        print("\n  [Priority 4] Converting Standalone Physical Interfaces...")
+        remaining_ports = len(self.available_ftd_ports)
+        if remaining_ports == 0 and len(physical_standalone) > 0:
+            print(f"    [WARNING] No ports remaining for {len(physical_standalone)} standalone interfaces")
+            for fg_name, _ in physical_standalone:
+                print(f"      Skipped: {fg_name} (no ports available)")
+                self.stats['skipped'] += 1
+        else:
+            for fg_name, properties in physical_standalone:
+                if len(self.available_ftd_ports) == 0:
+                    print(f"    Skipped: {fg_name} (no ports available)")
+                    self.stats['skipped'] += 1
+                else:
+                    self._convert_physical_interface(fg_name, properties)
+        
+        # PHASE 5: Convert VLAN interfaces (Subinterfaces)
+        # These don't need additional ports - they use parent interfaces
+        print("\n  [Phase 5] Converting VLAN Interfaces (Subinterfaces)...")
         for fg_name, properties in vlan_interfaces:
             self._convert_vlan_interface(fg_name, properties)
+        
+        # Print final port allocation summary
+        print(f"\n  Port Allocation Summary:")
+        print(f"    Ports used: {len(self.assigned_ftd_ports) - len(self.skip_ftd_ports)}")
+        print(f"    Ports remaining: {len(self.available_ftd_ports)}")
         
         return {
             'physical_interfaces': self.physical_interfaces,
@@ -348,9 +625,11 @@ class InterfaceConverter:
                     "type": "interfaceipv4"
                 }
         
-        # Add MTU if overridden
+        # Add MTU if overridden (cap at 9000 - FTD maximum)
         if properties.get('mtu-override') == 'enable':
             mtu = properties.get('mtu', 1500)
+            if mtu > 9000:
+                mtu = 9000
             ftd_interface["mtu"] = mtu
         
         self.physical_interfaces.append(ftd_interface)
@@ -375,6 +654,8 @@ class InterfaceConverter:
             members = [members]
         
         # Map member names to FTD hardware names
+        # AND create physical interface entries for each member
+        # so they get set to routed mode before EtherChannel creation
         ftd_members = []
         for member in members:
             ftd_hardware = self._get_ftd_hardware_name(member)
@@ -383,6 +664,24 @@ class InterfaceConverter:
                     "hardwareName": ftd_hardware,
                     "type": "physicalinterface"
                 })
+                
+                # Create a physical interface entry for this member
+                # This ensures it gets imported and set to routed mode
+                # BEFORE the EtherChannel is created
+                member_interface = {
+                    "name": sanitize_interface_name(member),  # No name - just prep the interface
+                    "hardwareName": ftd_hardware,
+                    "description": f"EtherChannel {fg_name} member",
+                    "enabled": True,
+                    "mode": "ROUTED",
+                    "type": "physicalinterface"
+                }
+                
+                # Only add if not already in the list
+                existing_hardware = [p.get('hardwareName') for p in self.physical_interfaces]
+                if ftd_hardware not in existing_hardware:
+                    self.physical_interfaces.append(member_interface)
+                    print(f"      Added member interface: {member} -> {ftd_hardware} (routed mode)")
         
         if not ftd_members:
             print(f"    Skipped: {fg_name} (no valid member interfaces)")
@@ -406,9 +705,11 @@ class InterfaceConverter:
             "type": "etherchannelinterface"
         }
         
-        # Add MTU if overridden
+        # Add MTU if overridden (cap at 9000 - FTD maximum)
         if properties.get('mtu-override') == 'enable':
             mtu = properties.get('mtu', 1500)
+            if mtu > 9000:
+                mtu = 9000
             ftd_interface["mtu"] = mtu
         
         self.etherchannels.append(ftd_interface)
@@ -426,24 +727,74 @@ class InterfaceConverter:
         # Store the mapping
         self.interface_name_mapping[fg_name] = ftd_name
         
-        # For bridge groups, we need to identify member interfaces
-        # In FortiGate, switch interfaces aggregate physical ports
-        # We'll need to determine which physical ports belong to this switch
+        # Get member interfaces from system_switch-interface properties
+        # FortiGate can store as: "port5" or "port5 port6" or ["port5", "port6"]
+        members_raw = properties.get('member', [])
+        if isinstance(members_raw, str):
+            # Could be space-separated: "port5 port6"
+            members = members_raw.split()
+        elif isinstance(members_raw, list):
+            members = members_raw
+        else:
+            members = []
+        
+        # Map member names to FTD hardware names
+        # AND create physical interface entries for each member
+        ftd_members = []
+        for member in members:
+            ftd_hardware = self._get_ftd_hardware_name(member)
+            if ftd_hardware:
+                ftd_members.append({
+                    "hardwareName": ftd_hardware,
+                    "type": "physicalinterface"
+                })
+                
+                # Create a physical interface entry for this member
+                # This ensures it gets imported and prepped for bridge group
+                # Get the name from the physical port's alias in system_interface
+                member_props = self._get_interface_properties(member)
+                member_alias = member_props.get('alias', member) if member_props else member
+                member_name = sanitize_interface_name(member_alias)
+
+                member_interface = {
+                    "name": member_name,
+                    "hardwareName": ftd_hardware,
+                    "description": member_props.get('description', f"Bridge Group {fg_name} member") if member_props else f"Bridge Group {fg_name} member",
+                    "enabled": True,
+                    "mode": "ROUTED",
+                    "type": "physicalinterface"
+                }
+                
+                # Only add if not already in the list
+                existing_hardware = [p.get('hardwareName') for p in self.physical_interfaces]
+                if ftd_hardware not in existing_hardware:
+                    self.physical_interfaces.append(member_interface)
+                    print(f"      Added member interface: {member} -> {ftd_hardware}")
+        
+        if not ftd_members:
+            print(f"    Skipped: {fg_name} (no valid member interfaces)")
+            self.stats['skipped'] += 1
+            return
         
         # Bridge Group ID
         bridge_group_id = len(self.bridge_groups) + 1
+        
+        # Look up IP and MTU from system_interface section
+        # The switch interface name (fg_name) should have a corresponding entry
+        switch_intf_props = self._get_interface_properties(fg_name)
         
         # Build FTD Bridge Group payload
         ftd_interface = {
             "name": ftd_name,
             "bridgeGroupId": bridge_group_id,
             "description": properties.get('description', fg_name),
-            "enabled": properties.get('status', 'up') != 'down',
+            "enabled": True,
+            "memberInterfaces": ftd_members,
             "type": "bridgegroupinterface"
         }
         
-        # Add IP address if present
-        ip_config = properties.get('ip')
+        # Add IP address if present (from system_interface lookup)
+        ip_config = switch_intf_props.get('ip') if switch_intf_props else None
         if ip_config and isinstance(ip_config, list) and len(ip_config) >= 2:
             ip_addr = str(ip_config[0])
             netmask = str(ip_config[1])
@@ -462,15 +813,38 @@ class InterfaceConverter:
                     "type": "interfaceipv4"
                 }
         
-        # Add MTU if overridden
-        if properties.get('mtu-override') == 'enable':
-            mtu = properties.get('mtu', 1500)
+        # Add MTU if overridden (cap at 9000 - FTD maximum)
+        mtu_override = switch_intf_props.get('mtu-override') if switch_intf_props else None
+        if mtu_override == 'enable':
+            mtu = switch_intf_props.get('mtu', 1500)
+            if mtu > 9000:
+                mtu = 9000
             ftd_interface["mtu"] = mtu
         
         self.bridge_groups.append(ftd_interface)
         self.stats['bridge_groups_created'] += 1
         
-        print(f"    Converted: {fg_name} -> {ftd_name} (BVI{bridge_group_id})")
+        member_str = ', '.join([m['hardwareName'] for m in ftd_members])
+        print(f"    Converted: {fg_name} -> {ftd_name} (BVI{bridge_group_id}) members: [{member_str}]")
+
+    def _get_interface_properties(self, intf_name: str) -> Dict:
+        """
+        Look up interface properties from system_interface section.
+        
+        Args:
+            intf_name: Interface name to look up
+            
+        Returns:
+            Properties dictionary or empty dict if not found
+        """
+        interfaces = self.fg_config.get('system_interface', [])
+        
+        for intf_dict in interfaces:
+            name = list(intf_dict.keys())[0]
+            if name == intf_name:
+                return intf_dict[name]
+        
+        return {}
     
     def _convert_vlan_interface(self, fg_name: str, properties: Dict):
         """Convert a FortiGate VLAN interface to FTD Subinterface."""
@@ -487,6 +861,16 @@ class InterfaceConverter:
         # Get interface name (use alias if available)
         alias = properties.get('alias', fg_name)
         ftd_name = sanitize_interface_name(alias)
+        
+        # Check for duplicate names and make unique if needed
+        original_name = ftd_name
+        counter = 2
+        while ftd_name in self.used_subinterface_names:
+            ftd_name = f"{original_name}_{counter}"
+            counter += 1
+        
+        # Track this name as used
+        self.used_subinterface_names.add(ftd_name)
         
         # Store the mapping
         self.interface_name_mapping[fg_name] = ftd_name
@@ -544,15 +928,20 @@ class InterfaceConverter:
                     "type": "interfaceipv4"
                 }
         
-        # Add MTU if overridden
+        # Add MTU if overridden (cap at 9000 - FTD maximum)
         if properties.get('mtu-override') == 'enable':
             mtu = properties.get('mtu', 1500)
+            if mtu > 9000:
+                mtu = 9000
             ftd_interface["mtu"] = mtu
         
         self.subinterfaces.append(ftd_interface)
         self.stats['subinterfaces_created'] += 1
         
-        print(f"    Converted: {fg_name} -> {ftd_name} ({hardware_name}) VLAN {vlan_id}")
+        if ftd_name != original_name:
+            print(f"    Converted: {fg_name} -> {ftd_name} ({hardware_name}) VLAN {vlan_id} [renamed from {original_name}]")
+        else:
+            print(f"    Converted: {fg_name} -> {ftd_name} ({hardware_name}) VLAN {vlan_id}")
     
     def get_interface_mapping(self) -> Dict[str, str]:
         """
