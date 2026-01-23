@@ -669,7 +669,7 @@ class InterfaceConverter:
                 # This ensures it gets imported and set to routed mode
                 # BEFORE the EtherChannel is created
                 member_interface = {
-                    "name": sanitize_interface_name(member),  # No name - just prep the interface
+                    "name": '',  # No name - just prep the interface
                     "hardwareName": ftd_hardware,
                     "description": f"EtherChannel {fg_name} member",
                     "enabled": True,
@@ -789,7 +789,7 @@ class InterfaceConverter:
             "bridgeGroupId": bridge_group_id,
             "description": properties.get('description', fg_name),
             "enabled": True,
-            "memberInterfaces": ftd_members,
+            "selectedInterfaces": ftd_members,
             "type": "bridgegroupinterface"
         }
         

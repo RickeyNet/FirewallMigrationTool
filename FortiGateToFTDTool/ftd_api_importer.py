@@ -332,7 +332,7 @@ class FTDAPIClient:
                     "Accept": "application/json"
                 })
                 
-                print("âœ“ Authentication successful")
+                print("Authentication successful")
                 return True
             else:
                 print(f"FAIL Authentication failed: {response.status_code}")
@@ -505,21 +505,112 @@ class FTDAPIClient:
         except requests.exceptions.RequestException as e:
             self.stats["port_groups_failed"] += 1
             return False, str(e)
+        
+    def resolve_route_references(self, route: Dict) -> Tuple[bool, Dict]:
+        """
+        Resolve all object references in a route to include IDs and versions.
+        
+        Routes reference network objects, interfaces, etc. by name, but the API
+        requires full object references with id and version fields.
+        
+        Args:
+            route: Route dictionary with minimal object references
+            
+        Returns:
+            Tuple of (success: bool, resolved route dict or error message)
+        """
+        resolved_route = route.copy()
+        
+        # Resolve interface reference
+        if 'iface' in route:
+            iface_ref = route['iface']
+            hardware_name = iface_ref.get('hardwareName')
+            
+            if hardware_name:
+                # Look up interface by hardware name
+                success, intf_obj = self.get_interface_by_hardware_name(hardware_name)
+                if success and intf_obj:
+                    # Use minimal reference with id and version
+                    resolved_route['iface'] = {
+                        "version": intf_obj.get('version'),
+                        "name": intf_obj.get('name'),
+                        "hardwareName": intf_obj.get('hardwareName'),
+                        "id": intf_obj.get('id'),
+                        "type": intf_obj.get('type')
+                    }
+                else:
+                    return False, f"Could not resolve interface: {hardware_name}" # pyright: ignore[reportReturnType]
+        
+        # Resolve network object references in networks array
+        if 'networks' in route:
+            resolved_networks = []
+            for net_ref in route['networks']:
+                net_name = net_ref.get('name')
+                
+                # Special case: any-ipv4 is a built-in object
+                if net_name == 'any-ipv4':
+                    success, net_obj = self.get_network_object_by_name('any-ipv4')
+                    if success and net_obj:
+                        resolved_networks.append({
+                            "version": net_obj.get('version'),
+                            "name": net_obj.get('name'),
+                            "id": net_obj.get('id'),
+                            "type": "networkobject"
+                        })
+                    else:
+                        return False, f"Could not resolve built-in object: any-ipv4" # pyright: ignore[reportReturnType]
+                else:
+                    success, net_obj = self.get_network_object_by_name(net_name)
+                    if success and net_obj:
+                        resolved_networks.append({
+                            "version": net_obj.get('version'),
+                            "name": net_obj.get('name'),
+                            "id": net_obj.get('id'),
+                            "type": "networkobject"
+                        })
+                    else:
+                        return False, f"Could not resolve network object: {net_name}" # pyright: ignore[reportReturnType]
+            
+            resolved_route['networks'] = resolved_networks
+        
+        # Resolve gateway network object reference
+        if 'gateway' in route:
+            gw_ref = route['gateway']
+            gw_name = gw_ref.get('name')
+            
+            success, gw_obj = self.get_network_object_by_name(gw_name)
+            if success and gw_obj:
+                resolved_route['gateway'] = {
+                    "version": gw_obj.get('version'),
+                    "name": gw_obj.get('name'),
+                    "id": gw_obj.get('id'),
+                    "type": "networkobject"
+                }
+            else:
+                return False, f"Could not resolve gateway object: {gw_name}" # pyright: ignore[reportReturnType]
+        
+        return True, resolved_route
     
     def create_static_route(self, route: Dict) -> Tuple[bool, Optional[str]]:
         """
         Create a static route in FTD.
         
         Args:
-            route: Dictionary containing static route data
+            route: Dictionary containing static route data (with minimal object references)
             
         Returns:
             Tuple of (success: bool, object_id: str or error message)
         """
+        # Resolve all object references to include IDs and versions
+        success, resolved_route = self.resolve_route_references(route)
+        if not success:
+            self.stats["routes_failed"] += 1
+            return False, f"Failed to resolve references: {resolved_route}"
+        
         endpoint = f"{self.base_url}/devices/default/routing/staticrouteentries"
         
         try:
-            response = self.session.post(endpoint, json=route, timeout=30)
+            response = self.session.post(endpoint, json=resolved_route, timeout=30)
             
             if response.status_code in [200, 201]:
                 created_obj = response.json()
@@ -636,6 +727,39 @@ class FTDAPIClient:
                 
         except requests.exceptions.RequestException as e:
             return False, str(e) # pyright: ignore[reportReturnType]
+        
+    def get_interface_by_hardware_name(self, hardware_name: str) -> Tuple[bool, Optional[Dict]]:
+        """
+        Get any interface (physical, subinterface, etherchannel, bridge group) by hardware name.
+        
+        Args:
+            hardware_name: Hardware name (e.g., 'Ethernet1/1', 'Port-channel1.100')
+            
+        Returns:
+            Tuple of (success: bool, interface dict or error message)
+        """
+        # Try physical interfaces cache first
+        if hardware_name in self._physical_interface_cache:
+            return True, self._physical_interface_cache[hardware_name]
+        
+        # Try all interfaces endpoint
+        endpoint = f"{self.base_url}/devices/default/interfaces"
+        
+        try:
+            response = self.session.get(endpoint, timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                items = data.get('items', [])
+                
+                for intf in items:
+                    if intf.get('hardwareName') == hardware_name:
+                        return True, intf
+                
+                return False, f"Interface not found: {hardware_name}" # type: ignore
+            else:
+                return False, f"API error: {response.status_code}" # type: ignore
+        except Exception as e:
+            return False, str(e) # type: ignore
     
     def update_physical_interface(self, intf: Dict) -> Tuple[bool, Optional[str]]:
         """
@@ -675,11 +799,19 @@ class FTDAPIClient:
         # If interface is a switchport and we want to configure it as routed,
         # we need to change it to routed mode first
         if is_switchport:
+            if self.debug:
+                print(f"\n      [DEBUG] Interface {hardware_name} switchport details:")
+                print(f"              Mode: {current_mode}")
+                print(f"              SwitchPortMode: {existing.get('switchPortMode')}") # type: ignore
+                print(f"              Has VLAN config: {existing.get('vlanId') is not None}") # type: ignore
+            
             print(f"\n      [INFO] {hardware_name} is in switchport mode, converting to routed mode...", end=" ")
             
             convert_success, convert_msg = self._convert_switchport_to_routed(existing) # pyright: ignore[reportArgumentType]
             if not convert_success:
                 self.stats["physical_interfaces_failed"] += 1
+                if self.debug:
+                    print(f"\n      [DEBUG] Conversion failure details: {convert_msg}")
                 return False, f"Failed to convert from switchport: {convert_msg}"
             
             print("[OK]")
@@ -790,10 +922,20 @@ class FTDAPIClient:
         # Set mode to ROUTED
         convert_payload['mode'] = 'ROUTED'
         
-        # Remove switchport-specific fields
-        switchport_fields = ['switchPortMode', 'switchPortConfig', 'nativeVlan', 
-                            'allowedVlans', 'voiceVlan', 'spanningTreePortfast',
-                            'stpGuardType', 'stpPathCost', 'stpPortPriority']
+        # Remove ALL switchport-specific fields that conflict with ROUTED mode
+        # This list must be comprehensive to avoid 422 validation errors
+        switchport_fields = [
+            'switchPortMode',       # Access/trunk mode
+            'switchPortConfig',     # Switchport configuration object
+            'nativeVlan',           # Native VLAN (trunk only)
+            'allowedVlans',         # Allowed VLAN list
+            'voiceVlan',            # Voice VLAN
+            'spanningTreePortfast', # STP portfast
+            'stpGuardType',         # STP guard (root/loop/bpdu)
+            'stpPathCost',          # STP path cost
+            'stpPortPriority',      # STP port priority
+            'vlanId'                # VLAN assignment for switchport
+        ]
         for field in switchport_fields:
             convert_payload.pop(field, None)
         
@@ -855,20 +997,35 @@ class FTDAPIClient:
         
         # We need to find the parent interface ID
         # Check if parent is an etherchannel (Port-channel) or physical interface
+        # Based on hardware name pattern
         parent_is_etherchannel = parent_hardware.lower().startswith('port-channel')
+        
+        if self.debug:
+            print(f"\n      [DEBUG] Parent interface lookup:")
+            print(f"              Hardware name: {parent_hardware}")
+            print(f"              Type: {'EtherChannel' if parent_is_etherchannel else 'Physical'}")
         
         # USE CACHED LOOKUPS for performance
         if parent_is_etherchannel:
             # Try to find it as an etherchannel (from cache)
             success, parent_intf = self.get_cached_etherchannel(parent_hardware)
+            if self.debug and not success:
+                print(f"              Result: EtherChannel not found in cache")
         else:
             # Try to find it as a physical interface (from cache)
             success, parent_intf = self.get_cached_physical_interface(parent_hardware)
+            if self.debug and not success:
+                print(f"              Result: Physical interface not found in cache")
         
         if not success:
             # Parent interface not found - skip
             self.stats["subinterfaces_skipped"] += 1
+            if self.debug:
+                print(f"              Skipping subinterface creation (parent not available)")
             return True, f"SKIPPED: Parent interface {parent_hardware} not found"
+        
+        if self.debug:
+            print(f"              Found: {parent_intf.get('name')} (ID: {parent_intf.get('id')})") # type: ignore
         
         parent_id = parent_intf.get('id') # pyright: ignore[reportOptionalMemberAccess]
         parent_type = parent_intf.get('type', 'physicalinterface') # pyright: ignore[reportOptionalMemberAccess]
@@ -1085,6 +1242,10 @@ class FTDAPIClient:
         """
         Create a Bridge Group interface in FTD.
         
+        Bridge groups require member interfaces to be:
+        1. In ROUTED mode (FTD automatically manages bridge membership)
+        2. Referenced by ID (not hardware name)
+        
         Args:
             intf: Dictionary containing bridge group data
             
@@ -1097,6 +1258,46 @@ class FTDAPIClient:
         if 'mtu' in intf and intf['mtu'] is not None:
             if intf['mtu'] > 9000:
                 intf['mtu'] = 9000
+        
+        # CRITICAL: Resolve member interface IDs
+        # The converter provides hardware names, but the API requires IDs
+        # Bridge groups use "selectedInterfaces" field (not "memberInterfaces")
+        if 'selectedInterfaces' in intf:
+            resolved_members = []
+            for member in intf['selectedInterfaces']:
+                hardware_name = member.get('hardwareName')
+                
+                # Look up the physical interface by hardware name
+                success, existing = self.get_physical_interface(hardware_name)
+                if success:
+                    # Add the member with ID reference
+                    # Note: Member should be in ROUTED mode - FTD will manage bridge membership
+                    resolved_members.append({
+                        "id": existing.get('id'), # pyright: ignore[reportOptionalMemberAccess]
+                        "type": "physicalinterface"
+                    })
+                    
+                    if self.debug:
+                        current_mode = existing.get('mode') # pyright: ignore[reportOptionalMemberAccess]
+                        print(f"\n      [DEBUG] Resolved member: {hardware_name} -> ID {existing.get('id')} (mode: {current_mode})") # pyright: ignore[reportOptionalMemberAccess]
+                else:
+                    # Member interface not found - this is a problem
+                    print(f"\n      [WARNING] Could not resolve member {hardware_name}")
+                    if self.debug:
+                        print(f"                Error: {existing}")
+            
+            # Update the interface config with resolved member IDs
+            # Use "selectedInterfaces" for bridge groups (API requirement)
+            intf['selectedInterfaces'] = resolved_members
+            
+            if not resolved_members:
+                self.stats["bridge_groups_failed"] += 1
+                return False, "No valid member interfaces found (all members failed to resolve)"
+        
+        if self.debug:
+            print(f"\n      [DEBUG] Bridge group payload:")
+            print(f"                Name: {intf.get('name')}")
+            print(f"                Members: {len(intf.get('selectedInterfaces', []))}")
         
         try:
             response = self.session.post(endpoint, json=intf, timeout=30)
@@ -1123,6 +1324,34 @@ class FTDAPIClient:
         except requests.exceptions.RequestException as e:
             self.stats["bridge_groups_failed"] += 1
             return False, str(e)
+        
+    def get_network_object_by_name(self, name: str) -> Tuple[bool, Optional[Dict]]:
+        """
+        Get a network object by name to retrieve its ID and version.
+        
+        Args:
+            name: Network object name
+            
+        Returns:
+            Tuple of (success: bool, network object dict or error message)
+        """
+        endpoint = f"{self.base_url}/object/networks"
+        
+        try:
+            response = self.session.get(endpoint, timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                items = data.get('items', [])
+                
+                for obj in items:
+                    if obj.get('name') == name:
+                        return True, obj
+                
+                return False, f"Network object not found: {name}" # type: ignore
+            else:
+                return False, f"API error: {response.status_code}" # type: ignore
+        except Exception as e:
+            return False, str(e) # type: ignore
     
     def deploy_changes(self) -> bool:
         """
@@ -1144,7 +1373,7 @@ class FTDAPIClient:
             response = self.session.post(endpoint, json={}, timeout=30)
             
             if response.status_code in [200, 201, 202]:
-                print("âœ“ Deployment initiated successfully")
+                print("  Deployment initiated successfully")
                 print("  Note: Deployment may take several minutes to complete")
                 print("  Check FDM web interface for deployment status")
                 return True
@@ -1227,6 +1456,64 @@ def load_json_file(filename: str) -> Optional[List[Dict]]:
     except json.JSONDecodeError as e:
         print(f"FAIL Invalid JSON in {filename}: {e}")
         return None
+    
+
+def physical_interface_matches_json_config(current: Dict, desired_json: Dict) -> bool:
+    """
+    Determine whether the *current* FTD interface configuration already matches the
+    *desired* JSON configuration produced by the converter.
+
+    Important design choice:
+        - We only compare keys that are present in desired_json (the converter output).
+          This prevents false diffs when the converter intentionally omits fields.
+        - We normalize common API differences (None vs "", missing ipv4/ipv6 vs None).
+
+    Args:
+        current: Interface object retrieved from FTD (GET/cache)
+        desired_json: Interface object from converted JSON file
+
+    Returns:
+        True if no update is required, False otherwise.
+    """
+    # Keys we allow the converter to manage for physical interfaces
+    managed_keys = (
+        "name",
+        "description",
+        "mtu",
+        "enabled",
+        "managementOnly",
+        "mode",
+        "monitorInterface",
+    )
+
+    def _norm_scalar(v):
+        # Normalize empty strings vs None (FDM sometimes flips these)
+        if v == "":
+            return None
+        return v
+
+    # Compare only fields actually present in JSON
+    for key in managed_keys:
+        if key in desired_json:
+            if _norm_scalar(current.get(key)) != _norm_scalar(desired_json.get(key)):
+                return False
+
+    # Compare ipv4/ipv6 blocks only if present in JSON
+    for ip_key in ("ipv4", "ipv6"):
+        if ip_key in desired_json:
+            cur_block = current.get(ip_key)
+            des_block = desired_json.get(ip_key)
+
+            # Normalize missing vs None
+            if cur_block == {}:
+                cur_block = None
+            if des_block == {}:
+                des_block = None
+
+            if cur_block != des_block:
+                return False
+
+    return True
 
 
 def import_address_objects(client: FTDAPIClient, filename: str) -> bool:
@@ -1260,11 +1547,11 @@ def import_address_objects(client: FTDAPIClient, filename: str) -> bool:
         success, result = client.create_network_object(obj)
         if success:
             if "SKIPPED" in str(result):
-                print("SKIP (already exists)")
+                print("[SKIP (already exists)]")
             else:
-                print("âœ“")
+                print("[Success!]")
         else:
-            print(f"FAIL")
+            print(f"[FAIL]")
             print(f"      Error: {result}")
             all_success = False
         
@@ -1308,9 +1595,9 @@ def import_address_groups(client: FTDAPIClient, filename: str) -> bool:
         
         success, result = client.create_network_group(cleaned_group)
         if success:
-            print("âœ“")
+            print("[Success!]")
         else:
-            print(f"FAIL {result}")
+            print(f"[FAIL {result}]")
             all_success = False
         
         time.sleep(0.2)
@@ -1392,9 +1679,9 @@ def import_service_objects(client: FTDAPIClient, filename: str) -> bool:
         
         success, result = client.create_port_object(obj)
         if success:
-            print("âœ“")
+            print("[Success!]")
         else:
-            print(f"FAIL {result}")
+            print(f"[FAIL {result}]")
             all_success = False
         
         time.sleep(0.2)
@@ -1436,9 +1723,9 @@ def import_service_groups(client: FTDAPIClient, filename: str) -> bool:
         
         success, result = client.create_port_group(cleaned_group)
         if success:
-            print("âœ“")
+            print("[Success!]")
         else:
-            print(f"FAIL {result}")
+            print(f"[FAIL {result}]")
             all_success = False
         
         time.sleep(0.2)
@@ -1487,59 +1774,57 @@ def import_physical_interfaces(client: FTDAPIClient, filename: str) -> bool:
     failed_count = 0
     
     for i, intf in enumerate(interfaces, 1):
-        name = intf.get("name", "Unknown")
+        name = intf.get("name", "")  # Empty string if not provided
         hardware = intf.get("hardwareName", "Unknown")
-        print(f"  [{i}/{len(interfaces)}] Processing: {name} ({hardware})...", end=" ")
+        
+        # Display name - show hardware if name is empty
+        display_name = name if name else f"<{hardware}>"
+        print(f"  [{i}/{len(interfaces)}] Processing: {display_name} ({hardware})...", end=" ")
 
         if not hardware or hardware not in client._physical_interface_cache:
             print("[SKIP] (not present on this FTD model)")
             skipped_count += 1
+            client.stats["physical_interfaces_skipped"] += 1
             continue
 
-        # Start with full existing object from cache (preserves id, version, read-only fields)
-        existing = client._physical_interface_cache[hardware].copy()
+        # Get the original interface from cache
+        original = client._physical_interface_cache[hardware]
 
-        # Merge fields we want to change
-        update_keys = ["name", "description", "mtu", "enabled", "managementOnly", "mode", "monitorInterface"]
-        for key in update_keys:
-            if key in intf:
-                existing[key] = intf[key]
+        # Check if the interface already matches the desired JSON config
+        if physical_interface_matches_json_config(original, intf):
+            print("[OK] No changes needed.")
+            skipped_count += 1
+            client.stats["physical_interfaces_skipped"] += 1
+            continue
 
-        # Full replace IPv4/IPv6 blocks if present
-        if "ipv4" in intf:
-            existing["ipv4"] = intf["ipv4"]
-        if "ipv6" in intf:
-            existing["ipv6"] = intf["ipv6"]
-
-        # PUT update
-        intf_id = existing["id"]
-        url = f"{client.base_url}/devices/default/interfaces/physicalinterfaces/{intf_id}"
-
-        try:
-            response = client.session.put(url, json=existing)
-            if response.status_code in (200, 202):
-                updated_obj = response.json()
-                # Refresh cache with latest version
-                client._physical_interface_cache[hardware] = updated_obj
-                new_name = updated_obj.get("name", name)
-                print(f"[OK] -> {new_name}")
-                updated_count += 1
-                client.stats["physical_interfaces_updated"] += 1
+        # Use the client's update_physical_interface method
+        # This method properly handles:
+        # - Switchport to routed mode conversion
+        # - Removal of switchport-specific fields
+        # - Version management
+        # - Error handling
+        success, result = client.update_physical_interface(intf)
+        
+        if success:
+            if "SKIPPED" in str(result):
+                print(f"[SKIP] {result}")
+                skipped_count += 1
             else:
-                print(f"[FAIL] {response.status_code}")
-                if client.debug:
-                    print(f"       {response.text}")
-                failed_count += 1
-                all_success = False
-        except Exception as e:
-            print(f"[FAIL] Exception: {e}")
+                # Update successful
+                print("[OK]")
+                updated_count += 1
+        else:
+            # Update failed
+            print(f"[FAIL] {result}")
+            if client.debug:
+                print(f"       Error details: {result}")
             failed_count += 1
             all_success = False
 
         time.sleep(0.2)
     
     # Print summary
-    print(f"\n  Summary: {updated_count} updated, {skipped_count} skipped (not present), {failed_count} failed")
+    print(f"\n  Summary: {updated_count} updated, {skipped_count} skipped (not present or no changes needed), {failed_count} failed")
     
     return all_success
 
@@ -1637,19 +1922,33 @@ def import_bridge_groups(client: FTDAPIClient, filename: str) -> bool:
     return all_success
 
 
-def import_subinterfaces(client: FTDAPIClient, filename: str) -> bool:
+def import_subinterfaces(client: FTDAPIClient, filename: str, parent_type_filter: Optional[str] = None) -> bool:
     """
     Import subinterfaces (VLANs) from JSON file to FTD.
+    
+    This function can filter subinterfaces by parent type to support
+    two-phase import:
+    - Phase 1: Import subinterfaces on physical interfaces (before EtherChannels)
+    - Phase 2: Import subinterfaces on EtherChannels (after EtherChannels created)
     
     Args:
         client: Authenticated FTD API client
         filename: Path to subinterfaces JSON file
+        parent_type_filter: Optional filter - 'physical' or 'etherchannel' or None for all
         
     Returns:
         True if all imports successful, False if any failed
     """
+    # Determine header based on filter
+    if parent_type_filter == 'physical':
+        header = f"Creating Subinterfaces (Physical Interface Parents) from {filename}"
+    elif parent_type_filter == 'etherchannel':
+        header = f"Creating Subinterfaces (EtherChannel Parents) from {filename}"
+    else:
+        header = f"Creating Subinterfaces from {filename}"
+    
     print(f"\n{'-'*60}")
-    print(f"Creating Subinterfaces from {filename}")
+    print(header)
     print(f"{'-'*60}")
     
     interfaces = load_json_file(filename)
@@ -1660,34 +1959,70 @@ def import_subinterfaces(client: FTDAPIClient, filename: str) -> bool:
         print("  No subinterfaces to create")
         return True
     
-    # PREFETCH AND CACHE all interface references ONCE
-    # This avoids repeated API calls when looking up parent interfaces
-    client.prefetch_interface_cache()
+    # Filter interfaces based on parent type if requested
+    filtered_interfaces = []
+    skipped_count = 0
+    
+    for intf in interfaces:
+        hardware_name = intf.get('hardwareName', '')
+        
+        # Extract parent hardware name
+        if '.' in hardware_name:
+            parent_hardware = hardware_name.rsplit('.', 1)[0]
+            parent_is_etherchannel = parent_hardware.lower().startswith('port-channel')
+            
+            # Apply filter if specified
+            if parent_type_filter == 'physical' and not parent_is_etherchannel:
+                filtered_interfaces.append(intf)
+            elif parent_type_filter == 'etherchannel' and parent_is_etherchannel:
+                filtered_interfaces.append(intf)
+            elif parent_type_filter is None:
+                filtered_interfaces.append(intf)
+            else:
+                skipped_count += 1
+        else:
+            # Invalid format - include it to let create_subinterface handle the error
+            filtered_interfaces.append(intf)
+    
+    if skipped_count > 0:
+        print(f"  Filtered out {skipped_count} subinterfaces (wrong parent type for this phase)")
+    
+    if not filtered_interfaces:
+        print("  No subinterfaces match filter criteria")
+        return True
+    
+    print(f"  Processing {len(filtered_interfaces)} subinterfaces...")
     
     all_success = True
-    for i, intf in enumerate(interfaces, 1):
+    created_count = 0
+    skipped_api_count = 0
+    failed_count = 0
+    
+    for i, intf in enumerate(filtered_interfaces, 1):
         name = intf.get("name", "Unknown")
         hardware = intf.get("hardwareName", "Unknown")
-        vlan = intf.get("vlanId", "?")
-        print(f"  [{i}/{len(interfaces)}] Creating: {name} ({hardware}) VLAN {vlan}...", end=" ")
+        print(f"  [{i}/{len(filtered_interfaces)}] Creating: {name} ({hardware})...", end=" ")
         
         success, result = client.create_subinterface(intf)
         if success:
             if "SKIPPED" in str(result):
-                # Extract the reason from the result
-                if "Parent interface" in str(result):
-                    print("SKIP (parent not found)")
-                elif "already exists" in str(result).lower():
+                if "already exists" in str(result).lower():
                     print("SKIP (already exists)")
                 else:
                     print(f"SKIP ({result.split('SKIPPED:')[-1].strip()[:50]})") # pyright: ignore[reportOptionalMemberAccess]
+                skipped_api_count += 1
             else:
                 print("OK")
+                created_count += 1
         else:
             print(f"FAIL {result}")
+            failed_count += 1
             all_success = False
         
         time.sleep(0.2)
+    
+    # Print summary
+    print(f"\n  Summary: {created_count} created, {skipped_api_count} skipped, {failed_count} failed")
     
     return all_success
 
@@ -1722,9 +2057,9 @@ def import_static_routes(client: FTDAPIClient, filename: str) -> bool:
         
         success, result = client.create_static_route(route)
         if success:
-            print("âœ“")
+            print("[Success!]")
         else:
-            print(f"FAIL {result}")
+            print(f"[FAIL {result}]")
             all_success = False
         
         time.sleep(0.2)
@@ -1763,9 +2098,9 @@ def import_access_rules(client: FTDAPIClient, filename: str) -> bool:
         
         success, result = client.create_access_rule(rule)
         if success:
-            print("âœ“")
+            print("[Success!]")
         else:
-            print(f"FAIL {result}")
+            print(f"[FAIL {result}]")
             all_success = False
         
         time.sleep(0.2)
@@ -1894,7 +2229,11 @@ Examples:
         elif args.type == 'bridge-groups':
             import_bridge_groups(client, args.file)
         elif args.type == 'subinterfaces':
-            import_subinterfaces(client, args.file)
+            # Import subinterfaces in two phases for correct parent dependency order
+            print("\nPhase 1: Subinterfaces on Physical Interfaces")
+            import_subinterfaces(client, args.file, parent_type_filter='physical')
+            print("\nPhase 2: Subinterfaces on EtherChannels")
+            import_subinterfaces(client, args.file, parent_type_filter='etherchannel')
         elif args.type == 'address-objects':
             import_address_objects(client, args.file)
         elif args.type == 'address-groups':
@@ -1934,8 +2273,11 @@ Examples:
             imported_any = True
         
         if args.only_subinterfaces:
-            print("  - Subinterfaces")
-            import_subinterfaces(client, f"{args.base}_subinterfaces.json")
+            print("  - Subinterfaces (two-phase import)")
+            print("    Phase 1: Physical interface parents")
+            import_subinterfaces(client, f"{args.base}_subinterfaces.json", parent_type_filter='physical')
+            print("    Phase 2: EtherChannel parents")
+            import_subinterfaces(client, f"{args.base}_subinterfaces.json", parent_type_filter='etherchannel')
             imported_any = True
         
         if args.only_address_objects:
@@ -1971,32 +2313,35 @@ Examples:
         if not imported_any:
             print("\nFAIL No import flags specified. Nothing to import.")
             return 1
-    
     # Default: Import everything in order
     else:
         print("\nFull Import Mode - All objects in order:")
         print("  1. Physical Interfaces (update)")
-        print("  2. EtherChannels (create)")
-        print("  3. Bridge Groups (create)")
-        print("  4. Subinterfaces (create)")
-        print("  5. Address Objects")
-        print("  6. Address Groups")
-        print("  7. Service Objects")
-        print("  8. Service Groups")
-        print("  9. Static Routes")
-        print("  10. Access Rules")
+        print("  2. Subinterfaces on Physical Interfaces (create)")
+        print("  3. EtherChannels (create)")
+        print("  4. Subinterfaces on EtherChannels (create)")
+        print("  5. Bridge Groups (create)")
+        print("  6. Address Objects")
+        print("  7. Address Groups")
+        print("  8. Service Objects")
+        print("  9. Service Groups")
+        print("  10. Static Routes")
+        print("  11. Access Rules")
         
         # Step 1: Update physical interfaces
         import_physical_interfaces(client, f"{args.base}_physical_interfaces.json")
         
-        # Step 2: Create etherchannels
+        # Step 2: Create subinterfaces on physical interfaces BEFORE adding them to EtherChannels
+        import_subinterfaces(client, f"{args.base}_subinterfaces.json", parent_type_filter='physical')
+        
+        # Step 3: Create etherchannels (this may add physical interfaces as members)
         import_etherchannels(client, f"{args.base}_etherchannels.json")
         
-        # Step 3: Create bridge groups
-        import_bridge_groups(client, f"{args.base}_bridge_groups.json")
+        # Step 4: Create subinterfaces on EtherChannels AFTER they are created
+        import_subinterfaces(client, f"{args.base}_subinterfaces.json", parent_type_filter='etherchannel')
         
-        # Step 4: Create subinterfaces
-        import_subinterfaces(client, f"{args.base}_subinterfaces.json")
+        # Step 5: Create bridge groups
+        import_bridge_groups(client, f"{args.base}_bridge_groups.json")
         
         # Step 5: Import address objects
         import_address_objects(client, f"{args.base}_address_objects.json")

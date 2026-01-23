@@ -117,7 +117,7 @@ class FTDBulkDelete:
                     "Accept": "application/json"
                 })
                 
-                print("[OK] Authentication successful")
+                print("Authentication successful!")
                 return True
             else:
                 print(f"[ERROR] Authentication failed: {response.status_code}")
@@ -308,7 +308,7 @@ class FTDBulkDelete:
                     if error_msg == "already deleted":
                         print("[OK] (already deleted)")
                     else:
-                        print("[OK]")
+                        print("[Thrown into the abyss]")
                     success_count += 1
                 else:
                     print(f"[ERROR] {error_msg}")
@@ -350,8 +350,8 @@ class FTDBulkDelete:
             True if successful
         """
         intf_id = intf.get('id')
-        hardware_name = intf.get('hardwareName', 'Unknown')
-        current_name = intf.get('name', '')
+        # hardware_name = intf.get('hardwareName', 'Unknown')
+        # current_name = intf.get('name', '')
         
         if not intf_id:
             return False
@@ -364,13 +364,31 @@ class FTDBulkDelete:
         reset_payload['name'] = ''  # Clear logical name
         reset_payload['enabled'] = False  # Disable interface
         reset_payload['ipv4'] = None  # Clear IP address
+        reset_payload['ipv6'] = None  # Clear IPv6 address
         reset_payload['description'] = ''  # Clear description
         reset_payload['mtu'] = 1500  # Reset MTU to default
         
-        # Also reset mode to ROUTED if it was changed
-        # (some interfaces might be in SWITCHPORT mode)
+        # Reset mode to ROUTED (required before removing switchport fields)
+        # CRITICAL: Must set mode BEFORE removing switchport fields
         if 'mode' in reset_payload:
             reset_payload['mode'] = 'ROUTED'
+        
+        # Remove ALL switchport-specific fields that are incompatible with ROUTED mode
+        # These fields cause 422 errors if present when mode='ROUTED'
+        switchport_fields = [
+            'switchPortMode',      # Switchport mode (access/trunk)
+            'switchPortConfig',    # Switchport configuration
+            'nativeVlan',          # Native VLAN for trunks
+            'allowedVlans',        # Allowed VLANs list
+            'voiceVlan',           # Voice VLAN
+            'spanningTreePortfast',  # STP portfast setting
+            'stpGuardType',        # STP guard type
+            'stpPathCost',         # STP path cost
+            'stpPortPriority',     # STP port priority
+            'vlanId'               # VLAN ID for switchport
+        ]
+        for field in switchport_fields:
+            reset_payload.pop(field, None)
         
         # Clear any security zone assignment
         if 'securityZone' in reset_payload:
@@ -479,7 +497,7 @@ class FTDBulkDelete:
                 success = self.reset_physical_interface(intf, dry_run)
                 
                 if success:
-                    print("[OK]")
+                    print("[Destroyed]")
                     success_count += 1
                 else:
                     print("[ERROR]")
@@ -643,7 +661,7 @@ class FTDBulkDelete:
                 success, error_msg = self.delete_subinterface(intf, dry_run)
                 
                 if success:
-                    print("[OK]")
+                    print("[Thrown into the abyss]")
                     success_count += 1
                 else:
                     print(f"[ERROR] {error_msg}")
@@ -716,7 +734,7 @@ class FTDBulkDelete:
                 success, error_msg = self.delete_object("/devices/default/etherchannelinterfaces", obj_id) # pyright: ignore[reportArgumentType]
                 
                 if success:
-                    print("[OK]")
+                    print("[Thrown in the Garbage]")
                     success_count += 1
                 else:
                     # If it failed, it might have subinterfaces - show the error
@@ -785,7 +803,7 @@ class FTDBulkDelete:
                 success, error_msg = self.delete_object("/devices/default/bridgegroupinterfaces", obj_id) # pyright: ignore[reportArgumentType]
                 
                 if success:
-                    print("[OK]")
+                    print("[Lost in space]")
                     success_count += 1
                 else:
                     print(f"[ERROR] {error_msg}")
@@ -808,7 +826,7 @@ class FTDBulkDelete:
             response = self.session.post(endpoint, json={}, timeout=30)
             
             if response.status_code in [200, 201, 202]:
-                print("[OK] Deployment initiated")
+                print("[Lift off!] Deployment initiated")
                 print("  (Deployment may take several minutes)")
                 return True
             else:

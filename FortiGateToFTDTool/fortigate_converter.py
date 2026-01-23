@@ -415,7 +415,18 @@ Supported FTD Models:
     # Now that we have the address objects and interfaces, we can initialize the route converter
     # The route converter needs these to map route destinations/gateways to actual object names
     # and to map interface names to FTD interface names
-    route_converter = RouteConverter(fg_config, network_objects, interface_name_mapping)
+    # Prepare converted interfaces dictionary for route converter
+    converted_interfaces = {
+        'physical_interfaces': interface_results.get('physical_interfaces', []),
+        'subinterfaces': interface_results.get('subinterfaces', []),
+        'etherchannels': interface_results.get('etherchannels', []),
+        'bridge_groups': interface_results.get('bridge_groups', [])
+    }
+    
+    # Pass debug flag if available
+    debug_mode = args.debug if 'args' in locals() and hasattr(args, 'debug') else False
+    
+    route_converter = RouteConverter(fg_config, network_objects, interface_name_mapping, converted_interfaces, debug_mode)
     
     # ========================================================================
     # STEP 6: Convert address groups

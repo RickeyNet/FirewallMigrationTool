@@ -54,7 +54,7 @@ IMPORTANT NOTES:
 """
 
 import re
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 def sanitize_name(name: str) -> str:
     """
@@ -97,7 +97,7 @@ class RouteConverter:
     6. Handling special cases (blackhole routes, default routes)
     """
     
-    def __init__(self, fortigate_config: Dict[str, Any], network_objects: List[Dict] = None, interface_name_mapping: Dict[str, str] = None): # pyright: ignore[reportArgumentType]
+    def __init__(self, fortigate_config: Dict[str, Any], network_objects: List[Dict] = None, interface_name_mapping: Dict[str, str] = None, converted_interfaces: Dict[str, List[Dict]] = None, debug: bool = False): # pyright: ignore[reportArgumentType]
         """
         Initialize the converter with FortiGate configuration data.
         
@@ -107,6 +107,9 @@ class RouteConverter:
             network_objects: List of already-converted FTD network objects
                            Used to match route destinations/gateways to existing objects
             interface_name_mapping: Dict mapping FortiGate interface names to FTD interface names
+            converted_interfaces: Dict containing converted interface lists
+                                 Keys: 'physical_interfaces', 'subinterfaces', 'etherchannels', 'bridge_groups'
+            debug: Enable debug output
         """
         # Store the entire FortiGate configuration
         self.fg_config = fortigate_config
@@ -117,13 +120,34 @@ class RouteConverter:
         # Store interface name mapping
         self.interface_name_mapping = interface_name_mapping or {}
         
-        # Build a lookup dictionary: IP/CIDR -> object name
-        # This allows us to quickly find the object name for a given IP
-        self.ip_to_name = {}
-        self._build_ip_lookup()
+        # Store debug flag
+        self.debug = debug
+        
+        # Store converted interfaces
+        self.converted_interfaces = converted_interfaces or {}
+        
+        # Build lookup dictionaries
+        # Name -> full network object (for routes)
+        self.name_to_network_object = {}
+        self._build_network_object_lookup()
+        
+        # IP/CIDR -> network object name
+        self.ip_to_network_object_name = {}
+        self._build_ip_to_network_object_lookup()
+        
+        # Interface name -> full interface object
+        self.name_to_interface_object = {}
+        self._build_interface_object_lookup()
+        
+        # IP/network -> interface name (for determining which interface a network/gateway is on)
+        self.ip_to_interface_name = {}
+        self._build_ip_to_interface_name_lookup()
         
         # This will store the converted FTD static routes
         self.ftd_static_routes = []
+        
+        # Track routes that need network objects created
+        self.missing_network_objects = []
         
         # Track statistics
         self.converted_count = 0
@@ -131,36 +155,202 @@ class RouteConverter:
         self.skipped_count = 0
         self.unmatched_count = 0  # Track routes with no matching address object
 
-    def _build_ip_lookup(self):
-        """
-        Build a lookup dictionary mapping IP addresses/CIDRs to object names.
-        
-        This allows us to find the correct address object name when we have
-        a destination or gateway IP from the route.
-        
-        The lookup handles:
-        - Exact IP matches (e.g., 10.0.20.5 -> "Server1")
-        - Network matches (e.g., 10.0.20.0/24 -> "Bull_net")
-        - Gateway IPs that are hosts (/32)
-        """
+    def _build_network_object_lookup(self):
+        """Build lookup from network object name to full object."""
         for obj in self.network_objects:
-            # Get the object name
+            name = obj.get('name')
+            if name:
+                self.name_to_network_object[name] = obj
+    
+    def _build_ip_to_network_object_lookup(self):
+        """Build lookup from IP/CIDR to network object name."""
+        for obj in self.network_objects:
             name = obj.get('name', '')
-            
-            # Get the value (IP or network in CIDR format)
             value = obj.get('value', '')
             
             if value and name:
                 # Store in lookup: "10.0.20.0/24" -> "Bull_net"
-                self.ip_to_name[value] = name
+                self.ip_to_network_object_name[value] = name
                 
                 # Also store without CIDR for host addresses
-                # "10.0.20.5/32" -> also indexed as "10.0.20.5"
                 if '/' in value:
                     ip_only = value.split('/')[0]
-                    # Only add if not already present (prefer the CIDR version)
-                    if ip_only not in self.ip_to_name:
-                        self.ip_to_name[ip_only] = name
+                    if ip_only not in self.ip_to_network_object_name:
+                        self.ip_to_network_object_name[ip_only] = name
+    
+    def _build_interface_object_lookup(self):
+        """Build lookup from interface name to full interface object."""
+        for interface_type in ['physical_interfaces', 'subinterfaces', 'etherchannels', 'bridge_groups']:
+            interfaces = self.converted_interfaces.get(interface_type, [])
+            
+            for intf in interfaces:
+                name = intf.get('name', '')
+                if name:
+                    self.name_to_interface_object[name] = intf
+
+
+    def _build_ip_to_interface_name_lookup(self):
+        """Build lookup from IP/network to interface name."""
+        for interface_type in ['physical_interfaces', 'subinterfaces', 'etherchannels', 'bridge_groups']:
+            interfaces = self.converted_interfaces.get(interface_type, [])
+            
+            for intf in interfaces:
+                intf_name = intf.get('name', '')
+                if not intf_name:
+                    continue
+                
+                # Extract IPv4 address if present
+                ipv4_config = intf.get('ipv4')
+                if ipv4_config and isinstance(ipv4_config, dict):
+                    ip_address_obj = ipv4_config.get('ipAddress', {})
+                    
+                    if isinstance(ip_address_obj, dict):
+                        ip_addr = ip_address_obj.get('ipAddress')
+                        netmask = ip_address_obj.get('netmask')
+                        
+                        if ip_addr and netmask:
+                            # Calculate network address and CIDR
+                            cidr = self._netmask_to_cidr(netmask)
+                            network_addr = self._calculate_network_address(ip_addr, netmask)
+                            network_cidr = f"{network_addr}/{cidr}"
+                            
+                            # Store mappings
+                            self.ip_to_interface_name[ip_addr] = intf_name
+                            self.ip_to_interface_name[f"{ip_addr}/32"] = intf_name
+                            self.ip_to_interface_name[network_cidr] = intf_name
+                            self.ip_to_interface_name[network_addr] = intf_name
+    
+    def _calculate_network_address(self, ip_addr: str, netmask: str) -> str:
+        """Calculate the network address given an IP and netmask."""
+        try:
+            ip_octets = [int(o) for o in ip_addr.split('.')]
+            mask_octets = [int(o) for o in netmask.split('.')]
+            network_octets = [ip_octets[i] & mask_octets[i] for i in range(4)]
+            return '.'.join(str(o) for o in network_octets)
+        except Exception:
+            return ip_addr
+        
+
+    def _get_network_object_for_destination(self, dst: List) -> Optional[Dict]:
+        """
+        Get the full network object for a route destination.
+        
+        Args:
+            dst: List containing [IP_address, netmask]
+            
+        Returns:
+            Full network object dict with id, version, name, type, or None
+        """
+        if len(dst) < 2:
+            return None
+        
+        ip_addr = str(dst[0])
+        netmask = str(dst[1])
+        cidr = self._netmask_to_cidr(netmask)
+        
+        # Check if this is a default route
+        if ip_addr == "0.0.0.0" and cidr == 0:
+            # Return reference to "any-ipv4" built-in object
+            return {
+                "name": "any-ipv4",
+                "type": "networkobject"
+            }
+        
+        # Calculate network address
+        network_addr = self._calculate_network_address(ip_addr, netmask)
+        network_cidr = f"{network_addr}/{cidr}"
+        
+        # Try to find existing network object by CIDR
+        if network_cidr in self.ip_to_network_object_name:
+            obj_name = self.ip_to_network_object_name[network_cidr]
+            if obj_name in self.name_to_network_object:
+                return self.name_to_network_object[obj_name].copy()
+        
+        # Try by network address only
+        if network_addr in self.ip_to_network_object_name:
+            obj_name = self.ip_to_network_object_name[network_addr]
+            if obj_name in self.name_to_network_object:
+                return self.name_to_network_object[obj_name].copy()
+        
+        # Try by IP address
+        if ip_addr in self.ip_to_network_object_name:
+            obj_name = self.ip_to_network_object_name[ip_addr]
+            if obj_name in self.name_to_network_object:
+                return self.name_to_network_object[obj_name].copy()
+        
+        # No existing object found - need to create one
+        self.unmatched_count += 1
+        generated_name = f"Net_{network_addr.replace('.', '_')}_{cidr}"
+        print(f"    Warning: No network object found for {network_cidr}")
+        print(f"             You need to create network object: {generated_name} = {network_cidr}")
+        
+        # Track missing object
+        self.missing_network_objects.append({
+            "name": generated_name,
+            "value": network_cidr,
+            "type": "networkobject"
+        })
+        
+        # Return reference (will need ID added during import)
+        return {
+            "name": generated_name,
+            "type": "networkobject"
+        }
+    
+    def _get_network_object_for_gateway(self, gateway_ip: str) -> Optional[Dict]:
+        """
+        Get the full network object for a gateway IP.
+        
+        Args:
+            gateway_ip: Gateway IP address as string
+            
+        Returns:
+            Full network object dict with id, version, name, type, or None
+        """
+        # Try with /32 CIDR notation first
+        gateway_cidr = f"{gateway_ip}/32"
+        if gateway_cidr in self.ip_to_network_object_name:
+            obj_name = self.ip_to_network_object_name[gateway_cidr]
+            if obj_name in self.name_to_network_object:
+                return self.name_to_network_object[obj_name].copy()
+        
+        # Try without CIDR
+        if gateway_ip in self.ip_to_network_object_name:
+            obj_name = self.ip_to_network_object_name[gateway_ip]
+            if obj_name in self.name_to_network_object:
+                return self.name_to_network_object[obj_name].copy()
+        
+        # No existing object found - need to create one
+        self.unmatched_count += 1
+        generated_name = f"Gateway_{gateway_ip.replace('.', '_')}"
+        print(f"    Warning: No network object found for gateway {gateway_ip}")
+        print(f"             You need to create network object: {generated_name} = {gateway_ip}/32")
+        
+        # Track missing object
+        self.missing_network_objects.append({
+            "name": generated_name,
+            "value": f"{gateway_ip}/32",
+            "type": "networkobject"
+        })
+        
+        # Return reference (will need ID added during import)
+        return {
+            "name": generated_name,
+            "type": "networkobject"
+        }
+    
+    def _get_interface_object(self, interface_name: str) -> Optional[Dict]:
+        """
+        Get the full interface object by name.
+        
+        Args:
+            interface_name: FTD interface name
+            
+        Returns:
+            Full interface object dict, or None
+        """
+        return self.name_to_interface_object.get(interface_name)
+    
     
     def convert(self) -> List[Dict]:
         """
@@ -226,10 +416,18 @@ class RouteConverter:
             
             # Convert destination to CIDR format
             dst_network = self._format_destination(dst)
-            dst_name = self._create_network_name(dst)
             
             # ================================================================
-            # STEP 2D: Extract gateway
+            # STEP 2D: Get destination network object
+            # ================================================================
+            dst_network_obj = self._get_network_object_for_destination(dst)
+            if not dst_network_obj:
+                print(f"  Skipped: Route [{route_id}] - Could not resolve destination network object")
+                self.skipped_count += 1
+                continue
+            
+            # ================================================================
+            # STEP 2E: Extract gateway and get network object
             # ================================================================
             gateway_ip = properties.get('gateway', None)
             if not gateway_ip:
@@ -237,68 +435,62 @@ class RouteConverter:
                 self.skipped_count += 1
                 continue
             
-            # Create a name for the gateway object
-            gateway_name = self._create_gateway_name(gateway_ip, properties)
+            gateway_obj = self._get_network_object_for_gateway(gateway_ip)
+            if not gateway_obj:
+                print(f"  Skipped: Route [{route_id}] - Could not resolve gateway network object")
+                self.skipped_count += 1
+                continue
             
             # ================================================================
-            # STEP 2E: Extract interface/device
+            # STEP 2F: Extract interface/device and get interface object
             # ================================================================
-            # Extract interface/device name and map to FTD name
             fg_interface_name = properties.get('device', 'unknown')
             
             # Map FortiGate interface name to FTD interface name
             if fg_interface_name in self.interface_name_mapping:
                 ftd_interface_name = self.interface_name_mapping[fg_interface_name]
             else:
-                # Try matching by alias (some FortiGate configs use alias in routes)
                 ftd_interface_name = self.interface_name_mapping.get(
                     fg_interface_name, 
-                    fg_interface_name.lower().replace('-', '_')  # Sanitize as fallback
+                    fg_interface_name.lower().replace('-', '_')
                 )
             
-            interface_name = ftd_interface_name
+            # Get the full interface object
+            interface_obj = self._get_interface_object(ftd_interface_name) # type: ignore
+            if not interface_obj:
+                print(f"  Warning: Route [{route_id}] - Could not find interface object for {ftd_interface_name}")
+                print(f"           Using basic interface reference")
+                # Create basic interface reference as fallback
+                interface_obj = {
+                    "name": ftd_interface_name,
+                    "type": "physicalinterface"
+                }
             
             # ================================================================
-            # STEP 2F: Extract metric/distance
+            # STEP 2G: Extract metric/distance
             # ================================================================
-            metric = properties.get('distance', 1)  # Default to 1 if not specified
+            metric = properties.get('distance', 1)
             
             # ================================================================
-            # STEP 2G: Extract comment for route name
+            # STEP 2H: Extract comment for route name
             # ================================================================
             comment = properties.get('comment', '')
             if comment:
-                route_name = comment
+                route_name = sanitize_name(comment)
             else:
-                route_name = f"Route_{route_id}_{dst_name}"
-            
-            # Sanitize all names to replace spaces with underscores
-            sanitized_route_name = sanitize_name(route_name)
-            sanitized_interface_name = sanitize_name(interface_name) # pyright: ignore[reportArgumentType]
-            sanitized_dst_name = sanitize_name(dst_name)
-            sanitized_gateway_name = sanitize_name(gateway_name)
+                dst_obj_name = dst_network_obj.get('name', 'unknown')
+                route_name = f"Route_{route_id}_{sanitize_name(dst_obj_name)}"
             
             # ================================================================
-            # STEP 2H: Create the FTD static route entry structure
+            # STEP 2I: Create the FTD static route entry structure
             # ================================================================
             ftd_route = {
-                "name": sanitized_route_name,
-                "iface": {
-                    "name": sanitized_interface_name,
-                    "type": "physicalinterface"  # Assume physical, could also be subinterface
-                },
-                "networks": [
-                    {
-                        "name": sanitized_dst_name,
-                        "type": "networkobject"
-                    }
-                ],
-                "gateway": {
-                    "name": sanitized_gateway_name,
-                    "type": "networkobject"
-                },
+                "name": route_name,
+                "iface": interface_obj,  # Full interface object with id, version, etc.
+                "networks": [dst_network_obj],  # Full network object with id, version
+                "gateway": gateway_obj,  # Full network object with id, version
                 "metricValue": metric,
-                "ipType": "IPv4",  # Assume IPv4 for now
+                "ipType": "IPv4",
                 "type": "staticrouteentry"
             }
             
@@ -307,15 +499,16 @@ class RouteConverter:
             self.converted_count += 1
             
             # ================================================================
-            # STEP 2I: Print conversion details for user feedback
+            # STEP 2J: Print conversion details for user feedback
             # ================================================================
-            if route_name != sanitized_route_name:
-                print(f"  Converted: [{route_id}] {route_name} -> {sanitized_route_name}")
-            else:
-                print(f"  Converted: [{route_id}] {sanitized_route_name}")
-            print(f"    Destination: {sanitized_dst_name} ({dst_network})")
-            print(f"    Gateway: {sanitized_gateway_name}")
-            print(f"    Interface: {sanitized_interface_name}")
+            dst_obj_name = dst_network_obj.get('name', 'unknown')
+            gateway_obj_name = gateway_obj.get('name', 'unknown')
+            interface_obj_name = interface_obj.get('name', 'unknown')
+            
+            print(f"  Converted: [{route_id}] {route_name}")
+            print(f"    Destination: {dst_obj_name} ({dst_network})")
+            print(f"    Gateway: {gateway_obj_name}")
+            print(f"    Interface: {interface_obj_name}")
             print(f"    Metric: {metric}")
         
         # ====================================================================
@@ -383,16 +576,18 @@ class RouteConverter:
     
     def _create_network_name(self, dst: List) -> str:
         """
-        Find the actual address object name for the destination network.
+        Find the interface name for the destination network.
         
-        This method looks up the destination IP/network in our address objects
-        to find the real object name that exists in FTD.
+        This method looks up the destination IP/network to find which interface
+        it's configured on, then returns that interface name.
+        
+        This allows FTD routes to reference interface names as the network object.
         
         Args:
             dst: List containing [IP_address, netmask]
             
         Returns:
-            String name of the matching address object, or a generated name if no match
+            String name of the interface where this network exists, or a generated name if no match
         """
         if len(dst) < 2:
             return "Unknown_Network"
@@ -405,54 +600,118 @@ class RouteConverter:
         if ip_addr == "0.0.0.0" and cidr == 0:
             return "any-ipv4"
         
-        # Format as CIDR for lookup
+        # Calculate network address
+        network_addr = self._calculate_network_address(ip_addr, netmask)
+        network_cidr = f"{network_addr}/{cidr}"
+        
+        if self.debug:
+            print(f"\n    [DEBUG] Looking up network: {network_cidr}")
+        
+        # Try to find the interface by network CIDR
+        if network_cidr in self.ip_to_interface: # pyright: ignore[reportAttributeAccessIssue]
+            result = self.ip_to_interface[network_cidr] # pyright: ignore[reportAttributeAccessIssue]
+            if self.debug:
+                print(f"    [DEBUG] Found interface by network CIDR: {result}")
+            return result
+        
+        # Try to find by network address only
+        if network_addr in self.ip_to_interface: # pyright: ignore[reportAttributeAccessIssue]
+            result = self.ip_to_interface[network_addr] # pyright: ignore[reportAttributeAccessIssue]
+            if self.debug:
+                print(f"    [DEBUG] Found interface by network address: {result}")
+            return result
+        
+        # Try to find by IP address (in case it's a host route)
+        if ip_addr in self.ip_to_interface: # pyright: ignore[reportAttributeAccessIssue]
+            result = self.ip_to_interface[ip_addr] # pyright: ignore[reportAttributeAccessIssue]
+            if self.debug:
+                print(f"    [DEBUG] Found interface by IP address: {result}")
+            return result
+        
+        if self.debug:
+            print(f"    [DEBUG] No interface found, trying address objects...")
+        
+        # FALLBACK: Try legacy address object lookup
         cidr_notation = f"{ip_addr}/{cidr}"
         
         # Try to find the address object by exact CIDR match
-        if cidr_notation in self.ip_to_name:
-            return self.ip_to_name[cidr_notation]
+        if cidr_notation in self.ip_to_name: # pyright: ignore[reportAttributeAccessIssue]
+            result = self.ip_to_name[cidr_notation] # pyright: ignore[reportAttributeAccessIssue]
+            if self.debug:
+                print(f"    [DEBUG] Found address object by CIDR: {result}")
+            return result
         
         # Try to find by IP only (for host addresses)
-        if ip_addr in self.ip_to_name:
-            return self.ip_to_name[ip_addr]
+        if ip_addr in self.ip_to_name: # pyright: ignore[reportAttributeAccessIssue]
+            result = self.ip_to_name[ip_addr] # pyright: ignore[reportAttributeAccessIssue]
+            if self.debug:
+                print(f"    [DEBUG] Found address object by IP: {result}")
+            return result
         
         # No match found - generate a name and warn the user
         self.unmatched_count += 1
         generated_name = f"Net_{ip_addr.replace('.', '_')}_{cidr}"
-        print(f"    Warning: No address object found for {cidr_notation}, using generated name: {generated_name}")
+        print(f"    Warning: No interface or address object found for {cidr_notation}, using generated name: {generated_name}")
         
         return generated_name
     
     def _create_gateway_name(self, gateway_ip: str, properties: Dict) -> str:
         """
-        Find the actual address object name for the gateway IP.
+        Find the interface name for the gateway IP.
         
-        This method looks up the gateway IP in our address objects
-        to find the real object name that exists in FTD.
+        This method looks up the gateway IP to find which interface network
+        it belongs to, then returns that interface name.
+        
+        This allows FTD routes to reference interface names as the gateway object.
         
         Args:
             gateway_ip: Gateway IP address as string
             properties: Route properties dictionary (for comment field)
             
         Returns:
-            String name of the matching address object, or a generated name if no match
+            String name of the interface where this gateway exists, or a generated name if no match
         """
-        # Try to find the address object by IP
-        # Gateways are usually host addresses (/32)
+        if self.debug:
+            print(f"\n    [DEBUG] Looking up gateway: {gateway_ip}")
         
-        # First try with /32 CIDR notation
+        # Try to find the interface by gateway IP
+        # The gateway is typically an IP address on a directly connected network
+        
+        # First try exact IP match
+        if gateway_ip in self.ip_to_interface: # pyright: ignore[reportAttributeAccessIssue]
+            result = self.ip_to_interface[gateway_ip] # pyright: ignore[reportAttributeAccessIssue]
+            if self.debug:
+                print(f"    [DEBUG] Found interface by IP: {result}")
+            return result
+        
+        # Try with /32 CIDR notation
         gateway_cidr = f"{gateway_ip}/32"
-        if gateway_cidr in self.ip_to_name:
-            return self.ip_to_name[gateway_cidr]
+        if gateway_cidr in self.ip_to_interface: # pyright: ignore[reportAttributeAccessIssue]
+            result = self.ip_to_interface[gateway_cidr] # pyright: ignore[reportAttributeAccessIssue]
+            if self.debug:
+                print(f"    [DEBUG] Found interface by CIDR: {result}")
+            return result
         
-        # Try without CIDR
-        if gateway_ip in self.ip_to_name:
-            return self.ip_to_name[gateway_ip]
+        if self.debug:
+            print(f"    [DEBUG] No interface found, trying address objects...")
+        
+        # FALLBACK: Try legacy address object lookup
+        if gateway_cidr in self.ip_to_name: # pyright: ignore[reportAttributeAccessIssue]
+            result = self.ip_to_name[gateway_cidr] # pyright: ignore[reportAttributeAccessIssue]
+            if self.debug:
+                print(f"    [DEBUG] Found address object by CIDR: {result}")
+            return result
+        
+        if gateway_ip in self.ip_to_name: # pyright: ignore[reportAttributeAccessIssue]
+            result = self.ip_to_name[gateway_ip] # pyright: ignore[reportAttributeAccessIssue]
+            if self.debug:
+                print(f"    [DEBUG] Found address object by IP: {result}")
+            return result
         
         # No match found - generate a name and warn the user
         self.unmatched_count += 1
         generated_name = f"Gateway_{gateway_ip.replace('.', '_')}"
-        print(f"    Warning: No address object found for gateway {gateway_ip}, using generated name: {generated_name}")
+        print(f"    Warning: No interface or address object found for gateway {gateway_ip}, using generated name: {generated_name}")
         
         return generated_name
     
@@ -470,6 +729,16 @@ class RouteConverter:
             "other_skipped": self.skipped_count,
             "unmatched_objects": self.unmatched_count
         }
+    
+
+    def get_missing_network_objects(self) -> List[Dict]:
+        """
+        Get list of network objects that need to be created for routes.
+        
+        Returns:
+            List of network object dictionaries that should be created
+        """
+        return self.missing_network_objects
 
 
 # =============================================================================
