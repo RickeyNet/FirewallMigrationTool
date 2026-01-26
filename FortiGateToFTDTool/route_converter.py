@@ -53,6 +53,7 @@ IMPORTANT NOTES:
     - Default routes (0.0.0.0/0) are converted to "any-ipv4" reference
 """
 
+import json
 import re
 from typing import Dict, List, Any, Optional
 
@@ -97,7 +98,16 @@ class RouteConverter:
     6. Handling special cases (blackhole routes, default routes)
     """
     
-    def __init__(self, fortigate_config: Dict[str, Any], network_objects: List[Dict] = None, interface_name_mapping: Dict[str, str] = None, converted_interfaces: Dict[str, List[Dict]] = None, debug: bool = False): # pyright: ignore[reportArgumentType]
+    def __init__(
+    self,
+    fortigate_config: Dict[str, Any],
+    network_objects: Optional[List[Dict]] = None,
+    address_objects_json_path: Optional[str] = None,
+    interface_name_mapping: Optional[Dict[str, str]] = None,
+    converted_interfaces: Optional[Dict[str, List[Dict]]] = None,
+    debug: bool = False
+    ):
+
         """
         Initialize the converter with FortiGate configuration data.
         
@@ -114,8 +124,17 @@ class RouteConverter:
         # Store the entire FortiGate configuration
         self.fg_config = fortigate_config
         
-        # Store the list of network objects for lookup
-        self.network_objects = network_objects or []
+        # Store/load the list of network objects (address objects) for lookup
+        # Priority:
+        #   1) Explicit network_objects list passed in (already loaded by caller)
+        #   2) JSON file path provided (load objects from disk)
+        #   3) Empty list (no matching possible; routes will generate missing objects)
+        if network_objects:
+            self.network_objects = network_objects
+        elif address_objects_json_path:
+            self.network_objects = self._load_network_objects_from_json(address_objects_json_path)
+        else:
+            self.network_objects = []
 
         # Store interface name mapping
         self.interface_name_mapping = interface_name_mapping or {}
@@ -125,6 +144,11 @@ class RouteConverter:
         
         # Store converted interfaces
         self.converted_interfaces = converted_interfaces or {}
+
+        # Track any objects we auto-generate so the caller can export them
+        # This list accumulates objects from _ensure_network_object_with_value()
+        # and _ensure_network_object_for_value() for export by fortigate_converter.py
+        self.generated_network_objects: List[Dict] = []
         
         # Build lookup dictionaries
         # Name -> full network object (for routes)
@@ -148,6 +172,10 @@ class RouteConverter:
         
         # Track routes that need network objects created
         self.missing_network_objects = []
+
+        # The interface object currently being processed in convert()
+        self._current_route_interface_obj: Optional[Dict] = None
+
         
         # Track statistics
         self.converted_count = 0
@@ -161,23 +189,279 @@ class RouteConverter:
             name = obj.get('name')
             if name:
                 self.name_to_network_object[name] = obj
+
+    def _ensure_host_object_for_ip(self, ip: str, name_prefix: str) -> Dict:
+        """
+        Ensure a host network object exists for the given IP.
+
+        FortiGate allows next-hop gateway IPs without an address object. FTD route modeling
+        in this project uses networkobject references, so we auto-create minimal host objects
+        when missing.
+
+        Args:
+            ip: IPv4 address string
+            name_prefix: Prefix for generated object names (e.g., "Gateway", "Host")
+
+        Returns:
+            A networkobject dict with 'name' and 'type' keys suitable for route references.
+        """
+        ip = str(ip).strip()
+        if not ip:
+            # Defensive fallback
+            return {"name": f"{name_prefix}_UNKNOWN", "type": "networkobject"}
+
+        # If an object already exists for this IP, reuse it
+        existing_name = self.ip_to_network_object_name.get(ip) or self.ip_to_network_object_name.get(f"{ip}/32")
+        if existing_name:
+            return {"name": existing_name, "type": "networkobject"}
+
+        # Create a minimal host object
+        safe_ip = ip.replace(".", "_").replace(":", "_")
+        obj_name = f"{name_prefix}_{safe_ip}"
+        new_obj = {
+            "name": obj_name,
+            "description": f"Auto-created for static route next-hop {ip}",
+            "type": "networkobject",
+            "subType": "HOST",
+            "value": ip
+        }
+
+
+        # Persist into local stores so subsequent routes can reuse it
+        self.network_objects.append(new_obj)
+        self.generated_network_objects.append(new_obj)
+
+        # Update lookup for both 'ip' and 'ip/32'
+        self.ip_to_network_object_name[ip] = obj_name
+        self.ip_to_network_object_name[f"{ip}/32"] = obj_name
+
+        if self.debug:
+            print(f"    [DEBUG] Auto-created host object: {obj_name} -> {ip}")
+
+        return {"name": obj_name, "type": "networkobject"}
+    
+    def _infer_subtype_from_value(self, value: str) -> str:
+        """
+        Infer the FTD networkobject subType from a value string.
+
+        Rules (aligned with address_converter output semantics):
+            - "IP1-IP2" => RANGE
+            - "IP/CIDR" => HOST if /32, else NETWORK
+            - "IP"      => HOST
+
+        Args:
+            value: Network object value (e.g., "10.0.0.1", "10.0.0.0/24", "10.0.0.1-10.0.0.10")
+
+        Returns:
+            "HOST", "NETWORK", or "RANGE"
+        """
+        v = str(value).strip()
+        if "-" in v:
+            return "RANGE"
+        if "/" in v:
+            try:
+                prefix = v.split("/", 1)[1].strip()
+                return "HOST" if prefix == "32" else "NETWORK"
+            except Exception:
+                return "NETWORK"
+        return "HOST"
     
     def _build_ip_to_network_object_lookup(self):
-        """Build lookup from IP/CIDR to network object name."""
+        """
+        Build lookup from IP/CIDR to network object name.
+
+        Why this exists:
+            - Converted address objects may represent:
+            * networks as "10.0.20.0/24"
+            * hosts as "10.0.0.5" (no "/32")  <-- address_converter does this intentionally【turn16:14†address_converter.py†L15-L22】
+            - Route gateway matching often checks "IP/32" first【turn16:2†route_converter.py†L29-L40】
+
+        This function normalizes keys so lookups succeed regardless of representation.
+        """
         for obj in self.network_objects:
             name = obj.get('name', '')
             value = obj.get('value', '')
-            
-            if value and name:
-                # Store in lookup: "10.0.20.0/24" -> "Bull_net"
-                self.ip_to_network_object_name[value] = name
-                
-                # Also store without CIDR for host addresses
-                if '/' in value:
-                    ip_only = value.split('/')[0]
-                    if ip_only not in self.ip_to_network_object_name:
-                        self.ip_to_network_object_name[ip_only] = name
+
+            if not value or not name:
+                continue
+
+            # Normalize whitespace just in case
+            value = str(value).strip()
+
+            # Store the raw value as-is
+            self.ip_to_network_object_name[value] = name
+
+            if '/' in value:
+                ip_only, prefix = value.split('/', 1)
+                ip_only = ip_only.strip()
+
+                # Allow lookup by base IP as well
+                if ip_only and ip_only not in self.ip_to_network_object_name:
+                    self.ip_to_network_object_name[ip_only] = name
+
+                # If this object is explicitly a /32, also store IP/32 key
+                if prefix.strip() == '32':
+                    ip32 = f"{ip_only}/32"
+                    if ip32 not in self.ip_to_network_object_name:
+                        self.ip_to_network_object_name[ip32] = name
+            else:
+                # Host object emitted by address_converter: add /32 alias for gateway matching
+                ip32 = f"{value}/32"
+                if ip32 not in self.ip_to_network_object_name:
+                    self.ip_to_network_object_name[ip32] = name
+
+    def _ensure_network_object_with_value(self, name: str, value: str, sub_type: str, description: str = "") -> Dict:
+        """
+        Ensure a network object exists with the specified name/value/subType.
+
+        This is used when FortiGate provides a raw gateway IP and no address object exists.
+        We must create an object that FTD routes can reference.
+
+        Performance characteristics:
+            - O(1) lookups against local dict caches
+            - Minimal writes (only when missing)
+
+        Args:
+            name: Desired object name (e.g., "Gateway_10_10_10_2")
+            value: Desired value (e.g., "10.10.10.2/30" or "10.10.10.2/32")
+            sub_type: "HOST", "NETWORK", or "RANGE"
+            description: Optional description string
+
+        Returns:
+            A reference dict {"name": <name>, "type": "networkobject"} suitable for route JSON.
+        """
+        name = str(name).strip()
+        value = str(value).strip()
+        sub_type = str(sub_type).strip().upper()
+
+        # 1) If an object with this name already exists, reuse it.
+        existing = self.name_to_network_object.get(name)
+        if existing:
+            return {"name": existing.get("name", name), "type": "networkobject"}
+
+        # 2) If an object exists for this value, reuse it (avoid duplicates by value).
+        existing_name = self.ip_to_network_object_name.get(value)
+        if existing_name and existing_name in self.name_to_network_object:
+            return {"name": existing_name, "type": "networkobject"}
+
+        # 3) Create new object (track it for export + later imports)
+        new_obj = {
+            "name": name,
+            "description": description,
+            "type": "networkobject",
+            "subType": sub_type,
+            "value": value
+        }
+
+        # Track for later export/merge in fortigate_converter.py
+        # Add to both lists: missing_network_objects for backward compatibility
+        # and generated_network_objects for the main export mechanism
+        self.missing_network_objects.append(new_obj)
+        self.generated_network_objects.append(new_obj)
+
+        # Update in-memory caches so subsequent lookups succeed in the same run
+        self.name_to_network_object[name] = new_obj
+        self.ip_to_network_object_name[value] = name
+
+        # Add useful aliases for host formats (helps gateway matching)
+        # If value is "ip/prefix", also map "ip" and "ip/32" when appropriate.
+        if "/" in value and "-" not in value:
+            ip_only, prefix = value.split("/", 1)
+            ip_only = ip_only.strip()
+            prefix = prefix.strip()
+            if ip_only:
+                self.ip_to_network_object_name.setdefault(ip_only, name)
+                if prefix == "32":
+                    self.ip_to_network_object_name.setdefault(f"{ip_only}/32", name)
+
+        return {"name": name, "type": "networkobject"}
+
+
+    def _ensure_network_object_for_value(self, value: str, name_prefix: str) -> Dict:
+        """
+        Ensure a networkobject exists for a given value string (CIDR/host/range).
+        Used for destinations when FortiGate references raw values without address objects.
+
+        Args:
+            value: e.g. "10.0.0.0/24", "10.0.0.1", "10.0.0.1-10.0.0.10"
+            name_prefix: e.g. "RouteNet"
+
+        Returns:
+            Reference dict: {"name": <obj_name>, "type": "networkobject"}
+        """
+        v = str(value).strip()
+        if not v:
+            return {"name": f"{name_prefix}_UNKNOWN", "type": "networkobject"}
+
+        # Reuse existing object if present
+        existing_name = self.ip_to_network_object_name.get(v)
+        if existing_name:
+            return {"name": existing_name, "type": "networkobject"}
+
+        safe = v.replace(".", "_").replace(":", "_").replace("/", "_").replace("-", "_")
+        obj_name = f"{name_prefix}_{safe}"
+        sub_type = self._infer_subtype_from_value(v)
+
+        new_obj = {
+            "name": obj_name,
+            "description": f"Auto-created for static route destination {v}",
+            "type": "networkobject",
+            "subType": sub_type,
+            "value": v
+        }
+
+        self.network_objects.append(new_obj)
+        self.generated_network_objects.append(new_obj)
+
+        # Populate lookup for raw value
+        self.ip_to_network_object_name[v] = obj_name
+
+        # If it's a host value without /32, also add /32 alias (helps gateway-like lookups)
+        if sub_type == "HOST" and "/" not in v and "-" not in v:
+            self.ip_to_network_object_name[f"{v}/32"] = obj_name
+
+        return {"name": obj_name, "type": "networkobject"}
+
     
+    def _load_network_objects_from_json(self, filename: str) -> List[Dict]:
+        """
+        Load converted address objects (network objects) from a JSON file.
+
+        The conversion pipeline produces a JSON list of objects like:
+            {"name": "...", "value": "...", "type": "networkobject"}
+
+        This loader is intentionally strict and fast:
+            - Returns [] on failure and prints a warning
+            - Ensures the result is a list of dicts
+
+        Args:
+            filename: Path to the converted address objects JSON file.
+
+        Returns:
+            List of address/network object dictionaries.
+        """
+        try:
+            with open(filename, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            if not isinstance(data, list):
+                print(f"[WARN] Address objects JSON is not a list: {filename}")
+                return []
+
+            # Filter to dicts only (defensive)
+            return [o for o in data if isinstance(o, dict)]
+
+        except FileNotFoundError:
+            print(f"[WARN] Address objects JSON file not found: {filename}")
+            return []
+        except json.JSONDecodeError as e:
+            print(f"[WARN] Invalid JSON in address objects file: {filename} ({e})")
+            return []
+        except OSError as e:
+            print(f"[WARN] Could not read address objects file: {filename} ({e})")
+            return []
+
+
     def _build_interface_object_lookup(self):
         """Build lookup from interface name to full interface object."""
         for interface_type in ['physical_interfaces', 'subinterfaces', 'etherchannels', 'bridge_groups']:
@@ -234,110 +518,152 @@ class RouteConverter:
     def _get_network_object_for_destination(self, dst: List) -> Optional[Dict]:
         """
         Get the full network object for a route destination.
-        
+
+        FortiGate static routes may specify destinations directly as IP+netmask
+        without requiring a named address object. FTD route modeling in this
+        project uses networkobject references, so we must resolve (or create)
+        a matching object.
+
         Args:
             dst: List containing [IP_address, netmask]
-            
+
         Returns:
-            Full network object dict with id, version, name, type, or None
+            Full network object dict copy if it exists, otherwise a reference dict
+            {"name": ..., "type": "networkobject"} for a newly generated object.
         """
-        if len(dst) < 2:
+        if not dst or len(dst) < 2:
             return None
-        
-        ip_addr = str(dst[0])
-        netmask = str(dst[1])
+
+        ip_addr = str(dst[0]).strip()
+        netmask = str(dst[1]).strip()
         cidr = self._netmask_to_cidr(netmask)
-        
-        # Check if this is a default route
+
+        # Default route
         if ip_addr == "0.0.0.0" and cidr == 0:
-            # Return reference to "any-ipv4" built-in object
-            return {
-                "name": "any-ipv4",
-                "type": "networkobject"
-            }
-        
-        # Calculate network address
+            return {"name": "any-ipv4", "type": "networkobject"}
+
+        # Calculate the actual network address for the destination
         network_addr = self._calculate_network_address(ip_addr, netmask)
         network_cidr = f"{network_addr}/{cidr}"
-        
-        # Try to find existing network object by CIDR
-        if network_cidr in self.ip_to_network_object_name:
-            obj_name = self.ip_to_network_object_name[network_cidr]
-            if obj_name in self.name_to_network_object:
-                return self.name_to_network_object[obj_name].copy()
-        
-        # Try by network address only
-        if network_addr in self.ip_to_network_object_name:
-            obj_name = self.ip_to_network_object_name[network_addr]
-            if obj_name in self.name_to_network_object:
-                return self.name_to_network_object[obj_name].copy()
-        
-        # Try by IP address
-        if ip_addr in self.ip_to_network_object_name:
-            obj_name = self.ip_to_network_object_name[ip_addr]
-            if obj_name in self.name_to_network_object:
-                return self.name_to_network_object[obj_name].copy()
-        
-        # No existing object found - need to create one
+
+        # 1) Match by normalized CIDR (preferred)
+        obj_name = self.ip_to_network_object_name.get(network_cidr)
+        if obj_name:
+            obj = self.name_to_network_object.get(obj_name)
+            if obj:
+                return obj.copy()
+
+        # 2) Match by network base address only
+        obj_name = self.ip_to_network_object_name.get(network_addr)
+        if obj_name:
+            obj = self.name_to_network_object.get(obj_name)
+            if obj:
+                return obj.copy()
+
+        # 3) Last resort: match by raw ip_addr (some object values might be host style)
+        obj_name = self.ip_to_network_object_name.get(ip_addr)
+        if obj_name:
+            obj = self.name_to_network_object.get(obj_name)
+            if obj:
+                return obj.copy()
+
+        if self.debug:
+            print(f"    [DEBUG] Destination lookup miss for: dst={ip_addr} mask={netmask} -> {network_cidr}")
+
+        # 4) Not found: auto-create an object that represents the destination.
         self.unmatched_count += 1
-        generated_name = f"Net_{network_addr.replace('.', '_')}_{cidr}"
-        print(f"    Warning: No network object found for {network_cidr}")
-        print(f"             You need to create network object: {generated_name} = {network_cidr}")
-        
-        # Track missing object
-        self.missing_network_objects.append({
-            "name": generated_name,
-            "value": network_cidr,
-            "type": "networkobject"
-        })
-        
-        # Return reference (will need ID added during import)
-        return {
-            "name": generated_name,
-            "type": "networkobject"
-        }
+
+        # If /32, treat as HOST; otherwise treat as NETWORK
+        if cidr == 32:
+            generated_name = f"Host_{ip_addr.replace('.', '_').replace(':', '_')}"
+            value = ip_addr  # keep host form consistent with address_converter
+            sub_type = "HOST"
+            description = f"Auto-created for static route destination host {ip_addr}"
+        else:
+            generated_name = f"RouteNet_{network_addr.replace('.', '_')}_{cidr}"
+            value = network_cidr
+            sub_type = "NETWORK"
+            description = f"Auto-created for static route destination {network_cidr}"
+
+        return self._ensure_network_object_with_value(
+            name=generated_name,
+            value=value,
+            sub_type=sub_type,
+            description=description
+        )
+
     
     def _get_network_object_for_gateway(self, gateway_ip: str) -> Optional[Dict]:
         """
         Get the full network object for a gateway IP.
-        
+
+        Behavior:
+            1) Try to resolve an existing object by gateway_ip or gateway_ip/32
+            2) If not found, auto-create a HOST object for the gateway IP
+            3) Return a reference dict suitable for insertion into the static route payload
+
+        IMPORTANT: Gateways are always HOST addresses (a specific next-hop IP),
+        not networks. FTD requires HOST objects to have just the IP address
+        without CIDR notation, or with /32. Using a non-/32 CIDR with a host IP
+        (e.g., 15.0.252.18/30) will fail because 15.0.252.18 is not the network
+        address for that subnet.
+
         Args:
             gateway_ip: Gateway IP address as string
-            
+
         Returns:
-            Full network object dict with id, version, name, type, or None
+            Full network object dict copy if it exists, otherwise a reference dict
+            {"name": ..., "type": "networkobject"} for a newly generated object.
         """
+        # Normalize gateway formatting from FortiGate YAML (defensive)
+        gateway_ip = str(gateway_ip).strip()
+
         # Try with /32 CIDR notation first
         gateway_cidr = f"{gateway_ip}/32"
         if gateway_cidr in self.ip_to_network_object_name:
             obj_name = self.ip_to_network_object_name[gateway_cidr]
-            if obj_name in self.name_to_network_object:
-                return self.name_to_network_object[obj_name].copy()
-        
+            obj = self.name_to_network_object.get(obj_name)
+            if obj:
+                return obj.copy()
+
         # Try without CIDR
         if gateway_ip in self.ip_to_network_object_name:
             obj_name = self.ip_to_network_object_name[gateway_ip]
-            if obj_name in self.name_to_network_object:
-                return self.name_to_network_object[obj_name].copy()
-        
-        # No existing object found - need to create one
+            obj = self.name_to_network_object.get(obj_name)
+            if obj:
+                return obj.copy()
+
+        if self.debug:
+            print(f"    [DEBUG] Gateway lookup miss for: '{gateway_ip}'")
+            print(f"    [DEBUG] Tried keys: '{gateway_ip}/32' and '{gateway_ip}'")
+            if self._current_route_interface_obj:
+                print(f"    [DEBUG] Current interface object: {self._current_route_interface_obj.get('name', 'unknown')}")
+
+        # No existing object found: create a HOST object for this gateway IP
         self.unmatched_count += 1
-        generated_name = f"Gateway_{gateway_ip.replace('.', '_')}"
-        print(f"    Warning: No network object found for gateway {gateway_ip}")
-        print(f"             You need to create network object: {generated_name} = {gateway_ip}/32")
-        
-        # Track missing object
-        self.missing_network_objects.append({
-            "name": generated_name,
-            "value": f"{gateway_ip}/32",
-            "type": "networkobject"
-        })
-        
-        # Return reference (will need ID added during import)
-        return {
-            "name": generated_name,
-            "type": "networkobject"
-        }
+
+        # Use a deterministic name; keep "Gateway_" prefix to make these easy to audit later
+        generated_name = f"Gateway_{gateway_ip.replace('.', '_').replace(':', '_')}"
+
+        # IMPORTANT: Gateways are always HOST objects with just the IP address.
+        # Do NOT use CIDR notation like /30 with a host IP - FTD will reject it
+        # because the IP (e.g., 15.0.252.18) is not the network address (15.0.252.16)
+        # for that subnet. HOST objects should use plain IP or IP/32.
+        gateway_value = gateway_ip  # Plain IP for HOST objects
+        sub_type = "HOST"
+
+        if self.debug:
+            print(f"    [DEBUG] Creating gateway HOST object: name={generated_name}, value={gateway_value}")
+
+        # Create (or reuse) an object with the computed value
+        return self._ensure_network_object_with_value(
+            name=generated_name,
+            value=gateway_value,
+            sub_type=sub_type,
+            description=f"Auto-created HOST for static route next-hop {gateway_ip}"
+        )
+
+
     
     def _get_interface_object(self, interface_name: str) -> Optional[Dict]:
         """
@@ -427,23 +753,10 @@ class RouteConverter:
                 continue
             
             # ================================================================
-            # STEP 2E: Extract gateway and get network object
+            # STEP 2E: Extract interface/device and get interface object
             # ================================================================
-            gateway_ip = properties.get('gateway', None)
-            if not gateway_ip:
-                print(f"  Skipped: Route [{route_id}] - No gateway specified")
-                self.skipped_count += 1
-                continue
-            
-            gateway_obj = self._get_network_object_for_gateway(gateway_ip)
-            if not gateway_obj:
-                print(f"  Skipped: Route [{route_id}] - Could not resolve gateway network object")
-                self.skipped_count += 1
-                continue
-            
-            # ================================================================
-            # STEP 2F: Extract interface/device and get interface object
-            # ================================================================
+            # NOTE: Interface must be resolved BEFORE gateway so that auto-created
+            # gateway objects can inherit the correct subnet prefix from the interface
             fg_interface_name = properties.get('device', 'unknown')
             
             # Map FortiGate interface name to FTD interface name
@@ -465,6 +778,25 @@ class RouteConverter:
                     "name": ftd_interface_name,
                     "type": "physicalinterface"
                 }
+            # Save the resolved interface object for gateway object synthesis
+            # (used when FortiGate has a raw gateway IP with no address object)
+            self._current_route_interface_obj = interface_obj
+            
+            # ================================================================
+            # STEP 2F: Extract gateway and get network object
+            # ================================================================
+            gateway_ip = properties.get('gateway', None)
+            if not gateway_ip:
+                print(f"  Skipped: Route [{route_id}] - No gateway specified")
+                self.skipped_count += 1
+                continue
+            
+            gateway_obj = self._get_network_object_for_gateway(gateway_ip)
+            if not gateway_obj:
+                print(f"  Skipped: Route [{route_id}] - Could not resolve gateway network object")
+                self.skipped_count += 1
+                continue
+
             
             # ================================================================
             # STEP 2G: Extract metric/distance
@@ -486,9 +818,21 @@ class RouteConverter:
             # ================================================================
             ftd_route = {
                 "name": route_name,
-                "iface": interface_obj,  # Full interface object with id, version, etc.
-                "networks": [dst_network_obj],  # Full network object with id, version
-                "gateway": gateway_obj,  # Full network object with id, version
+                "iface": {
+                    "name": interface_obj.get('name', ftd_interface_name),
+                    "hardwareName": interface_obj.get('hardwareName', ''),
+                    "type": interface_obj.get('type', 'physicalinterface')
+                },
+                "networks": [
+                    {
+                        "name": dst_network_obj.get('name', dst_network_obj),
+                        "type": "networkobject"
+                    }
+                ],
+                "gateway": {
+                    "name": gateway_obj.get('name', gateway_obj),
+                    "type": "networkobject"
+                },
                 "metricValue": metric,
                 "ipType": "IPv4",
                 "type": "staticrouteentry"
@@ -573,6 +917,34 @@ class RouteConverter:
             # If conversion fails, default to /32
             print(f"    Warning: Could not convert netmask '{netmask}' to CIDR")
             return 32
+        
+    def _get_interface_ipv4_prefix(self, interface_obj: Dict) -> Optional[int]:
+        """
+        Extract the IPv4 prefix length for a converted interface object.
+
+        The interface converter emits:
+            intf["ipv4"]["ipAddress"]["netmask"] = "255.255.255.252" (example)【turn25:10†interface_converter.py†L6-L14】
+
+        Args:
+            interface_obj: Converted interface dictionary.
+
+        Returns:
+            CIDR prefix length (e.g., 30) or None if not available.
+        """
+        ipv4 = interface_obj.get("ipv4")
+        if not isinstance(ipv4, dict):
+            return None
+
+        ip_addr_obj = ipv4.get("ipAddress")
+        if not isinstance(ip_addr_obj, dict):
+            return None
+
+        netmask = ip_addr_obj.get("netmask")
+        if not netmask:
+            return None
+
+        return self._netmask_to_cidr(str(netmask))
+
     
     def _create_network_name(self, dst: List) -> str:
         """

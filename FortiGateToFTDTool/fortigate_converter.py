@@ -393,6 +393,7 @@ Supported FTD Models:
     print(f"  - EtherChannels to create: {intf_stats['etherchannels_created']}")
     print(f"  - Bridge groups to create: {intf_stats['bridge_groups_created']}")
     print(f"  - Subinterfaces to create: {intf_stats['subinterfaces_created']}")
+    print(f"  - Security zones to create: {intf_stats['security_zones_created']}")
     if intf_stats['skipped'] > 0:
         print(f"  - Skipped: {intf_stats['skipped']}")
     
@@ -426,7 +427,13 @@ Supported FTD Models:
     # Pass debug flag if available
     debug_mode = args.debug if 'args' in locals() and hasattr(args, 'debug') else False
     
-    route_converter = RouteConverter(fg_config, network_objects, interface_name_mapping, converted_interfaces, debug_mode)
+    route_converter = RouteConverter(
+        fortigate_config=fg_config,
+        network_objects=network_objects,
+        interface_name_mapping=interface_name_mapping,
+        converted_interfaces=converted_interfaces,
+        debug=debug_mode
+    )
     
     # ========================================================================
     # STEP 6: Convert address groups
@@ -584,8 +591,19 @@ Supported FTD Models:
     subinterfaces_output = f"{args.output}_subinterfaces.json"
     etherchannels_output = f"{args.output}_etherchannels.json"
     bridge_groups_output = f"{args.output}_bridge_groups.json"
+    security_zones_output = f"{args.output}_security_zones.json"
     summary_output = f"{args.output}_summary.json"
     
+    generated_route_objects = getattr(route_converter, "generated_network_objects", None)
+    if generated_route_objects:
+        existing_names = {o.get("name") for o in network_objects if isinstance(o, dict)}
+        # De-dup by name to keep output stable and avoid API conflicts on import
+        for obj in generated_route_objects:
+            obj_name = obj.get("name") if isinstance(obj, dict) else None
+            if obj_name and obj_name not in existing_names:
+                network_objects.append(obj)
+                existing_names.add(obj_name)
+
     try:
         # ====================================================================
         # Save address objects
@@ -686,6 +704,16 @@ Supported FTD Models:
             else:
                 json.dump(interface_results['bridge_groups'], f)
         print(f"[OK] Bridge groups saved to: {bridge_groups_output}")
+
+        # ====================================================================
+        # Save security zones (for POST creation)
+        # ====================================================================
+        with open(security_zones_output, 'w') as f:
+            if args.pretty:
+                json.dump(interface_results.get('security_zones', []), f, indent=2)
+            else:
+                json.dump(interface_results.get('security_zones', []), f)
+        print(f"[OK] Security zones saved to: {security_zones_output}")
         
         # ====================================================================
         # Save summary statistics
@@ -697,6 +725,7 @@ Supported FTD Models:
                     "subinterfaces_created": intf_stats['subinterfaces_created'],
                     "etherchannels_created": intf_stats['etherchannels_created'],
                     "bridge_groups_created": intf_stats['bridge_groups_created'],
+                    "security_zones_created": intf_stats['security_zones_created'],
                     "skipped": intf_stats['skipped']
                 },
                 "address_objects": len(network_objects),

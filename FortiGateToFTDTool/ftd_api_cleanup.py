@@ -192,6 +192,125 @@ class FTDBulkDelete:
         except requests.exceptions.RequestException as e:
             print(f"  Error: {e}")
             return []
+        
+    def get_default_virtual_router_id(self) -> Tuple[bool, Optional[str]]:
+        """
+        Get the ID of the default virtual router (typically 'Global').
+
+        Notes:
+            - Static routes are scoped under a Virtual Router in the FDM API.
+            - This method caches the resolved VR ID to avoid repeated API calls.
+
+        Returns:
+            (success, vr_id_or_error_message)
+        """
+        if hasattr(self, "_default_vr_id") and self._default_vr_id:
+            return True, self._default_vr_id
+
+        endpoint = f"{self.base_url}/devices/default/routing/virtualrouters"
+
+        try:
+            response = self.session.get(endpoint, timeout=30)
+            if response.status_code != 200:
+                return False, f"API error: {response.status_code}"
+
+            data = response.json()
+            items = data.get("items", [])
+
+            # Prefer the well-known defaults first
+            for vr in items:
+                vr_name = str(vr.get("name", "")).strip().lower()
+                if vr_name in {"global", "default", "global-vr"}:
+                    self._default_vr_id = vr.get("id")
+                    return True, self._default_vr_id
+
+            # Fallback: pick the first VR if present
+            if items:
+                self._default_vr_id = items[0].get("id")
+                return True, self._default_vr_id
+
+            return False, "No virtual routers found"
+
+        except requests.exceptions.RequestException as e:
+            return False, str(e)
+
+
+    def delete_all_static_routes(self, dry_run: bool = False) -> bool:
+        """
+        Delete all static route entries from the default Virtual Router.
+
+        Why this exists:
+            The FDM API scopes static route entries under a virtual router:
+            - GET/DELETE: /devices/default/routing/virtualrouters/{vr_id}/staticrouteentries
+
+        Args:
+            dry_run: If True, do not delete; only print what would happen.
+
+        Returns:
+            True if all deletions succeeded (or dry-run), False otherwise.
+        """
+        print(f"\n{'='*60}")
+        print("Processing Static Routes")
+        print(f"{'='*60}")
+
+        success, vr_id_or_error = self.get_default_virtual_router_id()
+        if not success:
+            print(f"  [ERROR] Failed to resolve virtual router: {vr_id_or_error}")
+            return False
+
+        vr_id = vr_id_or_error
+        endpoint = f"/devices/default/routing/virtualrouters/{vr_id}/staticrouteentries"
+
+        # Fetch all routes under the VR
+        routes = self.get_all_objects(endpoint)
+        if not routes:
+            print("  No static routes found")
+            return True
+
+        print(f"\n  Found {len(routes)} static routes")
+
+        # Show what will be deleted
+        print(f"\n  Static routes to delete:")
+        for r in routes[:10]:
+            name = r.get("name", "UNNAMED")
+            rid = r.get("id", "")
+            print(f"    - {name} (id={rid})")
+        if len(routes) > 10:
+            print(f"    . and {len(routes) - 10} more")
+
+        print(f"\n  {'[DRY RUN] Would delete' if dry_run else 'Deleting'} {len(routes)} static routes.")
+
+        success_count = 0
+        fail_count = 0
+
+        for i, r in enumerate(routes, 1):
+            name = r.get("name", "UNNAMED")
+            obj_id = r.get("id")
+
+            if not obj_id:
+                print(f"  [{i}/{len(routes)}] Skipping: {name} [ERROR] missing id")
+                fail_count += 1
+                continue
+
+            if dry_run:
+                print(f"  [{i}/{len(routes)}] Would delete: {name}")
+                success_count += 1
+                continue
+
+            print(f"  [{i}/{len(routes)}] Deleting: {name}.", end=" ")
+            ok, err = self.delete_object(endpoint, obj_id)
+            if ok:
+                print("[Deleted]")
+                success_count += 1
+            else:
+                print(f"[ERROR] {err}")
+                fail_count += 1
+
+            time.sleep(0.2)
+
+        print(f"\n  Summary: {success_count} deleted, {fail_count} failed")
+        return fail_count == 0
+
     
     def delete_object(self, endpoint: str, object_id: str) -> Tuple[bool, str]:
         """Delete a single object by ID.
@@ -957,11 +1076,8 @@ Examples:
         )
     
     if args.delete_all or args.delete_routes:
-        client.delete_all_custom_objects(
-            "/devices/default/routing/staticrouteentries",
-            "Static Routes",
-            args.dry_run
-        )
+        client.delete_all_static_routes(args.dry_run)
+
     
     # Delete interfaces BEFORE objects (interfaces may reference objects)
     # Order: subinterfaces -> etherchannels -> bridge groups -> physical reset

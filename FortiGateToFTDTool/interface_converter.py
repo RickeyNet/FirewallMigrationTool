@@ -229,12 +229,16 @@ class InterfaceConverter:
         self.subinterfaces = []            # POST requests
         self.etherchannels = []            # POST requests
         self.bridge_groups = []            # POST requests
+        self.security_zones = []           # POST requests - zones for firewall policies
         
         # Interface name mapping: FortiGate name -> FTD name (for routes/policies)
         self.interface_name_mapping = {}
         
         # Track used subinterface names to avoid duplicates
         self.used_subinterface_names = set()
+        
+        # Track created security zone names to avoid duplicates
+        self.created_zone_names = set()
         
         # Track statistics
         
@@ -244,6 +248,7 @@ class InterfaceConverter:
             'subinterfaces_created': 0,
             'etherchannels_created': 0,
             'bridge_groups_created': 0,
+            'security_zones_created': 0,
             'skipped': 0
         }
     
@@ -539,18 +544,123 @@ class InterfaceConverter:
         for fg_name, properties in vlan_interfaces:
             self._convert_vlan_interface(fg_name, properties)
         
+        # PHASE 6: Generate Security Zones for all converted interfaces
+        # FTD requires security zones for firewall policies
+        print("\n  [Phase 6] Generating Security Zones...")
+        self._generate_security_zones()
+        
         # Print final port allocation summary
         print(f"\n  Port Allocation Summary:")
         print(f"    Ports used: {len(self.assigned_ftd_ports) - len(self.skip_ftd_ports)}")
         print(f"    Ports remaining: {len(self.available_ftd_ports)}")
+        print(f"    Security zones created: {len(self.security_zones)}")
         
         return {
             'physical_interfaces': self.physical_interfaces,
             'subinterfaces': self.subinterfaces,
             'etherchannels': self.etherchannels,
-            'bridge_groups': self.bridge_groups
+            'bridge_groups': self.bridge_groups,
+            'security_zones': self.security_zones
         }
     
+    def _generate_security_zones(self):
+        """
+        Generate security zones for all converted interfaces.
+        
+        FTD requires security zones for firewall policies. Each interface
+        that will be used in access rules needs a corresponding security zone.
+        
+        Zone naming convention:
+            - Uses the FTD interface name as the zone name
+            - This allows firewall policies to reference zones by interface name
+        
+        FTD Security Zone API format:
+            {
+                "name": "zone_name",
+                "description": "Auto-generated zone for interface",
+                "mode": "ROUTED",
+                "interfaces": [
+                    {"name": "interface_name", "type": "physicalinterface"}
+                ],
+                "type": "securityzone"
+            }
+        """
+        # Collect all unique interface names that need zones
+        interfaces_needing_zones = []
+        
+        # Physical interfaces
+        for intf in self.physical_interfaces:
+            intf_name = intf.get('name', '')
+            hardware_name = intf.get('hardwareName', '')
+            if intf_name and intf_name not in self.created_zone_names:
+                interfaces_needing_zones.append({
+                    'name': intf_name,
+                    'hardwareName': hardware_name,
+                    'type': 'physicalinterface'
+                })
+        
+        # Subinterfaces
+        for intf in self.subinterfaces:
+            intf_name = intf.get('name', '')
+            hardware_name = intf.get('hardwareName', '')
+            if intf_name and intf_name not in self.created_zone_names:
+                interfaces_needing_zones.append({
+                    'name': intf_name,
+                    'hardwareName': hardware_name,
+                    'type': 'subinterface'
+                })
+        
+        # EtherChannels
+        for intf in self.etherchannels:
+            intf_name = intf.get('name', '')
+            hardware_name = intf.get('hardwareName', '')
+            if intf_name and intf_name not in self.created_zone_names:
+                interfaces_needing_zones.append({
+                    'name': intf_name,
+                    'hardwareName': hardware_name,
+                    'type': 'etherchannelinterface'
+                })
+        
+        # Bridge Groups
+        for intf in self.bridge_groups:
+            intf_name = intf.get('name', '')
+            hardware_name = intf.get('hardwareName', '')
+            if intf_name and intf_name not in self.created_zone_names:
+                interfaces_needing_zones.append({
+                    'name': intf_name,
+                    'hardwareName': hardware_name,
+                    'type': 'bridgegroupinterface'
+                })
+        
+        # Create security zones for each interface
+        for intf_info in interfaces_needing_zones:
+            zone_name = intf_info['name']
+            
+            # Skip if zone already created
+            if zone_name in self.created_zone_names:
+                continue
+            
+            # Build security zone payload
+            security_zone = {
+                "name": zone_name,
+                "description": f"Auto-generated zone for interface {intf_info['hardwareName']}",
+                "mode": "ROUTED",
+                "interfaces": [
+                    {
+                        "name": intf_info['name'],
+                        "hardwareName": intf_info['hardwareName'],
+                        "type": intf_info['type']
+                    }
+                ],
+                "type": "securityzone"
+            }
+            
+            self.security_zones.append(security_zone)
+            self.created_zone_names.add(zone_name)
+            self.stats['security_zones_created'] += 1
+            
+            print(f"    Created zone: {zone_name} (interface: {intf_info['hardwareName']})")
+
     def _convert_physical_interface(self, fg_name: str, properties: Dict):
         """Convert a FortiGate physical interface to FTD format."""
         
