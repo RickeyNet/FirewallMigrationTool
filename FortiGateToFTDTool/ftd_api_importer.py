@@ -2569,6 +2569,8 @@ Examples:
                        help='Create only bridge groups')
     parser.add_argument('--only-subinterfaces', action='store_true',
                        help='Create only subinterfaces')
+    parser.add_argument('--only-security-zones', action='store_true',
+                       help='Create only security zones')
     parser.add_argument('--only-address-objects', action='store_true',
                        help='Import only address objects')
     parser.add_argument('--only-address-groups', action='store_true',

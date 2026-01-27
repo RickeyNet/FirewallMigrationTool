@@ -974,6 +974,9 @@ Examples:
   
   # Delete all rules
   python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-rules
+
+  # Delete all security zones
+  python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-security-zones
   
   # Delete all interface configurations (subinterfaces, etherchannels, bridges, reset physical)
   python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-all-interfaces
@@ -1005,6 +1008,7 @@ Examples:
     parser.add_argument('--delete-address-groups', action='store_true', help='Delete all address groups')
     parser.add_argument('--delete-service-objects', action='store_true', help='Delete all service objects')
     parser.add_argument('--delete-service-groups', action='store_true', help='Delete all service groups')
+    parser.add_argument('--delete-security-zones', action='store_true', help='Delete all security zones')
     parser.add_argument('--delete-routes', action='store_true', help='Delete all static routes')
     parser.add_argument('--delete-rules', action='store_true', help='Delete all access rules')
     parser.add_argument('--delete-subinterfaces', action='store_true', help='Delete all subinterfaces')
@@ -1019,6 +1023,7 @@ Examples:
     # Check if at least one delete option is selected
     if not any([args.delete_address_objects, args.delete_address_groups, 
                 args.delete_service_objects, args.delete_service_groups,
+                args.delete_security_zones,
                 args.delete_routes, args.delete_rules, args.delete_all,
                 args.delete_subinterfaces, args.delete_etherchannels,
                 args.delete_bridge_groups, args.reset_physical_interfaces,
@@ -1078,6 +1083,13 @@ Examples:
     if args.delete_all or args.delete_routes:
         client.delete_all_static_routes(args.dry_run)
 
+    # Security zones depend on interfaces, delete zones before interfaces
+    if args.delete_all or args.delete_security_zones:
+        client.delete_all_custom_objects(
+            "/object/securityzones",
+            "Security Zones",
+            args.dry_run
+        )
     
     # Delete interfaces BEFORE objects (interfaces may reference objects)
     # Order: subinterfaces -> etherchannels -> bridge groups -> physical reset
