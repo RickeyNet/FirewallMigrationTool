@@ -453,63 +453,95 @@ class FTDBulkDelete:
         
         return fail_count == 0
     
-    def reset_physical_interface(self, intf: Dict, dry_run: bool = False) -> bool:
+    def reset_physical_interface(self, intf: Dict, dry_run: bool = False) -> Tuple[bool, str]:
         """
         Reset a physical interface to default (unconfigured) state.
         
         Physical interfaces cannot be deleted, only reset to defaults.
         This clears the name, IP address, description, resets MTU to 1500,
-        and disables the interface.
+        disables the interface, and sets speed/duplex/FEC to AUTO defaults.
+        
+        IMPORTANT: For SFP interfaces, the following defaults are required
+        before the interface can be added to an EtherChannel:
+            - speedType: DETECT_SFP or AUTO
+            - fecMode: AUTO
+            - autoNegotiation: True (enabled)
+            - duplexType: FULL
         
         Args:
             intf: Interface object from FTD
             dry_run: If True, only show what would be reset
             
         Returns:
-            True if successful
+            Tuple of (success: bool, error_message: str)
         """
         intf_id = intf.get('id')
-        # hardware_name = intf.get('hardwareName', 'Unknown')
-        # current_name = intf.get('name', '')
+        hardware_name = intf.get('hardwareName', 'Unknown')
         
         if not intf_id:
-            return False
+            return False, "No interface ID"
         
         if dry_run:
-            return True
+            return True, ""
         
-        # Build reset payload - clear custom settings and reset to defaults
+        # Build reset payload - start with existing interface and modify
         reset_payload = intf.copy()
+        
+        # Clear logical configuration
         reset_payload['name'] = ''  # Clear logical name
         reset_payload['enabled'] = False  # Disable interface
-        reset_payload['ipv4'] = None  # Clear IP address
-        reset_payload['ipv6'] = None  # Clear IPv6 address
         reset_payload['description'] = ''  # Clear description
         reset_payload['mtu'] = 1500  # Reset MTU to default
         
-        # Reset mode to ROUTED (required before removing switchport fields)
-        # CRITICAL: Must set mode BEFORE removing switchport fields
-        if 'mode' in reset_payload:
-            reset_payload['mode'] = 'ROUTED'
+        # Clear IP configuration - set to None or remove
+        reset_payload['ipv4'] = None
+        reset_payload['ipv6'] = None
+        
+        # Reset mode to ROUTED
+        reset_payload['mode'] = 'ROUTED'
+        
+        # Reset speed/duplex/FEC settings
+        # IMPORTANT: Both speed and duplex must be AUTO together, or both must be specific values
+        # For EtherChannel compatibility on SFP interfaces:
+        #   - speedType: DETECT_SFP, duplexType: FULL, autoNegotiation: True
+        # For non-SFP interfaces:
+        #   - speedType: AUTO, duplexType: AUTO, autoNegotiation: True
+        
+        # Remove old field names if present
+        reset_payload.pop('duplex', None)
+        
+        current_speed = intf.get('speedType', None)
+
+        if current_speed == 'DETECT_SFP':
+            # SFP interface - use DETECT_SFP with FULL duplex
+            reset_payload['speedType'] = 'DETECT_SFP'
+            reset_payload['duplexType'] = 'FULL'
+            reset_payload['autoNegotiation'] = True
+            if 'fecMode' in intf:
+                reset_payload['fecMode'] = 'AUTO'
+        else:
+            # Non-SFP interface - both speed and duplex must be AUTO
+            reset_payload['speedType'] = 'AUTO'
+            reset_payload['duplexType'] = 'AUTO'
+            reset_payload['autoNegotiation'] = True
         
         # Remove ALL switchport-specific fields that are incompatible with ROUTED mode
-        # These fields cause 422 errors if present when mode='ROUTED'
         switchport_fields = [
-            'switchPortMode',      # Switchport mode (access/trunk)
-            'switchPortConfig',    # Switchport configuration
-            'nativeVlan',          # Native VLAN for trunks
-            'allowedVlans',        # Allowed VLANs list
-            'voiceVlan',           # Voice VLAN
-            'spanningTreePortfast',  # STP portfast setting
-            'stpGuardType',        # STP guard type
-            'stpPathCost',         # STP path cost
-            'stpPortPriority',     # STP port priority
-            'vlanId'               # VLAN ID for switchport
+            'switchPortMode',
+            'switchPortConfig', 
+            'nativeVlan',
+            'allowedVlans',
+            'voiceVlan',
+            'spanningTreePortfast',
+            'stpGuardType',
+            'stpPathCost',
+            'stpPortPriority',
+            'vlanId'
         ]
         for field in switchport_fields:
             reset_payload.pop(field, None)
         
-        # Clear any security zone assignment
+        # Clear security zone assignment
         if 'securityZone' in reset_payload:
             reset_payload['securityZone'] = None
         
@@ -520,16 +552,18 @@ class FTDBulkDelete:
             response = self.session.put(endpoint, json=reset_payload, timeout=30)
             
             if response.status_code in [200, 201, 204]:
-                return True
+                return True, ""
             else:
-                if self.debug:
-                    print(f" (HTTP {response.status_code}: {response.text[:100]})")
-                return False
+                # Extract detailed error message
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', response.text[:200])
+                except:
+                    error_msg = response.text[:200]
+                return False, f"HTTP {response.status_code}: {error_msg}"
                 
         except requests.exceptions.RequestException as e:
-            if self.debug:
-                print(f" (Error: {e})")
-            return False
+            return False, str(e)
     
     def reset_all_physical_interfaces(self, dry_run: bool = False) -> bool:
         """
@@ -552,7 +586,7 @@ class FTDBulkDelete:
         print(f"\n{'='*60}")
         print("Processing Physical Interfaces (Reset to Default)")
         print(f"{'='*60}")
-        print("  Reset includes: name, description, IP, MTU→1500, disabled")
+        print("  Reset includes: name, description, IP, MTUâ†’1500, disabled")
         
         # Get all interfaces
         all_interfaces = self.get_all_objects("/devices/default/interfaces")
@@ -613,13 +647,14 @@ class FTDBulkDelete:
             else:
                 print(f"  [{i}/{len(configured_interfaces)}] Resetting: {hardware} ({name})...", end=" ")
                 
-                success = self.reset_physical_interface(intf, dry_run)
+                success, error_msg = self.reset_physical_interface(intf, dry_run)
                 
                 if success:
                     print("[Destroyed]")
                     success_count += 1
                 else:
-                    print("[ERROR]")
+                    print(f"[ERROR]")
+                    print(f"      -> {error_msg}")
                     fail_count += 1
                 
                 time.sleep(0.2)
@@ -1037,7 +1072,7 @@ Examples:
     # Safety confirmation
     if not args.dry_run and not args.yes:
         print("\n" + "="*60)
-        print("âš ï¸  FINAL WARNING âš ï¸")
+        print("  FINAL WARNING ")
         print("="*60)
         print("\nThis will DELETE ALL CUSTOM OBJECTS of the selected types!")
         print("This does NOT check import files - it deletes EVERYTHING it finds.")

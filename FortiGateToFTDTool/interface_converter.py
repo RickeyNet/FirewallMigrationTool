@@ -454,9 +454,28 @@ class InterfaceConverter:
             if parent:
                 parent_interfaces.add(parent)
         
+        # ====================================================================
+        # PHASE 2B: Identify EtherChannel and Bridge Group members
+        # ====================================================================
+        # These interfaces should NOT be processed as standalone physical interfaces
+        # because they will be configured as members of their parent interface
+        etherchannel_members = set()
+        for _, props in aggregate_ports:
+            members = props.get('member', [])
+            if isinstance(members, str):
+                members = [members]
+            for member in members:
+                etherchannel_members.add(member)
+        
+        # Combined set of all member interfaces (should not be processed standalone)
+        member_interfaces = etherchannel_members
+        
         # Separate physical ports into those with and without subinterfaces
-        physical_with_subs = [(n, p) for n, p in physical_ports if n in parent_interfaces]
-        physical_standalone = [(n, p) for n, p in physical_ports if n not in parent_interfaces]
+        # Also exclude interfaces that are members of EtherChannels
+        physical_with_subs = [(n, p) for n, p in physical_ports 
+                              if n in parent_interfaces and n not in member_interfaces]
+        physical_standalone = [(n, p) for n, p in physical_ports 
+                               if n not in parent_interfaces and n not in member_interfaces]
         
         # ====================================================================
         # PHASE 3: Check available ports and warn if insufficient
@@ -489,6 +508,8 @@ class InterfaceConverter:
         print(f"      - Bridge Group members: {bridge_member_count}")
         print(f"      - Physical with subinterfaces: {len(physical_with_subs)}")
         print(f"      - Standalone physical: {len(physical_standalone)}")
+        if member_interfaces:
+            print(f"      - Excluded (EC members): {len(member_interfaces)} ({', '.join(sorted(member_interfaces))})")
         print(f"    Total ports needed: {total_needed}")
         
         if total_needed > available:
@@ -693,9 +714,26 @@ class InterfaceConverter:
             self.stats['skipped'] += 1
             return
         
-        # Get interface name (use alias if available, otherwise port name)
+       # Get interface name (use alias if available, otherwise port name)
         alias = properties.get('alias', fg_name)
         ftd_name = sanitize_interface_name(alias)
+        
+        # Reserved names that conflict with FTD built-in interfaces
+        # These names cannot be used for user interfaces
+        reserved_names = {
+            'management',
+            'diagnostic',
+            'inside',
+            'outside'
+        }
+        
+        # If name matches a reserved name, append hardware port number
+        if ftd_name.lower() in reserved_names:
+            original_reserved = ftd_name
+            # Extract port number from hardware name (e.g., "Ethernet1/5" -> "5")
+            port_num = ftd_hardware.split('/')[-1] if '/' in ftd_hardware else '1'
+            ftd_name = f"{ftd_name}_port{port_num}"
+            print(f"      Note: '{original_reserved}' is reserved, renamed to '{ftd_name}'")
         
         # Get description
         description = properties.get('description', alias)
@@ -778,12 +816,21 @@ class InterfaceConverter:
                 # Create a physical interface entry for this member
                 # This ensures it gets imported and set to routed mode
                 # BEFORE the EtherChannel is created
+                # 
+                # IMPORTANT: EtherChannel members require specific settings:
+                #   - speedType: DETECT_SFP (for SFP) or AUTO
+                #   - fecMode: AUTO
+                #   - autoNegotiation: True (enabled)
+                #   - duplexType: FULL
+                #   - name: '' (empty - no name allowed for EC members)
                 member_interface = {
-                    "name": '',  # No name - just prep the interface
+                    "name": '',  # No name - required for EtherChannel membership
                     "hardwareName": ftd_hardware,
                     "description": f"EtherChannel {fg_name} member",
                     "enabled": True,
                     "mode": "ROUTED",
+                    "duplexType": "FULL",
+                    "autoNegotiation": True,
                     "type": "physicalinterface"
                 }
                 
@@ -791,7 +838,7 @@ class InterfaceConverter:
                 existing_hardware = [p.get('hardwareName') for p in self.physical_interfaces]
                 if ftd_hardware not in existing_hardware:
                     self.physical_interfaces.append(member_interface)
-                    print(f"      Added member interface: {member} -> {ftd_hardware} (routed mode)")
+                    print(f"      Added member interface: {member} -> {ftd_hardware} (routed mode, EC-ready)")
         
         if not ftd_members:
             print(f"    Skipped: {fg_name} (no valid member interfaces)")
@@ -971,6 +1018,21 @@ class InterfaceConverter:
         # Get interface name (use alias if available)
         alias = properties.get('alias', fg_name)
         ftd_name = sanitize_interface_name(alias)
+        
+        # Reserved names that conflict with FTD built-in interfaces
+        # These names cannot be used for subinterfaces
+        reserved_names = {
+            'management',
+            'diagnostic',
+            'inside',
+            'outside'
+        }
+        
+        # If name matches a reserved name, append a suffix
+        if ftd_name.lower() in reserved_names:
+            original_reserved = ftd_name
+            ftd_name = f"{ftd_name}_vlan{vlan_id}"
+            print(f"      Note: '{original_reserved}' is reserved, renamed to '{ftd_name}'")
         
         # Check for duplicate names and make unique if needed
         original_name = ftd_name

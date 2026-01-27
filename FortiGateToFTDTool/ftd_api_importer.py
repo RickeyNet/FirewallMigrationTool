@@ -1088,16 +1088,30 @@ class FTDAPIClient:
         if 'ipv4' in intf and intf['ipv4'] is not None:
             update_payload['mode'] = 'ROUTED'
         
-        # Ensure mode is set to ROUTED for L3 interfaces
-        # (This should already be set after conversion, but ensure it)
-        if 'ipv4' in intf and intf['ipv4'] is not None:
-            update_payload['mode'] = 'ROUTED'
+        # Handle EtherChannel member interface settings
+        # These interfaces need specific settings and name must be empty (no name allowed for EC members)
+        # IMPORTANT: Both speed and duplex must be AUTO together, or both must be specific values
+        if 'duplexType' in intf:
+            update_payload['duplexType'] = intf['duplexType']
+        if 'autoNegotiation' in intf:
+            update_payload['autoNegotiation'] = intf['autoNegotiation']
         
-        # SET hardware settings for migration
-        # Auto-negotiation: enabled
-        # Duplex: FULL
-        update_payload['autoNegotiation'] = True
-        update_payload['duplex'] = 'FULL'
+        # If this is an EtherChannel member prep (name is empty string), 
+        # ensure proper settings for EC membership
+        if intf.get('name') == '':
+            update_payload['name'] = ''
+            update_payload['autoNegotiation'] = True
+            
+            # For SFP interfaces (DETECT_SFP), use FULL duplex
+            # For non-SFP interfaces (AUTO speed), use AUTO duplex
+            current_speed = existing.get('speedType', 'AUTO')  # pyright: ignore[reportOptionalMemberAccess]
+            if current_speed == 'DETECT_SFP':
+                update_payload['speedType'] = 'DETECT_SFP'
+                update_payload['duplexType'] = 'FULL'
+                update_payload['fecMode'] = 'AUTO'
+            else:
+                update_payload['speedType'] = 'AUTO'
+                update_payload['duplexType'] = 'AUTO'
         
         # Remove switchport-specific fields if present (they're not valid in routed mode)
         switchport_fields = ['switchPortMode', 'switchPortConfig', 'nativeVlan', 
