@@ -2587,7 +2587,7 @@ Examples:
                        help='Import a specific JSON file (overrides --base and --only flags)')
     parser.add_argument('--type',
                        choices=['address-objects', 'address-groups', 'service-objects', 
-                               'service-groups', 'routes', 'rules', 
+                               'service-groups', 'routes', 'rules', 'security-zones',
                                'physical-interfaces', 'etherchannels', 'bridge-groups', 'subinterfaces'],
                        help='Type of objects in the file (required with --file)')
     
@@ -2645,6 +2645,8 @@ Examples:
             import_subinterfaces(client, args.file, parent_type_filter='physical')
             print("\nPhase 2: Subinterfaces on EtherChannels")
             import_subinterfaces(client, args.file, parent_type_filter='etherchannel')
+        elif args.type == 'security-zones':
+            import_security_zones(client, args.file)
         elif args.type == 'address-objects':
             import_address_objects(client, args.file)
         elif args.type == 'address-groups':
@@ -2661,6 +2663,7 @@ Examples:
     # Check if any --only flags are set
     elif any([args.only_physical_interfaces, args.only_etherchannels,
               args.only_bridge_groups, args.only_subinterfaces,
+              args.only_security_zones,
               args.only_address_objects, args.only_address_groups, 
               args.only_service_objects, args.only_service_groups,
               args.only_routes, args.only_rules]):
@@ -2691,6 +2694,11 @@ Examples:
             import_subinterfaces(client, f"{args.base}_subinterfaces.json", parent_type_filter='etherchannel')
             imported_any = True
         
+        if args.only_security_zones:
+            print("  - Security Zones")
+            import_security_zones(client, f"{args.base}_security_zones.json")
+            imported_any = True
+
         if args.only_address_objects:
             print("  - Address Objects")
             import_address_objects(client, f"{args.base}_address_objects.json")
@@ -2732,12 +2740,13 @@ Examples:
         print("  3. EtherChannels (create)")
         print("  4. Subinterfaces on EtherChannels (create)")
         print("  5. Bridge Groups (create)")
-        print("  6. Address Objects")
-        print("  7. Address Groups")
-        print("  8. Service Objects")
-        print("  9. Service Groups")
-        print("  10. Static Routes")
-        print("  11. Access Rules")
+        print("  6. Security Zones (create)")
+        print("  7. Address Objects")
+        print("  8. Address Groups")
+        print("  9. Service Objects")
+        print("  10. Service Groups")
+        print("  11. Static Routes")
+        print("  12. Access Rules")
         
         # Step 1: Update physical interfaces
         import_physical_interfaces(client, f"{args.base}_physical_interfaces.json")
@@ -2754,6 +2763,9 @@ Examples:
         # Step 5: Create bridge groups
         import_bridge_groups(client, f"{args.base}_bridge_groups.json")
         
+        # Step 6: Create security zones (required for access rules)
+        import_security_zones(client, f"{args.base}_security_zones.json")
+
         # Step 5: Import address objects
         import_address_objects(client, f"{args.base}_address_objects.json")
         
