@@ -992,6 +992,79 @@ class FTDAPIClient:
         except Exception as e:
             return False, str(e)  # type: ignore
     
+    def _apply_model_specific_media_defaults(self, existing_intf: Dict, update_payload: Dict,) -> None:
+        """
+        Apply platform/model-specific media defaults for copper (non-SFP) interfaces.
+
+        Why:
+            Some platforms (notably 3100-series like FTD 3120) do not accept speedType='AUTO'
+            on copper ports the same way smaller platforms (e.g., 1010) do. Instead they expect:
+                - explicit speedType (HUNDRED/THOUSAND, etc.)
+                - auto-negotiation enabled
+
+        This helper makes the behavior deterministic and keeps the branching localized.
+
+        Args:
+            existing_intf: The current interface object fetched from FDM (source of truth)
+            update_payload: The PUT payload being assembled (mutated in place)
+
+        Returns:
+            None
+        """
+        model = str(getattr(self, "appliance_model", "generic")).lower().strip()
+
+        # Treat DETECT_SFP / SFP_DETECT as SFP - we don't override those here.
+        speed = str(existing_intf.get("speedType", "")).upper()
+        if speed in {"DETECT_SFP", "SFP_DETECT"}:
+            return
+
+        # Define platform families for model-specific behavior
+        # 1000-series: Do NOT support autoNeg field (must be null/omitted)
+        # 2000-series: Support AUTO speed, autoNeg may vary
+        # 3100-series: Require explicit speed + autoNeg enabled
+        ftd_1000_series = {"ftd-1010", "1010", "ftd1010", 
+                          "ftd-1120", "1120", "ftd1120",
+                          "ftd-1140", "1140", "ftd1140"}
+        ftd_2000_series = {"ftd-2110", "2110", "ftd2110",
+                          "ftd-2120", "2120", "ftd2120",
+                          "ftd-2130", "2130", "ftd2130",
+                          "ftd-2140", "2140", "ftd2140"}
+        ftd_3100_series = {"ftd-3105", "3105", "ftd3105",
+                          "ftd-3110", "3110", "ftd3110",
+                          "ftd-3120", "3120", "ftd3120",
+                          "ftd-3130", "3130", "ftd3130",
+                          "ftd-3140", "3140", "ftd3140",
+                          "ftd-4215", "4215", "ftd4215"}
+
+        if model in ftd_1000_series:
+            # 1000-series: autoNeg field must be null/omitted
+            # Remove autoNeg fields if present (they cause API errors)
+            update_payload.pop("autoNeg", None)
+            update_payload.pop("autoNegotiation", None)
+            # Use AUTO speed and duplex
+            update_payload["speedType"] = "AUTO"
+            update_payload["duplexType"] = "AUTO"
+            
+        elif model in ftd_3100_series:
+            # 3100-series: Require explicit speed + autoNeg enabled
+            update_payload["autoNegotiation"] = True
+            update_payload["autoNeg"] = True
+            # Keep existing explicit speed if present, otherwise default to THOUSAND
+            explicit_ok = {"TEN", "HUNDRED", "THOUSAND", "TEN_THOUSAND"}
+            if speed in explicit_ok:
+                update_payload["speedType"] = speed
+            else:
+                update_payload["speedType"] = "THOUSAND"
+            update_payload["duplexType"] = "AUTO"
+            
+        else:
+            # Default behavior for 2000-series and unknown platforms
+            # Use AUTO speed and duplex, set autoNeg if platform supports it
+            update_payload["speedType"] = "AUTO"
+            update_payload["duplexType"] = "AUTO"
+            # Try setting autoNeg - some platforms may ignore it
+            update_payload["autoNegotiation"] = True
+
     def update_physical_interface(self, intf: Dict) -> Tuple[bool, Optional[str]]:
         """
         Update a physical interface in FTD (PUT request).
@@ -1088,30 +1161,68 @@ class FTDAPIClient:
         if 'ipv4' in intf and intf['ipv4'] is not None:
             update_payload['mode'] = 'ROUTED'
         
-        # Handle EtherChannel member interface settings
-        # These interfaces need specific settings and name must be empty (no name allowed for EC members)
-        # IMPORTANT: Both speed and duplex must be AUTO together, or both must be specific values
-        if 'duplexType' in intf:
-            update_payload['duplexType'] = intf['duplexType']
-        if 'autoNegotiation' in intf:
-            update_payload['autoNegotiation'] = intf['autoNegotiation']
+        # Get current interface speed type to determine if SFP or copper
+        current_speed = existing.get("speedType", "AUTO")  # pyright: ignore[reportOptionalMemberAccess]
+        is_sfp_port = current_speed in {"DETECT_SFP", "SFP_DETECT"}
         
-        # If this is an EtherChannel member prep (name is empty string), 
-        # ensure proper settings for EC membership
-        if intf.get('name') == '':
-            update_payload['name'] = ''
-            update_payload['autoNegotiation'] = True
-            
-            # For SFP interfaces (DETECT_SFP), use FULL duplex
-            # For non-SFP interfaces (AUTO speed), use AUTO duplex
-            current_speed = existing.get('speedType', 'AUTO')  # pyright: ignore[reportOptionalMemberAccess]
-            if current_speed == 'DETECT_SFP':
-                update_payload['speedType'] = 'DETECT_SFP'
-                update_payload['duplexType'] = 'FULL'
-                update_payload['fecMode'] = 'AUTO'
+        # Get appliance model for platform-specific behavior
+        model = str(getattr(self, "appliance_model", "generic")).lower().strip()
+        ftd_1000_series = {"ftd-1010", "1010", "ftd1010", 
+                          "ftd-1120", "1120", "ftd1120",
+                          "ftd-1140", "1140", "ftd1140"}
+        ftd_3100_series = {"ftd-3105", "3105", "ftd3105",
+                          "ftd-3110", "3110", "ftd3110",
+                          "ftd-3120", "3120", "ftd3120",
+                          "ftd-3130", "3130", "ftd3130",
+                          "ftd-3140", "3140", "ftd3140",
+                          "ftd-4215", "4215", "ftd4215"}
+        
+        # Handle speed/duplex/autoNeg settings based on port type and platform
+        # CRITICAL: SFP ports must preserve SFP_DETECT speed - never override!
+        if is_sfp_port:
+            # SFP interface - preserve existing speed, use FULL duplex
+            update_payload["speedType"] = current_speed
+            update_payload["duplexType"] = "FULL"
+            if 'fecMode' in existing:  # pyright: ignore[reportOperatorIssue]
+                update_payload["fecMode"] = "AUTO"
+            # Only set autoNeg for platforms that support it
+            if model not in ftd_1000_series:
+                update_payload["autoNegotiation"] = True
+                update_payload["autoNeg"] = True
             else:
+                update_payload.pop("autoNeg", None)
+                update_payload.pop("autoNegotiation", None)
+        else:
+            # Copper interface - apply platform-specific defaults
+            # Only apply converter's duplex/autoNeg if NOT on a platform that needs special handling
+            if model in ftd_3100_series:
+                # 3100-series copper: preserve existing speed, use FULL duplex
+                explicit_ok = {'TEN', 'HUNDRED', 'THOUSAND', 'TEN_THOUSAND'}
+                if current_speed in explicit_ok:
+                    update_payload['speedType'] = current_speed
+                else:
+                    update_payload['speedType'] = 'THOUSAND'
+                update_payload['duplexType'] = 'FULL'
+                update_payload['autoNegotiation'] = True
+                update_payload['autoNeg'] = True
+            elif model in ftd_1000_series:
+                # 1000-series copper: AUTO speed, no autoNeg field
                 update_payload['speedType'] = 'AUTO'
                 update_payload['duplexType'] = 'AUTO'
+                update_payload.pop("autoNeg", None)
+                update_payload.pop("autoNegotiation", None)
+            else:
+                # Default/2000-series: use converter settings or AUTO
+                if 'duplexType' in intf:
+                    update_payload['duplexType'] = intf['duplexType']
+                if 'autoNegotiation' in intf:
+                    update_payload['autoNegotiation'] = intf['autoNegotiation']
+        
+        # If this is an EtherChannel member prep (name is empty string), 
+        # ensure name is cleared
+        if intf.get('name') == '':
+            update_payload['name'] = ''
+
         
         # Remove switchport-specific fields if present (they're not valid in routed mode)
         switchport_fields = ['switchPortMode', 'switchPortConfig', 'nativeVlan', 
@@ -1427,8 +1538,9 @@ class FTDAPIClient:
                 intf['mtu'] = 9000
         
         # For etherchannels, we need to resolve member interface IDs
-        # Also get the speed from the first member interface
-        member_speed = None
+        # Also get the speedType from the first member interface
+        member_speed_type = None
+        is_sfp_member = False
         if 'memberInterfaces' in intf:
             resolved_members = []
             for member in intf['memberInterfaces']:
@@ -1439,23 +1551,61 @@ class FTDAPIClient:
                         "id": existing.get('id'), # pyright: ignore[reportOptionalMemberAccess]
                         "type": "physicalinterface"
                     })
-                    # Get speed from first member interface
-                    if member_speed is None:
-                        member_speed = existing.get('speed') # pyright: ignore[reportOptionalMemberAccess]
+                    # Get speedType from first member interface
+                    if member_speed_type is None:
+                        member_speed_type = existing.get('speedType') # pyright: ignore[reportOptionalMemberAccess]
+                        if member_speed_type in {'DETECT_SFP', 'SFP_DETECT'}:
+                            is_sfp_member = True
                 else:
                     print(f"    Warning: Could not resolve member {hardware_name}")
             intf['memberInterfaces'] = resolved_members
         
-        # Set speed to match member interfaces (avoid AUTO speed error)
-        # If member speed was found, use it; otherwise default to TEN_GIGABITS_PER_SEC
-        if member_speed and member_speed != 'AUTO':
-            intf['speed'] = member_speed
-        elif 'speed' not in intf or intf.get('speed') == 'AUTO':
-            # Default to 10Gbps if no speed found or if AUTO was specified
-            intf['speed'] = 'TEN_GIGABITS_PER_SEC'
+        # Get appliance model for platform-specific behavior
+        model = str(getattr(self, "appliance_model", "generic")).lower().strip()
+        ftd_1000_series = {"ftd-1010", "1010", "ftd1010", 
+                          "ftd-1120", "1120", "ftd1120",
+                          "ftd-1140", "1140", "ftd1140"}
+        ftd_3100_series = {"ftd-3105", "3105", "ftd3105",
+                          "ftd-3110", "3110", "ftd3110",
+                          "ftd-3120", "3120", "ftd3120",
+                          "ftd-3130", "3130", "ftd3130",
+                          "ftd-3140", "3140", "ftd3140",
+                          "ftd-4215", "4215", "ftd4215"}
         
-        # Set duplex to FULL
-        intf['duplex'] = 'FULL'
+        # Set speedType and duplexType based on member interfaces and platform
+        # CRITICAL: Use correct field names (speedType, duplexType) NOT (speed, duplex)
+        if is_sfp_member:
+            # SFP members - use SFP_DETECT speed
+            intf['speedType'] = member_speed_type  # Preserve SFP_DETECT
+            intf['duplexType'] = 'FULL'
+            if model not in ftd_1000_series:
+                intf['autoNeg'] = True
+        elif model in ftd_3100_series:
+            # 3100-series: Cannot use AUTO speed, use explicit speed
+            explicit_ok = {'TEN', 'HUNDRED', 'THOUSAND', 'TEN_THOUSAND'}
+            if member_speed_type in explicit_ok:
+                intf['speedType'] = member_speed_type
+            else:
+                intf['speedType'] = 'TEN_THOUSAND'  # Default for 3100-series
+            intf['duplexType'] = 'FULL'
+            intf['autoNeg'] = True
+        elif model in ftd_1000_series:
+            # 1000-series: Support AUTO speed, no autoNeg field
+            intf['speedType'] = 'AUTO'
+            intf['duplexType'] = 'AUTO'
+            # Don't set autoNeg - not supported
+        else:
+            # Default/2000-series: use AUTO or member speed
+            if member_speed_type and member_speed_type != 'AUTO':
+                intf['speedType'] = member_speed_type
+            else:
+                intf['speedType'] = 'AUTO'
+            intf['duplexType'] = 'AUTO'
+            intf['autoNeg'] = True
+        
+        # Remove old incorrect field names if present
+        intf.pop('speed', None)
+        intf.pop('duplex', None)
         
         try:
             response = self.session.post(endpoint, json=intf, timeout=30)
@@ -1836,6 +1986,51 @@ def load_json_file(filename: str) -> Optional[List[Dict]]:
         print(f"FAIL Invalid JSON in {filename}: {e}")
         return None
     
+def load_metadata_file(path: str) -> dict:
+    """
+    Load conversion metadata emitted by fortigate_converter.py.
+
+    Args:
+        path: Path to metadata JSON file
+
+    Returns:
+        Dict (empty on failure)
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def auto_discover_metadata(base_name: str) -> dict:
+    """
+    Auto-discover metadata file based on the --base argument.
+    
+    Checks for {base}_metadata.json in the current directory.
+    This eliminates the need to manually specify --metadata-file
+    when using standard naming conventions.
+    
+    Args:
+        base_name: Base name from --base argument (e.g., 'ftd_config')
+        
+    Returns:
+        Metadata dict if found, empty dict otherwise
+    """
+    import os
+    
+    # Build expected metadata filename
+    metadata_path = f"{base_name}_metadata.json"
+    
+    # Check if file exists
+    if os.path.isfile(metadata_path):
+        print(f"[INFO] Auto-discovered metadata file: {metadata_path}")
+        return load_metadata_file(metadata_path)
+    
+    return {}
+
+    
 
 def physical_interface_matches_json_config(current: Dict, desired_json: Dict) -> bool:
     """
@@ -2190,7 +2385,7 @@ def import_physical_interfaces(client: FTDAPIClient, filename: str) -> bool:
                 skipped_count += 1
             else:
                 # Update successful
-                print("[OK]")
+                print("[Success!]")
                 updated_count += 1
         else:
             # Update failed
@@ -2573,6 +2768,9 @@ Examples:
                        help='Skip SSL certificate verification (default: True)')
     parser.add_argument('--debug', action='store_true',
                        help='Enable debug output (shows API payloads)')
+    parser.add_argument("--metadata-file", default="",
+                       help="Path to *_metadata.json generated by fortigate_converter.py (used for model-specific behavior).",)
+
     
     # Selective import options - allows importing only specific object types
     parser.add_argument('--only-physical-interfaces', action='store_true',
@@ -2625,6 +2823,21 @@ Examples:
         verify_ssl=not args.skip_verify
     )
     
+    # Load metadata: explicit file takes priority, then auto-discover from --base
+    metadata = {}
+    if args.metadata_file:
+        metadata = load_metadata_file(args.metadata_file)
+    else:
+        # Auto-discover metadata based on --base argument
+        metadata = auto_discover_metadata(args.base)
+    
+    # Store model hint on the client for downstream logic
+    target_model = str(metadata.get("target_model", "generic")).lower().strip()
+    client.appliance_model = target_model # pyright: ignore[reportAttributeAccessIssue]
+    
+    if target_model and target_model != "generic":
+        print(f"[INFO] Target firewall model: {target_model}")
+
     # Set debug mode if requested
     if args.debug:
         client.debug = True

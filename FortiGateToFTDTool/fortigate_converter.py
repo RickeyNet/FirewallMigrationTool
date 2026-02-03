@@ -155,6 +155,41 @@ def preprocess_yaml_file(input_file: str) -> str:
     print(f"  [OK] Pre-processing complete")
     return cleaned_yaml
 
+def build_conversion_metadata(args: argparse.Namespace) -> dict:
+    """
+    Build a metadata dictionary describing the conversion context.
+
+    This is exported to a standalone JSON file so downstream scripts
+    (importer/cleanup) can automatically apply device-specific behavior.
+
+    Args:
+        args: Parsed argparse namespace (must include target_model and output)
+
+    Returns:
+        Metadata dict
+    """
+    return {
+        "target_model": str(args.target_model).lower().strip(),
+        "output_basename": str(args.output).strip(),
+        "schema_version": 1
+    }
+
+
+def write_json_file(path: str, data: object, pretty: bool = False) -> None:
+    """
+    Fast JSON writer with optional pretty formatting.
+
+    Args:
+        path: Output file path
+        data: JSON-serializable object
+        pretty: Whether to indent output
+    """
+    with open(path, "w", encoding="utf-8") as f:
+        if pretty:
+            json.dump(data, f, indent=2)
+        else:
+            json.dump(data, f, separators=(",", ":"))
+
 def main():
     """
     Main function that orchestrates the entire conversion process.
@@ -593,6 +628,15 @@ Supported FTD Models:
     bridge_groups_output = f"{args.output}_bridge_groups.json"
     security_zones_output = f"{args.output}_security_zones.json"
     summary_output = f"{args.output}_summary.json"
+
+    # ------------------------------------------------------------------------
+    # Export conversion metadata for downstream tools (importer/cleanup)
+    # ------------------------------------------------------------------------
+    metadata = build_conversion_metadata(args)
+    metadata_path = f"{args.output}_metadata.json"
+    write_json_file(metadata_path, metadata, pretty=args.pretty)
+    print(f"[OK] Wrote metadata: {metadata_path}")
+
     
     generated_route_objects = getattr(route_converter, "generated_network_objects", None)
     if generated_route_objects:
