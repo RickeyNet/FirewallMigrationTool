@@ -1004,8 +1004,16 @@ class InterfaceConverter:
         return {}
     
     def _convert_vlan_interface(self, fg_name: str, properties: Dict):
-        """Convert a FortiGate VLAN interface to FTD Subinterface."""
+        """
+        Convert a FortiGate VLAN interface to FTD Subinterface.
         
+        The FTD subinterface name combines both the alias and the original
+        FortiGate interface name for clarity and uniqueness.
+        
+        Args:
+            fg_name: FortiGate interface name (e.g., '551')
+            properties: Interface properties from YAML config
+        """
         # Get parent interface and VLAN ID
         parent_fg_name = properties.get('interface')
         vlan_id = properties.get('vlanid')
@@ -1015,9 +1023,18 @@ class InterfaceConverter:
             self.stats['skipped'] += 1
             return
         
-        # Get interface name (use alias if available)
-        alias = properties.get('alias', fg_name)
-        ftd_name = sanitize_interface_name(alias)
+        # Build FTD name from both alias and fg_name for clarity
+        # Example: alias="L-slap", fg_name="551" -> "l_slap_551"
+        alias = properties.get('alias', '')
+        
+        if alias and alias != fg_name:
+            # Combine alias and fg_name: "alias_fgname"
+            combined_name = f"{alias}_{fg_name}"
+        else:
+            # No alias or alias equals fg_name, just use fg_name
+            combined_name = fg_name
+        
+        ftd_name = sanitize_interface_name(combined_name)
         
         # Reserved names that conflict with FTD built-in interfaces
         # These names cannot be used for subinterfaces
@@ -1044,27 +1061,37 @@ class InterfaceConverter:
         # Track this name as used
         self.used_subinterface_names.add(ftd_name)
         
-        # Store the mapping
+        # Store the mapping for both fg_name and alias (if different)
         self.interface_name_mapping[fg_name] = ftd_name
-        self.interface_name_mapping[alias] = ftd_name
+        if alias and alias != fg_name:
+            self.interface_name_mapping[alias] = ftd_name
         
         # Determine parent FTD interface
         # Could be physical or etherchannel
         parent_ftd_name = self.interface_name_mapping.get(parent_fg_name)
         
+        # Build set of FortiGate aggregate interface names for efficient lookup
+        # This includes the original FortiGate name that maps to each etherchannel
+        etherchannel_fg_names = set()
+        for ec in self.etherchannels:
+            ec_ftd_name = ec.get('name', '')
+            # Find all FortiGate names that map to this etherchannel's FTD name
+            for fg_name_key, ftd_name_val in self.interface_name_mapping.items():
+                if ftd_name_val == ec_ftd_name:
+                    etherchannel_fg_names.add(fg_name_key)
+        
         # Determine hardware name based on parent type
-        if parent_fg_name in ['ether_trunk'] or parent_fg_name in [e.get('name', '') for e in self.etherchannels]:
-            # Parent is an etherchannel
-            # Find the etherchannel to get its hardware name
+        if parent_fg_name in etherchannel_fg_names:
+            # Parent is an etherchannel - find its hardware name
             for ec in self.etherchannels:
-                if self.interface_name_mapping.get(parent_fg_name) == ec.get('name'):
+                if parent_ftd_name == ec.get('name'):
                     parent_hardware = ec.get('hardwareName', 'Port-channel1')
                     break
             else:
-                parent_hardware = 'Port-channel1'  # Default
+                parent_hardware = 'Port-channel1'  # Default fallback
         else:
             # Parent is a physical interface
-            parent_hardware = self.port_mapping.get(parent_fg_name, f"Ethernet1/1")
+            parent_hardware = self.port_mapping.get(parent_fg_name, "Ethernet1/1")
         
         hardware_name = f"{parent_hardware}.{vlan_id}"
         
