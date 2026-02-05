@@ -240,7 +240,9 @@ class InterfaceConverter:
         # Track created security zone names to avoid duplicates
         self.created_zone_names = set()
         
-        # Track statistics
+        # Track bridge group membership: hardware_name -> bridge_group_name
+        # Used to assign physical interfaces to bridge group zones instead of individual zones
+        self.bridge_group_members = {}
         
         # Track statistics
         self.stats = {
@@ -610,14 +612,28 @@ class InterfaceConverter:
         interfaces_needing_zones = []
         
         # Physical interfaces
+        # NOTE: If a physical interface is a bridge group member, use the bridge
+        # group name as the zone name instead of the physical interface name
         for intf in self.physical_interfaces:
             intf_name = intf.get('name', '')
             hardware_name = intf.get('hardwareName', '')
-            if intf_name and intf_name not in self.created_zone_names:
+            
+            # Check if this interface is a bridge group member
+            bridge_group_name = self.bridge_group_members.get(hardware_name)
+            
+            if bridge_group_name:
+                # Use bridge group name as zone name for member interfaces
+                zone_name = bridge_group_name
+            else:
+                # Use interface name for standalone physical interfaces
+                zone_name = intf_name
+            
+            if zone_name and zone_name not in self.created_zone_names:
                 interfaces_needing_zones.append({
                     'name': intf_name,
                     'hardwareName': hardware_name,
-                    'type': 'physicalinterface'
+                    'type': 'physicalinterface',
+                    'zone_name': zone_name  # Store the zone name to use
                 })
         
         # Subinterfaces
@@ -628,7 +644,8 @@ class InterfaceConverter:
                 interfaces_needing_zones.append({
                     'name': intf_name,
                     'hardwareName': hardware_name,
-                    'type': 'subinterface'
+                    'type': 'subinterface',
+                    'zone_name': intf_name  # Zone name matches interface name
                 })
         
         # EtherChannels
@@ -639,40 +656,60 @@ class InterfaceConverter:
                 interfaces_needing_zones.append({
                     'name': intf_name,
                     'hardwareName': hardware_name,
-                    'type': 'etherchannelinterface'
+                    'type': 'etherchannelinterface',
+                    'zone_name': intf_name  # Zone name matches interface name
                 })
         
-        # Bridge Groups
-        for intf in self.bridge_groups:
-            intf_name = intf.get('name', '')
-            hardware_name = intf.get('hardwareName', '')
-            if intf_name and intf_name not in self.created_zone_names:
-                interfaces_needing_zones.append({
-                    'name': intf_name,
-                    'hardwareName': hardware_name,
-                    'type': 'bridgegroupinterface'
-                })
+        # Bridge Groups - SKIP adding to security zones
+        # In FTD, bridge group member physical interfaces are added to the zone,
+        # NOT the BVI interface itself. The member interfaces above are already
+        # assigned to use the bridge group name as their zone name.
+        # 
+        # FTD Security Zone behavior:
+        #   - Physical interfaces that are bridge group members -> added to zone
+        #   - The BVI (bridgegroupinterface) itself -> NOT added to zone
         
-        # Create security zones for each interface
+       # Create security zones for each interface
+        # Group interfaces by zone name to support multiple interfaces per zone
+        zone_interfaces = {}  # zone_name -> list of interface info dicts
+        zone_hardware_seen = {}  # zone_name -> set of hardwareNames already added
+        
         for intf_info in interfaces_needing_zones:
-            zone_name = intf_info['name']
+            # Use explicit zone_name if provided, otherwise use interface name
+            zone_name = intf_info.get('zone_name', intf_info['name'])
+            hardware_name = intf_info['hardwareName']
             
+            if zone_name not in zone_interfaces:
+                zone_interfaces[zone_name] = []
+                zone_hardware_seen[zone_name] = set()
+            
+            # Skip if this hardware interface was already added to this zone
+            if hardware_name in zone_hardware_seen[zone_name]:
+                continue
+            
+            zone_interfaces[zone_name].append({
+                'name': intf_info['name'],
+                'hardwareName': hardware_name,
+                'type': intf_info['type']
+            })
+            zone_hardware_seen[zone_name].add(hardware_name)
+        
+        # Create security zones
+        for zone_name, interfaces in zone_interfaces.items():
             # Skip if zone already created
             if zone_name in self.created_zone_names:
                 continue
             
+            # Build interface list for zone description
+            hardware_names = [intf['hardwareName'] for intf in interfaces]
+            desc_interfaces = ', '.join(hardware_names) if len(hardware_names) <= 3 else f"{hardware_names[0]} + {len(hardware_names)-1} more"
+            
             # Build security zone payload
             security_zone = {
                 "name": zone_name,
-                "description": f"Auto-generated zone for interface {intf_info['hardwareName']}",
+                "description": f"Auto-generated zone for interface(s) {desc_interfaces}",
                 "mode": "ROUTED",
-                "interfaces": [
-                    {
-                        "name": intf_info['name'],
-                        "hardwareName": intf_info['hardwareName'],
-                        "type": intf_info['type']
-                    }
-                ],
+                "interfaces": interfaces,
                 "type": "securityzone"
             }
             
@@ -680,7 +717,10 @@ class InterfaceConverter:
             self.created_zone_names.add(zone_name)
             self.stats['security_zones_created'] += 1
             
-            print(f"    Created zone: {zone_name} (interface: {intf_info['hardwareName']})")
+            if len(interfaces) > 1:
+                print(f"    Created zone: {zone_name} (interfaces: {', '.join(hardware_names)})")
+            else:
+                print(f"    Created zone: {zone_name} (interface: {interfaces[0]['hardwareName']})")
 
     def _convert_physical_interface(self, fg_name: str, properties: Dict):
         """Convert a FortiGate physical interface to FTD format."""
@@ -927,6 +967,10 @@ class InterfaceConverter:
                 if ftd_hardware not in existing_hardware:
                     self.physical_interfaces.append(member_interface)
                     print(f"      Added member interface: {member} -> {ftd_hardware}")
+                
+                # Track this physical interface as a bridge group member
+                # so its security zone is named after the bridge group
+                self.bridge_group_members[ftd_hardware] = ftd_name
         
         if not ftd_members:
             print(f"    Skipped: {fg_name} (no valid member interfaces)")
