@@ -344,18 +344,39 @@ class PolicyConverter:
             return [str(value)]
     
     def _create_zone_objects(self, zone_names: List[str]) -> List[Dict]:
+        """
+        Create FTD security zone references from FortiGate interface names.
+        
+        Maps FortiGate srcintf/dstintf values to the corresponding FTD security
+        zone names. The zone names must match exactly what the interface converter
+        created, otherwise the access rules will fail during FTD import.
+        
+        Lookup Strategy (in order):
+            1. Direct lookup: interface_name_mapping[zone_name]
+            2. String conversion: interface_name_mapping[str(zone_name)]
+            3. Case variations: lowercase, original case
+            4. VLAN suffix matching: check if zone_name is embedded in FTD name
+            5. Sanitized lookup: sanitize and try again
+            6. Fallback: use sanitized name and warn user
+        
+        Args:
+            zone_names: List of FortiGate interface/zone names from policy
+            
+        Returns:
+            List of FTD security zone reference dictionaries
+        """
         zone_objects = []
         
         for zone_name in zone_names:
-            if zone_name.lower() == 'any':
+            # Skip 'any' - means no zone restriction in FTD
+            if str(zone_name).lower() == 'any':
                 continue
             
-            # Map FortiGate interface/zone name to FTD interface name
-            ftd_zone_name = self.interface_name_mapping.get(zone_name, zone_name)
+            # Convert to string (handles integer VLAN IDs from YAML)
+            zone_name_str = str(zone_name)
             
-            # Sanitize if not found in mapping
-            if ftd_zone_name == zone_name:
-                ftd_zone_name = zone_name.lower().replace('-', '_').replace(' ', '_')
+            # Attempt lookup with multiple strategies for robustness
+            ftd_zone_name = self._lookup_zone_name(zone_name_str)
             
             zone_obj = {
                 "name": ftd_zone_name,
@@ -364,6 +385,51 @@ class PolicyConverter:
             zone_objects.append(zone_obj)
         
         return zone_objects
+    
+    def _lookup_zone_name(self, zone_name: str) -> str:
+        """
+        Look up the FTD security zone name for a FortiGate interface name.
+        
+        Tries multiple lookup strategies to handle various naming conventions
+        used in FortiGate configurations (VLAN IDs, aliases, mixed case, etc.).
+        
+        Args:
+            zone_name: FortiGate interface name (string)
+            
+        Returns:
+            FTD security zone name (string)
+        """
+        # Strategy 1: Direct lookup (exact match)
+        if zone_name in self.interface_name_mapping:
+            return self.interface_name_mapping[zone_name]
+        
+        # Strategy 2: Lowercase lookup
+        zone_name_lower = zone_name.lower()
+        if zone_name_lower in self.interface_name_mapping:
+            return self.interface_name_mapping[zone_name_lower]
+        
+        # Strategy 3: Check if any mapping value contains this as a suffix
+        # Handles cases like "551" matching "l_slap_551"
+        for fg_name, ftd_name in self.interface_name_mapping.items():
+            if zone_name.isdigit() and ftd_name.endswith(f"_{zone_name}"):
+                return ftd_name
+            if ftd_name.endswith(f"_{zone_name_lower}"):
+                return ftd_name
+        
+        # Strategy 4: Sanitize using existing function and try lookup
+        sanitized = sanitize_name(zone_name).lower()
+        if sanitized in self.interface_name_mapping:
+            return self.interface_name_mapping[sanitized]
+        
+        # Strategy 5: Check if sanitized name exists as a value (is a valid zone)
+        zone_values = set(self.interface_name_mapping.values())
+        if sanitized in zone_values:
+            return sanitized
+        
+        # Fallback: Use sanitized name but warn about potential mismatch
+        print(f"    [WARNING] Interface '{zone_name}' not found in mapping, "
+              f"using '{sanitized}' - verify zone exists")
+        return sanitized
     
     def _create_network_objects(self, addr_names: List[str]) -> List[Dict]:
         """
