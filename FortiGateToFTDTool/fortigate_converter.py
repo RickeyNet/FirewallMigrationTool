@@ -263,6 +263,13 @@ Supported FTD Models:
                        default='ftd-3120',
                        help='Target FTD firewall model (default: ftd-3120). Use --list-models to see options.')
     
+    parser.add_argument('--ha-port',
+                   type=str,
+                   default=None,
+                   metavar='ETHERNET_PORT',
+                   help="Custom HA port (e.g., 'Ethernet1/5'). Overrides model default. "
+                        "Format: 'Ethernet1/X' where X is a valid port number for your model.")
+    
     # OPTIONAL: List supported models and exit
     parser.add_argument('--list-models',
                        action='store_true',
@@ -411,11 +418,15 @@ Supported FTD Models:
     # ========================================================================
     # STEP 4B: Convert interfaces FIRST (needed for routes and policies)
     # ========================================================================
-    print("\n" + "-"*60)
+    print("\n" + "="*70)
     print("Converting Interfaces...")
-    print("-"*60)
-    
-    # Convert FortiGate interfaces to FTD format
+    print("="*70)
+    # NEW: Pass custom HA port if specified
+    interface_converter = InterfaceConverter(
+        fg_config, 
+        target_model=args.target_model,
+        custom_ha_port=args.ha_port  # Pass the --ha-port argument
+    )
     interface_results = interface_converter.convert()
     
     # Get the interface name mapping for routes and policies

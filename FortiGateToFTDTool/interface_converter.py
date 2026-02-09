@@ -199,23 +199,27 @@ class InterfaceConverter:
     Use set_target_model() to configure for a specific firewall.
     """
     
-    def __init__(self, fortigate_config: Dict[str, Any], target_model: str = 'ftd-3120'):
+    def __init__(self, fortigate_config: Dict[str, Any], target_model: str = 'ftd-3120', custom_ha_port: str = None): # pyright: ignore[reportArgumentType]
         """
         Initialize the converter with FortiGate configuration data.
         
         Args:
             fortigate_config: Dictionary containing the complete parsed FortiGate YAML
-                             Expected to have a 'system_interface' key
+                            Expected to have a 'system_interface' key
             target_model: Target FTD firewall model (e.g., 'ftd-1010', 'ftd-3120')
-                         Use get_supported_models() to see available models
+                        Use get_supported_models() to see available models
+            custom_ha_port: Optional custom HA port (e.g., 'Ethernet1/5'). 
+                        If None, uses the model's default HA port.
+                        Must match format: 'Ethernet1/X' where X is a valid port number.
         """
         self.fg_config = fortigate_config
-        
+    
         # Set target model (this also sets up port mapping)
         self.target_model = None
         self.model_info = None
         self.total_ports = 16  # Default
         self.ha_port = None
+        self.custom_ha_port = custom_ha_port  # NEW: Store custom HA port preference
         self.skip_ftd_ports = set()
         
         # Port mapping - will be built dynamically
@@ -262,22 +266,31 @@ class InterfaceConverter:
         Interfaces are assigned starting from the LAST port and working down.
         
         Args:
-            model: FTD model identifier (e.g., 'ftd-1010', 'ftd-3120')
-        """
-        model = model.lower()
+            model: Model identifier (e.g., 'ftd-1010', 'ftd-3120')
         
+        Raises:
+            ValueError: If model is not supported
+            ValueError: If custom_ha_port is invalid for this model
+        """
         if model not in FTD_MODELS:
-            print(f"Warning: Unknown model '{model}', using ftd-3120 as default")
-            print_supported_models()
-            model = 'ftd-3120'
+            raise ValueError(f"Unsupported model: {model}. Use get_supported_models() to see available models.")
         
         self.target_model = model
         self.model_info = FTD_MODELS[model]
         self.total_ports = self.model_info['total_ports']
-        self.ha_port = self.model_info['ha_port']
         
-        # Set HA port to skip (if model has one)
+        # NEW: Use custom HA port if specified, otherwise use model default
+        if self.custom_ha_port:
+            # Validate custom HA port format and availability
+            self._validate_custom_ha_port(self.custom_ha_port) # pyright: ignore[reportAttributeAccessIssue]
+            self.ha_port = self.custom_ha_port
+        else:
+            self.ha_port = self.model_info['ha_port']
+        
+        # Build skip set for reserved ports
         self.skip_ftd_ports = set()
+        
+        # HA port is reserved and cannot be used for data interfaces
         if self.ha_port:
             self.skip_ftd_ports.add(self.ha_port)
         
@@ -301,6 +314,47 @@ class InterfaceConverter:
             print(f"  HA port (skipped): {self.ha_port}")
         print(f"  Port assignment order: Starting from Ethernet1/{self.total_ports} down to Ethernet1/1")
     
+    def _validate_custom_ha_port(self, ha_port: str):
+        """
+        Validate that the custom HA port is valid for the target model.
+        
+        Args:
+            ha_port: Custom HA port string (e.g., 'Ethernet1/5')
+        
+        Raises:
+            ValueError: If the HA port format is invalid or port number exceeds model capacity
+        
+        Notes:
+            - HA port must match format: 'Ethernet1/X' where X is 1-24
+            - Port number must not exceed the model's total_ports
+            - Management ports cannot be used as HA ports
+        """
+        import re
+        
+        # Validate format: Ethernet1/X
+        match = re.match(r'^Ethernet1/(\d+)$', ha_port)
+        if not match:
+            raise ValueError(
+                f"Invalid HA port format: '{ha_port}'. "
+                f"Must be 'Ethernet1/X' where X is a port number (e.g., 'Ethernet1/5')"
+            )
+        
+        # Extract port number
+        port_num = int(match.group(1))
+        
+        # Validate port number is within model's range
+        if port_num < 1 or port_num > self.total_ports:
+            raise ValueError(
+                f"Invalid HA port: '{ha_port}'. "
+                f"Model '{self.target_model}' only has ports 1-{self.total_ports}. "
+                f"Specify a port between Ethernet1/1 and Ethernet1/{self.total_ports}."
+            )
+    
+        # Warn if using port 1 (often used for management/uplink)
+        if port_num == 1:
+            print(f"\nWARNING: Using Ethernet1/1 as HA port. This is typically the first data port.")
+            print(f"         Ensure this doesn't conflict with your network design.\n")
+
     def set_port_mapping(self, mapping: Dict[str, str]):
         """
         Set explicit port mapping for specific interfaces.
