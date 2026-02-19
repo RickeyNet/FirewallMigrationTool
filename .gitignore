@@ -1,0 +1,21 @@
+# Python bytecode cache
+__pycache__/
+*.pyc
+
+# FortiGate source configuration
+fortigate_config.yaml
+
+# Converted JSON config files (output from converter scripts)
+*_address_objects.json
+*_address_groups.json
+*_service_objects.json
+*_service_groups.json
+*_static_routes.json
+*_access_rules.json
+*_physical_interfaces.json
+*_subinterfaces.json
+*_etherchannels.json
+*_bridge_groups.json
+*_security_zones.json
+*_metadata.json
+*_summary.json

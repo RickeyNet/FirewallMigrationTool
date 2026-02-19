@@ -453,6 +453,29 @@ class FTDBulkDelete:
         
         return fail_count == 0
     
+    @staticmethod
+    def _parse_port_number(hardware_name: str) -> Optional[int]:
+        """
+        Extract the port number from a hardware interface name.
+        
+        Parses names like 'Ethernet1/9' -> 9, 'Ethernet1/1' -> 1.
+        Returns None if the name cannot be parsed (e.g. Management, 
+        Port-channel, or unexpected format).
+        
+        Args:
+            hardware_name: Hardware interface name (e.g. 'Ethernet1/9')
+            
+        Returns:
+            Port number as int, or None if not parseable
+        """
+        # Expected format: "Ethernet<slot>/<port>" e.g. "Ethernet1/9"
+        if '/' not in hardware_name:
+            return None
+        try:
+            return int(hardware_name.rsplit('/', 1)[1])
+        except (ValueError, IndexError):
+            return None
+    
     def reset_physical_interface(self, intf: Dict, dry_run: bool = False) -> Tuple[bool, str]:
         """
         Reset a physical interface to default (unconfigured) state.
@@ -501,11 +524,12 @@ class FTDBulkDelete:
         reset_payload['mode'] = 'ROUTED'
         
         # Reset speed/duplex/FEC settings
-        # IMPORTANT: Both speed and duplex must be AUTO together, or both must be specific values
-        # For EtherChannel compatibility on SFP interfaces:
-        #   - speedType: DETECT_SFP, duplexType: FULL, autoNegotiation: True
-        # For non-SFP interfaces:
-        #   - speedType: AUTO, duplexType: AUTO, autoNegotiation: True
+        # IMPORTANT: Both speed and duplex must be AUTO together, or both specific.
+        # CRITICAL: After an interface leaves an EtherChannel or bridge group,
+        #           FTD may change the reported speedType (e.g. SFP port reports
+        #           THOUSAND instead of SFP_DETECT). We CANNOT trust speedType
+        #           alone to detect port media type. Use hardware port number on
+        #           known platforms as the authoritative source.
         
         # Remove old field names if present
         reset_payload.pop('duplex', None)
@@ -527,10 +551,26 @@ class FTDBulkDelete:
                           "ftd-3130", "3130", "ftd3130",
                           "ftd-3140", "3140", "ftd3140",
                           "ftd-4215", "4215", "ftd4215"}
-
-        if current_speed in {'DETECT_SFP', 'SFP_DETECT'}:
-            # SFP interface - use DETECT_SFP with FULL duplex
-            reset_payload['speedType'] = current_speed
+        
+        # --- Determine if the port is SFP or copper ---
+        # On known platforms we use the hardware port number because speedType
+        # is unreliable after EtherChannel/bridge-group membership changes.
+        # FTD-3120 port layout: Ethernet1/1-1/8 = copper, Ethernet1/9-1/16 = SFP
+        # FTD-3110 port layout: Ethernet1/1-1/8 = copper, Ethernet1/9-1/12 = SFP
+        # FTD-3130 port layout: Ethernet1/1-1/8 = copper, Ethernet1/9-1/20 = SFP
+        # FTD-3140 port layout: Ethernet1/1-1/8 = copper, Ethernet1/9-1/24 = SFP
+        is_sfp = current_speed in {'DETECT_SFP', 'SFP_DETECT'}  # default fallback
+        
+        if model in ftd_3100_series:
+            # Parse port number from hardwareName (e.g. "Ethernet1/9" -> 9)
+            port_num = self._parse_port_number(hardware_name)
+            if port_num is not None:
+                # On all 3100-series: ports 1-8 are copper, 9+ are SFP
+                is_sfp = port_num >= 9
+        
+        if is_sfp:
+            # SFP interface - use SFP_DETECT with FULL duplex
+            reset_payload['speedType'] = 'SFP_DETECT'
             reset_payload['duplexType'] = 'FULL'
             if 'fecMode' in intf:
                 reset_payload['fecMode'] = 'AUTO'
@@ -539,18 +579,13 @@ class FTDBulkDelete:
                 reset_payload['autoNegotiation'] = True
                 reset_payload['autoNeg'] = True
             else:
-                # 1000-series: remove autoNeg fields
+                # 1000-series: remove autoNeg fields entirely
                 reset_payload.pop('autoNeg', None)
                 reset_payload.pop('autoNegotiation', None)
                 
         elif model in ftd_3100_series:
-            # 3100-series copper: Cannot use AUTO speed, use explicit speed
-            # Keep existing speed if valid, otherwise default to THOUSAND
-            explicit_ok = {'TEN', 'HUNDRED', 'THOUSAND', 'TEN_THOUSAND'}
-            if current_speed in explicit_ok:
-                reset_payload['speedType'] = current_speed
-            else:
-                reset_payload['speedType'] = 'THOUSAND'
+            # 3100-series copper: Cannot use AUTO speed, must use THOUSAND
+            reset_payload['speedType'] = 'THOUSAND'
             reset_payload['duplexType'] = 'FULL'
             reset_payload['autoNegotiation'] = True
             reset_payload['autoNeg'] = True
@@ -564,14 +599,8 @@ class FTDBulkDelete:
             
         else:
             # Default for 2000-series and unknown platforms
-            # Preserve existing speed if it's explicit, otherwise use AUTO
-            explicit_ok = {'TEN', 'HUNDRED', 'THOUSAND', 'TEN_THOUSAND'}
-            if current_speed in explicit_ok:
-                reset_payload['speedType'] = current_speed
-                reset_payload['duplexType'] = 'FULL'
-            else:
-                reset_payload['speedType'] = 'AUTO'
-                reset_payload['duplexType'] = 'AUTO'
+            reset_payload['speedType'] = 'AUTO'
+            reset_payload['duplexType'] = 'AUTO'
             reset_payload['autoNegotiation'] = True
         
         # Remove ALL switchport-specific fields that are incompatible with ROUTED mode
