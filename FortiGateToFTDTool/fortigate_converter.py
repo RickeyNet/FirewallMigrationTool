@@ -76,7 +76,7 @@ try:
     from service_group_converter import ServiceGroupConverter
     from policy_converter import PolicyConverter
     from route_converter import RouteConverter
-    from interface_converter import InterfaceConverter
+    from interface_converter import InterfaceConverter, FTD_MODELS
 except ImportError as e:
     print("\n" + "="*60)
     print("ERROR: Missing converter module files!")
@@ -163,14 +163,19 @@ def build_conversion_metadata(args: argparse.Namespace) -> dict:
     (importer/cleanup) can automatically apply device-specific behavior.
 
     Args:
-        args: Parsed argparse namespace (must include target_model and output)
+        args: Parsed argparse namespace (must include target_model, output,
+              and ha_port)
 
     Returns:
-        Metadata dict
+        Metadata dict with target model, output basename, HA port config,
+        and schema version.
     """
     return {
         "target_model": str(args.target_model).lower().strip(),
         "output_basename": str(args.output).strip(),
+        "ha_port": args.ha_port if args.ha_port else FTD_MODELS.get(
+            args.target_model, {}
+        ).get('ha_port'),
         "schema_version": 1
     }
 
@@ -410,9 +415,8 @@ Supported FTD Models:
     # Create converter instance for firewall policies
     policy_converter = PolicyConverter(fg_config)
     
-    # Create converter instance for interfaces with target model
-    interface_converter = InterfaceConverter(fg_config, target_model=args.target_model)
-    
+    # Note: InterfaceConverter is initialized in STEP 4B below (with custom HA port support)
+
     # Note: Route converter will be initialized later after address objects are converted
     
     # ========================================================================

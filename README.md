@@ -35,7 +35,8 @@ This toolset converts FortiGate firewall configurations to Cisco FTD (Firepower 
 ### Additional Features
 
 - Automatic name sanitization (spaces → underscores)
-- Model-aware interface port mapping
+- Model-aware interface port mapping with customizable HA port assignment
+- Flexible HA port configuration (override model defaults)
 - Metadata file for seamless import workflow
 - Bulk cleanup/delete script for rollback
 - Idempotent imports (skip existing objects)
@@ -202,9 +203,11 @@ python -c "import yaml, requests, urllib3; print('All libraries installed!')"
 
 ```
 □ Run: python fortigate_converter.py config.yaml --target-model ftd-3120 --pretty
+□ (Optional) Specify custom HA port: --ha-port Ethernet1/5
 □ Review generated JSON files (13 files total including metadata)
 □ Check summary.json for conversion statistics
 □ Review any warnings in console output
+□ Verify HA port assignment matches your design
 ```
 
 ### Import Phase
@@ -273,6 +276,133 @@ python fortigate_converter.py --list-models
 | ftd-3140 | 24    | Ethernet1/2 | Secure Firewall           |
 | ftd-4215 | 24    | Ethernet1/2 | Enterprise                |
 
+**Note:** Default HA ports can be overridden using the `--ha-port` option. See [Customizing HA Port Configuration](#customizing-ha-port-configuration) for details.
+
+
+### Step 2a: Customizing HA Port Configuration
+
+By default, most FTD models reserve **Ethernet1/2** for High Availability (HA) connections. However, you can customize which port is used for HA using the `--ha-port` option.
+
+#### When to Use a Custom HA Port
+
+- **Port conflicts**: Your network design requires Ethernet1/2 for data traffic
+- **Cable management**: Physical rack layout requires a different HA port location
+- **Multi-chassis setup**: HA links use specific ports for cross-chassis connections
+- **Compliance requirements**: Security policy mandates specific HA port placement
+
+#### How HA Port Assignment Works
+
+1. **Default behavior**: Models with HA support (all except FTD-1010) use Ethernet1/2
+2. **Port reservation**: The HA port is automatically skipped during interface conversion
+3. **Port validation**: Custom HA ports must be within the model's port range (1 to total_ports)
+4. **Data port assignment**: All FortiGate interfaces are mapped to available FTD ports, excluding the HA port
+
+#### Custom HA Port Syntax
+```bash
+python fortigate_converter.py config.yaml --target-model MODEL --ha-port EthernetX/Y
+```
+
+**Format Requirements:**
+- Must be exactly `Ethernet1/X` where X is a port number
+- Port number must be between 1 and the model's maximum port count
+- Cannot use Management ports for HA
+- Case-sensitive: use `Ethernet1/5` not `ethernet1/5`
+
+#### Examples
+
+**Example 1: Use Ethernet1/5 for HA on FTD-3120 (16-port model)**
+```bash
+python fortigate_converter.py fortigate.yaml --target-model ftd-3120 --ha-port Ethernet1/5 --pretty
+```
+**Result:**
+- HA configured on: Ethernet1/5
+- Available data ports: Ethernet1/1, 1/3, 1/4, 1/6-16 (Ethernet1/2 becomes available, 1/5 reserved)
+
+---
+
+**Example 2: Use Ethernet1/10 for HA on FTD-3140 (24-port model)**
+```bash
+python fortigate_converter.py fortigate.yaml --target-model ftd-3140 --ha-port Ethernet1/10 --pretty
+```
+**Result:**
+- HA configured on: Ethernet1/10
+- Available data ports: Ethernet1/1-9, 1/11-24 (Ethernet1/2 becomes available, 1/10 reserved)
+
+---
+
+**Example 3: Keep default HA port (Ethernet1/2)**
+```bash
+python fortigate_converter.py fortigate.yaml --target-model ftd-3120 --pretty
+```
+**Result:**
+- HA configured on: Ethernet1/2 (default)
+- Available data ports: Ethernet1/1, 1/3-16
+
+---
+
+**Example 4: Try invalid port number (will error)**
+```bash
+python fortigate_converter.py fortigate.yaml --target-model ftd-3120 --ha-port Ethernet1/99
+```
+**Result:**
+```
+ERROR: Invalid HA port: 'Ethernet1/99'. Model 'ftd-3120' only has ports 1-16.
+Specify a port between Ethernet1/1 and Ethernet1/16.
+```
+
+---
+
+**Example 5: Try invalid format (will error)**
+```bash
+python fortigate_converter.py fortigate.yaml --target-model ftd-3120 --ha-port eth1/5
+```
+**Result:**
+```
+ERROR: Invalid HA port format: 'eth1/5'.
+Must be 'Ethernet1/X' where X is a port number (e.g., 'Ethernet1/5')
+```
+
+#### Port Availability After HA Assignment
+
+The conversion script automatically adjusts port availability based on your HA port choice:
+
+| HA Port Setting       | Ports Reserved        | Ports Available for Data Traffic          |
+|-----------------------|-----------------------|-------------------------------------------|
+| Default (Ethernet1/2) | Ethernet1/2           | Ethernet1/1, 1/3-16 (15 ports)            |
+| Custom (Ethernet1/5)  | Ethernet1/5           | Ethernet1/1-4, 1/6-16 (15 ports)          |
+| Custom (Ethernet1/10) | Ethernet1/10          | Ethernet1/1-9, 1/11-16 (15 ports)         |
+| FTD-1010 (No HA)      | None                  | Ethernet1/1-8 (all 8 ports)               |
+
+#### Verification
+
+After conversion with custom HA port, verify the setting:
+
+1. **Check the generated JSON files:**
+```bash
+# Look for interface assignments in ftd_config_physical_interfaces.json
+grep -A 5 "hardwareName" ftd_config_physical_interfaces.json
+```
+
+2. **Review conversion summary:**
+```bash
+cat ftd_config_summary.json
+```
+Look for the `target_model` and note which ports were assigned.
+
+3. **Check metadata file:**
+```bash
+cat ftd_config_metadata.json
+```
+The metadata file stores your model selection for the import process.
+
+#### Important Notes
+
+⚠️ **Warning**: Changing the HA port after initial deployment requires manual FTD configuration changes. Always configure the correct HA port during initial conversion.
+
+✅ **Recommendation**: Document your HA port choice in your network diagrams and change management records.
+
+💡 **Tip**: If you're migrating multiple FTD devices in an HA pair, use the same custom HA port on both devices for consistency.
+
 ### Step 3: Run the Conversion
 
 **Basic conversion (uses default ftd-3120):**
@@ -299,7 +429,7 @@ python fortigate_converter.py fortigate_config.yaml -o prod_ftd --target-model f
 | `--pretty`       | Format JSON with indentation      | Off          |
 | `--target-model` | Target FTD firewall model         | `ftd-3120`   |
 | `--list-models`  | Display supported models and exit | -            |
-
+| `--ha-port`      | Specified HA port being used      | `Ethernet1/2`|
 ### Step 4: Review Generated Files
 
 The converter creates 13 JSON files:
@@ -576,6 +706,67 @@ SSL: CERTIFICATE_VERIFY_FAILED
 ```
 
 **Solution:** The `--skip-verify` flag is enabled by default. If issues persist, ensure urllib3 is installed.
+
+### HA Port Configuration Issues
+
+**Problem:** `ERROR: Invalid HA port: 'Ethernet1/X'`
+
+**Cause:** Specified HA port number exceeds model's port count
+
+**Solution:**
+```bash
+# Check your model's port range
+python fortigate_converter.py --list-models
+
+# Example: FTD-3120 has 16 ports, so valid range is Ethernet1/1 through Ethernet1/16
+python fortigate_converter.py config.yaml --target-model ftd-3120 --ha-port Ethernet1/12 --pretty
+```
+
+---
+
+**Problem:** `ERROR: Invalid HA port format`
+
+**Cause:** HA port not in correct format
+
+**Solution:**
+```bash
+# Correct format (case-sensitive)
+python fortigate_converter.py config.yaml --target-model ftd-3120 --ha-port Ethernet1/5
+
+# WRONG formats (will error):
+# --ha-port eth1/5
+# --ha-port ethernet1/5
+# --ha-port Eth1/5
+# --ha-port 1/5
+```
+
+---
+
+**Problem:** HA port warning: "Using Ethernet1/1 as HA port"
+
+**Cause:** You specified Ethernet1/1, which is typically the first data port
+
+**Impact:** No error, but may conflict with common network designs
+
+**Solution:**
+- Review your network design
+- Consider if Ethernet1/1 should really be HA or if you need a different port
+- Most HA deployments use Ethernet1/2 or higher-numbered ports
+
+---
+
+**Problem:** Converted config shows HA port assigned to data interface
+
+**Cause:** Did not specify `--ha-port` and model default was not what you expected
+
+**Solution:**
+```bash
+# Re-run conversion with explicit HA port
+python fortigate_converter.py config.yaml --target-model ftd-3120 --ha-port Ethernet1/8 --pretty
+
+# Verify in generated files
+grep -i "hardwareName" ftd_config_physical_interfaces.json
+```
 
 ### Authentication Issues
 
