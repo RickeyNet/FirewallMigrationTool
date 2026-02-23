@@ -519,7 +519,15 @@ class FTDBulkDelete:
         # Clear IP configuration - set to None or remove
         reset_payload['ipv4'] = None
         reset_payload['ipv6'] = None
-        
+
+        # Disable HA interface monitoring before resetting.
+        # On HA-enabled appliances (e.g. FTD-3120), physical interfaces
+        # default to monitorInterface=True.  The API may reject a PUT that
+        # changes the interface configuration while it is still on the
+        # HA-monitored list.  Setting this to False first ensures the
+        # reset payload is accepted.
+        reset_payload['monitorInterface'] = False
+
         # Reset mode to ROUTED
         reset_payload['mode'] = 'ROUTED'
         
@@ -830,13 +838,20 @@ class FTDBulkDelete:
         
         if dry_run:
             return True, ""
-        
+
         # Use different endpoint based on parent type
         if parent_type == 'etherchannel':
             endpoint = f"/devices/default/etherchannelinterfaces/{parent_id}/subinterfaces"
         else:
             endpoint = f"/devices/default/interfaces/{parent_id}/subinterfaces"
-        
+
+        # Defensively disable HA monitoring if it is enabled.
+        # Subinterfaces are typically monitorInterface=False, but a user
+        # may have manually enabled monitoring.  Attempting the DELETE
+        # while monitoring is active will be rejected by the API on
+        # HA-enabled appliances.
+        self._disable_ha_monitor(endpoint, obj_id, f"subintf-{obj_id[:8]}")
+
         return self.delete_object(endpoint, obj_id)
     
     def delete_all_subinterfaces(self, dry_run: bool = False) -> bool:
@@ -911,7 +926,73 @@ class FTDBulkDelete:
                 print(f"    ... and {len(failed_objects) - 10} more")
         
         return fail_count == 0
-    
+
+    def _disable_ha_monitor(self, endpoint: str, obj_id: str, obj_name: str) -> Tuple[bool, str]:
+        """
+        Disable HA interface monitoring on an object before deletion.
+
+        On FTD appliances running in HA (High Availability) mode, interfaces
+        (including EtherChannels and Bridge Groups) that have
+        ``monitorInterface: true`` are on the HA-monitored list.  The FDM API
+        will reject a DELETE request on any interface that is still being
+        monitored for HA failover.
+
+        This method performs a GET on the object, checks whether
+        ``monitorInterface`` is ``True``, and if so, PUTs it back with
+        ``monitorInterface`` set to ``False`` so the subsequent DELETE can
+        succeed.
+
+        Args:
+            endpoint: Full API path to the object collection
+                      (e.g. ``/devices/default/etherchannelinterfaces``).
+            obj_id:   UUID of the specific object.
+            obj_name: Human-readable name for log messages.
+
+        Returns:
+            Tuple of (success, error_message).
+            ``(True, "")`` when monitoring was already off or was
+            successfully disabled.  ``(False, "<reason>")`` on failure.
+        """
+        url = f"{self.base_url}{endpoint}/{obj_id}"
+
+        try:
+            # --- Step 1: GET the current object state -------------------------
+            response = self.session.get(url, timeout=30)
+            if response.status_code != 200:
+                return False, f"GET failed: HTTP {response.status_code}"
+
+            obj_data = response.json()
+
+            # --- Step 2: Check if HA monitoring is enabled --------------------
+            if not obj_data.get("monitorInterface", False):
+                # Already off — nothing to do
+                return True, ""
+
+            # --- Step 3: PUT with monitorInterface = false --------------------
+            obj_data["monitorInterface"] = False
+
+            put_resp = self.session.put(url, json=obj_data, timeout=30)
+            if put_resp.status_code in (200, 201, 204):
+                if self.debug:
+                    print(f"    [DEBUG] Disabled HA monitor on {obj_name}")
+                return True, ""
+
+            # Extract meaningful error from the response body
+            try:
+                err = put_resp.json()
+                msg = (
+                    err.get("error", {})
+                    .get("messages", [{}])[0]
+                    .get("description", put_resp.text[:200])
+                )
+            except Exception:
+                msg = put_resp.text[:200]
+
+            return False, f"PUT failed (disable HA monitor): HTTP {put_resp.status_code}: {msg}"
+
+        except requests.exceptions.RequestException as exc:
+            return False, f"Request error (disable HA monitor): {exc}"
+
     def delete_all_etherchannels(self, dry_run: bool = False) -> bool:
         """
         Delete all EtherChannel interfaces.
@@ -960,18 +1041,27 @@ class FTDBulkDelete:
                 success_count += 1
             else:
                 print(f"  [{i}/{len(all_etherchannels)}] Deleting: {name} ({hardware})...", end=" ")
-                
-                # Try to delete directly
-                success, error_msg = self.delete_object("/devices/default/etherchannelinterfaces", obj_id) # pyright: ignore[reportArgumentType]
-                
+
+                # --- Disable HA monitoring so the DELETE is allowed -----------
+                ha_ok, ha_err = self._disable_ha_monitor(
+                    "/devices/default/etherchannelinterfaces", obj_id, name  # pyright: ignore[reportArgumentType]
+                )
+                if not ha_ok:
+                    print(f"[ERROR] Could not disable HA monitor: {ha_err}")
+                    fail_count += 1
+                    time.sleep(0.3)
+                    continue
+
+                # --- Now delete the EtherChannel ------------------------------
+                success, error_msg = self.delete_object("/devices/default/etherchannelinterfaces", obj_id)  # pyright: ignore[reportArgumentType]
+
                 if success:
                     print("[Thrown in the Garbage]")
                     success_count += 1
                 else:
-                    # If it failed, it might have subinterfaces - show the error
                     print(f"[ERROR] {error_msg}")
                     fail_count += 1
-                
+
                 time.sleep(0.3)
         
         print(f"\n  Summary: {success_count} deleted, {fail_count} failed")
@@ -1030,16 +1120,27 @@ class FTDBulkDelete:
                 success_count += 1
             else:
                 print(f"  [{i}/{len(all_bridge_groups)}] Deleting: {name}...", end=" ")
-                
-                success, error_msg = self.delete_object("/devices/default/bridgegroupinterfaces", obj_id) # pyright: ignore[reportArgumentType]
-                
+
+                # --- Disable HA monitoring so the DELETE is allowed -----------
+                ha_ok, ha_err = self._disable_ha_monitor(
+                    "/devices/default/bridgegroupinterfaces", obj_id, name  # pyright: ignore[reportArgumentType]
+                )
+                if not ha_ok:
+                    print(f"[ERROR] Could not disable HA monitor: {ha_err}")
+                    fail_count += 1
+                    time.sleep(0.3)
+                    continue
+
+                # --- Now delete the bridge group ------------------------------
+                success, error_msg = self.delete_object("/devices/default/bridgegroupinterfaces", obj_id)  # pyright: ignore[reportArgumentType]
+
                 if success:
                     print("[Lost in space]")
                     success_count += 1
                 else:
                     print(f"[ERROR] {error_msg}")
                     fail_count += 1
-                
+
                 time.sleep(0.3)
         
         print(f"\n  Summary: {success_count} deleted, {fail_count} failed")

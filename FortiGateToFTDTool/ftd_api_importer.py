@@ -2328,6 +2328,7 @@ def import_physical_interfaces(client: FTDAPIClient, filename: str) -> bool:
     print(f"\n{'-'*60}")
     print(f"Updating Physical Interfaces from {filename}")
     print(f"{'-'*60}")
+    print("  - Physical Interfaces")
     print("  NOTE: Auto-negotiation=ENABLED, Duplex=FULL will be set")
     print("  NOTE: Interfaces not found on FTD will be skipped")
     
@@ -2417,7 +2418,7 @@ def import_etherchannels(client: FTDAPIClient, filename: str) -> bool:
     print(f"\n{'-'*60}")
     print(f"Creating EtherChannels from {filename}")
     print(f"{'-'*60}")
-    
+    print("  - EtherChannels")
     interfaces = load_json_file(filename)
     if interfaces is None:
         return False
@@ -2464,7 +2465,8 @@ def import_bridge_groups(client: FTDAPIClient, filename: str) -> bool:
     print(f"\n{'-'*60}")
     print(f"Creating Bridge Groups from {filename}")
     print(f"{'-'*60}")
-    
+    print("  - Bridge Groups")
+
     interfaces = load_json_file(filename)
     if interfaces is None:
         return False
@@ -2524,7 +2526,8 @@ def import_subinterfaces(client: FTDAPIClient, filename: str, parent_type_filter
     print(f"\n{'-'*60}")
     print(header)
     print(f"{'-'*60}")
-    
+    print("  - Subinterfaces (two-phase import)")
+    print("    Phase 1: Physical interface parents")
     interfaces = load_json_file(filename)
     if interfaces is None:
         return False
@@ -2901,23 +2904,18 @@ Examples:
         imported_any = False
         
         if args.only_physical_interfaces:
-            print("  - Physical Interfaces")
             import_physical_interfaces(client, f"{args.base}_physical_interfaces.json")
             imported_any = True
         
         if args.only_etherchannels:
-            print("  - EtherChannels")
             import_etherchannels(client, f"{args.base}_etherchannels.json")
             imported_any = True
         
         if args.only_bridge_groups:
-            print("  - Bridge Groups")
             import_bridge_groups(client, f"{args.base}_bridge_groups.json")
             imported_any = True
         
         if args.only_subinterfaces:
-            print("  - Subinterfaces (two-phase import)")
-            print("    Phase 1: Physical interface parents")
             import_subinterfaces(client, f"{args.base}_subinterfaces.json", parent_type_filter='physical')
             print("    Phase 2: EtherChannel parents")
             import_subinterfaces(client, f"{args.base}_subinterfaces.json", parent_type_filter='etherchannel')
