@@ -1,3 +1,4 @@
+*.vscode
 # Python bytecode cache
 __pycache__/
 
