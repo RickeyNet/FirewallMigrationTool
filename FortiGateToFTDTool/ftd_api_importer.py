@@ -2517,8 +2517,11 @@ def import_subinterfaces(client: FTDAPIClient, filename: str, parent_type_filter
     """
     # Determine header based on filter
     if parent_type_filter == 'physical':
+        print("  - Subinterfaces (two-phase import)")
+        print("    Phase 1: Physical interface parents")
         header = f"Creating Subinterfaces (Physical Interface Parents) from {filename}"
     elif parent_type_filter == 'etherchannel':
+        print("    Phase 2: EtherChannel parents")
         header = f"Creating Subinterfaces (EtherChannel Parents) from {filename}"
     else:
         header = f"Creating Subinterfaces from {filename}"
@@ -2526,8 +2529,6 @@ def import_subinterfaces(client: FTDAPIClient, filename: str, parent_type_filter
     print(f"\n{'-'*60}")
     print(header)
     print(f"{'-'*60}")
-    print("  - Subinterfaces (two-phase import)")
-    print("    Phase 1: Physical interface parents")
     interfaces = load_json_file(filename)
     if interfaces is None:
         return False
@@ -2917,7 +2918,6 @@ Examples:
         
         if args.only_subinterfaces:
             import_subinterfaces(client, f"{args.base}_subinterfaces.json", parent_type_filter='physical')
-            print("    Phase 2: EtherChannel parents")
             import_subinterfaces(client, f"{args.base}_subinterfaces.json", parent_type_filter='etherchannel')
             imported_any = True
         
