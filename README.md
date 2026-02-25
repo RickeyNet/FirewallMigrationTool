@@ -681,6 +681,10 @@ python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-address-objects
 python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-address-groups
 python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-service-objects
 python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-service-groups
+python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-security-zones
+python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-bridge-groups
+python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-subinterfaces
+python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-etherchannels
 python ftd_api_cleanup.py --host 192.168.1.1 -u admin --reset-physical-interfaces
 ```
 
