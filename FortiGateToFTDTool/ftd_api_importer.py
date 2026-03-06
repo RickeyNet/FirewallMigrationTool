@@ -43,6 +43,9 @@ import sys
 import time
 import getpass
 import urllib3
+import threading
+import random
+import concurrent.futures
 from typing import Dict, List, Optional, Tuple
 
 
@@ -77,6 +80,7 @@ class FTDAPIClient:
         self.password = password
         self.verify_ssl = verify_ssl
         self.debug = False  # Will be set by caller if needed
+        self._stats_lock = threading.Lock()
         
         # Base URL for FDM API
         self.base_url = f"https://{host}/api/fdm/latest"
@@ -138,6 +142,11 @@ class FTDAPIClient:
             "bridge_groups_failed": 0,
             "bridge_groups_skipped": 0
         }
+
+    def record_stat(self, key: str) -> None:
+        """Thread-safe increment for statistics counters."""
+        with self._stats_lock:
+            self.stats[key] += 1
     
     # =========================================================================
     # REFERENCE CACHING METHODS
@@ -422,7 +431,7 @@ class FTDAPIClient:
             print(f"FAIL Connection error: {e}")
             return False
     
-    def create_network_object(self, obj: Dict) -> Tuple[bool, Optional[str]]:
+    def create_network_object(self, obj: Dict, track_stats: bool = True) -> Tuple[bool, Optional[str]]:
         """
         Create a network object (address object) in FTD.
         
@@ -439,7 +448,8 @@ class FTDAPIClient:
             
             if response.status_code in [200, 201]:
                 created_obj = response.json()
-                self.stats["address_objects_created"] += 1
+                if track_stats:
+                    self.record_stat("address_objects_created")
                 return True, created_obj.get("id")
             elif response.status_code == 422:
                 # 422 Unprocessable Entity - usually means object already exists
@@ -448,21 +458,25 @@ class FTDAPIClient:
                 
                 # Check if it's a duplicate/already exists error
                 if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
-                    self.stats["address_objects_skipped"] += 1
+                    if track_stats:
+                        self.record_stat("address_objects_skipped")
                     return True, f"SKIPPED: {error_msg}"  # Return True to indicate it's not a failure
                 else:
-                    self.stats["address_objects_failed"] += 1
+                    if track_stats:
+                        self.record_stat("address_objects_failed")
                     return False, error_msg
             else:
-                self.stats["address_objects_failed"] += 1
+                if track_stats:
+                    self.record_stat("address_objects_failed")
                 error_msg = response.text
                 return False, error_msg
                 
         except requests.exceptions.RequestException as e:
-            self.stats["address_objects_failed"] += 1
+            if track_stats:
+                self.record_stat("address_objects_failed")
             return False, str(e)
     
-    def create_network_group(self, group: Dict) -> Tuple[bool, Optional[str]]:
+    def create_network_group(self, group: Dict, track_stats: bool = True) -> Tuple[bool, Optional[str]]:
         """
         Create a network object group (address group) in FTD.
         
@@ -479,28 +493,33 @@ class FTDAPIClient:
             
             if response.status_code in [200, 201]:
                 created_obj = response.json()
-                self.stats["address_groups_created"] += 1
+                if track_stats:
+                    self.record_stat("address_groups_created")
                 return True, created_obj.get("id")
             elif response.status_code == 422:
                 error_data = response.json()
                 error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
                 
                 if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
-                    self.stats["address_groups_skipped"] += 1
+                    if track_stats:
+                        self.record_stat("address_groups_skipped")
                     return True, f"SKIPPED: {error_msg}"
                 else:
-                    self.stats["address_groups_failed"] += 1
+                    if track_stats:
+                        self.record_stat("address_groups_failed")
                     return False, error_msg
             else:
-                self.stats["address_groups_failed"] += 1
+                if track_stats:
+                    self.record_stat("address_groups_failed")
                 error_msg = response.text
                 return False, error_msg
                 
         except requests.exceptions.RequestException as e:
-            self.stats["address_groups_failed"] += 1
+            if track_stats:
+                self.record_stat("address_groups_failed")
             return False, str(e)
     
-    def create_port_object(self, obj: Dict) -> Tuple[bool, Optional[str]]:
+    def create_port_object(self, obj: Dict, track_stats: bool = True) -> Tuple[bool, Optional[str]]:
         """
         Create a port object (service object) in FTD.
         
@@ -526,28 +545,33 @@ class FTDAPIClient:
             
             if response.status_code in [200, 201]:
                 created_obj = response.json()
-                self.stats["port_objects_created"] += 1
+                if track_stats:
+                    self.record_stat("port_objects_created")
                 return True, created_obj.get("id")
             elif response.status_code == 422:
                 error_data = response.json()
                 error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
                 
                 if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
-                    self.stats["port_objects_skipped"] += 1
+                    if track_stats:
+                        self.record_stat("port_objects_skipped")
                     return True, f"SKIPPED: {error_msg}"
                 else:
-                    self.stats["port_objects_failed"] += 1
+                    if track_stats:
+                        self.record_stat("port_objects_failed")
                     return False, error_msg
             else:
-                self.stats["port_objects_failed"] += 1
+                if track_stats:
+                    self.record_stat("port_objects_failed")
                 error_msg = response.text
                 return False, error_msg
                 
         except requests.exceptions.RequestException as e:
-            self.stats["port_objects_failed"] += 1
+            if track_stats:
+                self.record_stat("port_objects_failed")
             return False, str(e)
     
-    def create_port_group(self, group: Dict) -> Tuple[bool, Optional[str]]:
+    def create_port_group(self, group: Dict, track_stats: bool = True) -> Tuple[bool, Optional[str]]:
         """
         Create a port object group (service group) in FTD.
         
@@ -564,25 +588,30 @@ class FTDAPIClient:
             
             if response.status_code in [200, 201]:
                 created_obj = response.json()
-                self.stats["port_groups_created"] += 1
+                if track_stats:
+                    self.record_stat("port_groups_created")
                 return True, created_obj.get("id")
             elif response.status_code == 422:
                 error_data = response.json()
                 error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
                 
                 if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
-                    self.stats["port_groups_skipped"] += 1
+                    if track_stats:
+                        self.record_stat("port_groups_skipped")
                     return True, f"SKIPPED: {error_msg}"
                 else:
-                    self.stats["port_groups_failed"] += 1
+                    if track_stats:
+                        self.record_stat("port_groups_failed")
                     return False, error_msg
             else:
-                self.stats["port_groups_failed"] += 1
+                if track_stats:
+                    self.record_stat("port_groups_failed")
                 error_msg = response.text
                 return False, error_msg
                 
         except requests.exceptions.RequestException as e:
-            self.stats["port_groups_failed"] += 1
+            if track_stats:
+                self.record_stat("port_groups_failed")
             return False, str(e)
         
     def resolve_route_references(self, route: Dict) -> Tuple[bool, Dict]:
@@ -2090,7 +2119,7 @@ def physical_interface_matches_json_config(current: Dict, desired_json: Dict) ->
     return True
 
 
-def import_address_objects(client: FTDAPIClient, filename: str) -> bool:
+def import_address_objects(client: FTDAPIClient, filename: str, max_workers: int = 1, max_attempts: int = 4) -> bool:
     """
     Import address objects from JSON file to FTD.
     
@@ -2113,26 +2142,50 @@ def import_address_objects(client: FTDAPIClient, filename: str) -> bool:
         print("  No objects to import")
         return True
     
-    all_success = True
-    for i, obj in enumerate(objects, 1):
+    total = len(objects)
+    max_workers = max(1, max_workers)
+    print_lock = threading.Lock()
+    failure_flag = [False]
+
+    def should_retry(err: Optional[str]) -> bool:
+        if not err:
+            return False
+        msg = str(err).lower()
+        return any(token in msg for token in ["429", "too many", "rate limit", "timeout", "temporarily", "503", "504"])
+
+    def worker(idx: int, obj: Dict) -> None:
         name = obj.get("name", "Unknown")
-        print(f"  [{i}/{len(objects)}] Creating: {name}...", end=" ")
-        
-        success, result = client.create_network_object(obj)
-        if success:
-            if "SKIPPED" in str(result):
-                print("[SKIP (already exists)]")
-            else:
-                print("[Success!]")
-        else:
-            print(f"[FAIL]")
-            print(f"      Error: {result}")
-            all_success = False
-        
-        # Small delay to avoid overwhelming the API
-        time.sleep(0.2)
-    
-    return all_success
+        backoff = 0.3
+        for attempt in range(max_attempts):
+            success, result = client.create_network_object(obj, track_stats=False)
+            if success:
+                if isinstance(result, str) and str(result).startswith("SKIPPED"):
+                    client.record_stat("address_objects_skipped")
+                    line = f"  [{idx+1}/{total}] Creating: {name}... SKIP"
+                else:
+                    client.record_stat("address_objects_created")
+                    line = f"  [{idx+1}/{total}] Creating: {name}... OK"
+                with print_lock:
+                    print(line)
+                return
+
+            if attempt < max_attempts - 1 and should_retry(result):
+                time.sleep(backoff + random.uniform(0, 0.25))
+                backoff *= 2
+                continue
+
+            client.record_stat("address_objects_failed")
+            line = f"  [{idx+1}/{total}] Creating: {name}... FAIL {result}"
+            with print_lock:
+                print(line)
+            failure_flag[0] = True
+            return
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for idx, obj in enumerate(objects):
+            executor.submit(worker, idx, obj)
+
+    return not failure_flag[0]
 
 
 def import_address_groups(client: FTDAPIClient, filename: str) -> bool:
@@ -2222,7 +2275,7 @@ def clean_group_object(group: Dict) -> Dict:
     return cleaned
 
 
-def import_service_objects(client: FTDAPIClient, filename: str) -> bool:
+def import_service_objects(client: FTDAPIClient, filename: str, max_workers: int = 1, max_attempts: int = 4) -> bool:
     """
     Import service port objects from JSON file to FTD.
     
@@ -2245,22 +2298,51 @@ def import_service_objects(client: FTDAPIClient, filename: str) -> bool:
         print("  No objects to import")
         return True
     
-    all_success = True
-    for i, obj in enumerate(objects, 1):
+    total = len(objects)
+    max_workers = max(1, max_workers)
+    print_lock = threading.Lock()
+    failure_flag = [False]
+
+    def should_retry(err: Optional[str]) -> bool:
+        if not err:
+            return False
+        msg = str(err).lower()
+        return any(token in msg for token in ["429", "too many", "rate limit", "timeout", "temporarily", "503", "504"])
+
+    def worker(idx: int, obj: Dict) -> None:
         name = obj.get("name", "Unknown")
         obj_type = obj.get("type", "")
-        print(f"  [{i}/{len(objects)}] Creating: {name} ({obj_type})...", end=" ")
-        
-        success, result = client.create_port_object(obj)
-        if success:
-            print("[Success!]")
-        else:
-            print(f"[FAIL {result}]")
-            all_success = False
-        
-        time.sleep(0.2)
-    
-    return all_success
+        backoff = 0.3
+        for attempt in range(max_attempts):
+            success, result = client.create_port_object(obj, track_stats=False)
+            if success:
+                if isinstance(result, str) and str(result).startswith("SKIPPED"):
+                    client.record_stat("port_objects_skipped")
+                    line = f"  [{idx+1}/{total}] Creating: {name} ({obj_type})... SKIP"
+                else:
+                    client.record_stat("port_objects_created")
+                    line = f"  [{idx+1}/{total}] Creating: {name} ({obj_type})... OK"
+                with print_lock:
+                    print(line)
+                return
+
+            if attempt < max_attempts - 1 and should_retry(result):
+                time.sleep(backoff + random.uniform(0, 0.25))
+                backoff *= 2
+                continue
+
+            client.record_stat("port_objects_failed")
+            line = f"  [{idx+1}/{total}] Creating: {name} ({obj_type})... FAIL {result}"
+            with print_lock:
+                print(line)
+            failure_flag[0] = True
+            return
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for idx, obj in enumerate(objects):
+            executor.submit(worker, idx, obj)
+
+    return not failure_flag[0]
 
 
 def import_service_groups(client: FTDAPIClient, filename: str) -> bool:
@@ -2774,6 +2856,8 @@ Examples:
                        help='Enable debug output (shows API payloads)')
     parser.add_argument("--metadata-file", default="",
                        help="Path to *_metadata.json generated by fortigate_converter.py (used for model-specific behavior).",)
+    parser.add_argument('--workers', type=int, default=6,
+                       help='Max concurrent workers for address/service object imports (default: 6)')
 
     
     # Selective import options - allows importing only specific object types
@@ -2826,6 +2910,18 @@ Examples:
         password=args.password,
         verify_ssl=not args.skip_verify
     )
+
+    # Track per-phase timings for simple performance comparisons
+    phase_timings = []
+
+    def record_phase(label: str, func, *func_args, **func_kwargs):
+        """Run a phase, time it, and capture success for summary output."""
+        start = time.perf_counter()
+        result = func(*func_args, **func_kwargs)
+        duration = time.perf_counter() - start
+        success = True if result is None else bool(result)
+        phase_timings.append({"label": label, "seconds": duration, "success": success})
+        return result
     
     # Load metadata: explicit file takes priority, then auto-discover from --base
     metadata = {}
@@ -2867,31 +2963,31 @@ Examples:
         
         # Import based on type
         if args.type == 'physical-interfaces':
-            import_physical_interfaces(client, args.file)
+            record_phase("Physical Interfaces", import_physical_interfaces, client, args.file)
         elif args.type == 'etherchannels':
-            import_etherchannels(client, args.file)
+            record_phase("EtherChannels", import_etherchannels, client, args.file)
         elif args.type == 'bridge-groups':
-            import_bridge_groups(client, args.file)
+            record_phase("Bridge Groups", import_bridge_groups, client, args.file)
         elif args.type == 'subinterfaces':
             # Import subinterfaces in two phases for correct parent dependency order
             print("\nPhase 1: Subinterfaces on Physical Interfaces")
-            import_subinterfaces(client, args.file, parent_type_filter='physical')
+            record_phase("Subinterfaces (physical parents)", import_subinterfaces, client, args.file, parent_type_filter='physical')
             print("\nPhase 2: Subinterfaces on EtherChannels")
-            import_subinterfaces(client, args.file, parent_type_filter='etherchannel')
+            record_phase("Subinterfaces (etherchannel parents)", import_subinterfaces, client, args.file, parent_type_filter='etherchannel')
         elif args.type == 'security-zones':
-            import_security_zones(client, args.file)
+            record_phase("Security Zones", import_security_zones, client, args.file)
         elif args.type == 'address-objects':
-            import_address_objects(client, args.file)
+            record_phase("Address Objects", import_address_objects, client, args.file, args.workers)
         elif args.type == 'address-groups':
-            import_address_groups(client, args.file)
+            record_phase("Address Groups", import_address_groups, client, args.file)
         elif args.type == 'service-objects':
-            import_service_objects(client, args.file)
+            record_phase("Service Objects", import_service_objects, client, args.file, args.workers)
         elif args.type == 'service-groups':
-            import_service_groups(client, args.file)
+            record_phase("Service Groups", import_service_groups, client, args.file)
         elif args.type == 'routes':
-            import_static_routes(client, args.file)
+            record_phase("Static Routes", import_static_routes, client, args.file)
         elif args.type == 'rules':
-            import_access_rules(client, args.file)
+            record_phase("Access Rules", import_access_rules, client, args.file)
     
     # Check if any --only flags are set
     elif any([args.only_physical_interfaces, args.only_etherchannels,
@@ -2905,55 +3001,55 @@ Examples:
         imported_any = False
         
         if args.only_physical_interfaces:
-            import_physical_interfaces(client, f"{args.base}_physical_interfaces.json")
+            record_phase("Physical Interfaces", import_physical_interfaces, client, f"{args.base}_physical_interfaces.json")
             imported_any = True
         
         if args.only_etherchannels:
-            import_etherchannels(client, f"{args.base}_etherchannels.json")
+            record_phase("EtherChannels", import_etherchannels, client, f"{args.base}_etherchannels.json")
             imported_any = True
         
         if args.only_bridge_groups:
-            import_bridge_groups(client, f"{args.base}_bridge_groups.json")
+            record_phase("Bridge Groups", import_bridge_groups, client, f"{args.base}_bridge_groups.json")
             imported_any = True
         
         if args.only_subinterfaces:
-            import_subinterfaces(client, f"{args.base}_subinterfaces.json", parent_type_filter='physical')
-            import_subinterfaces(client, f"{args.base}_subinterfaces.json", parent_type_filter='etherchannel')
+            record_phase("Subinterfaces (physical parents)", import_subinterfaces, client, f"{args.base}_subinterfaces.json", parent_type_filter='physical')
+            record_phase("Subinterfaces (etherchannel parents)", import_subinterfaces, client, f"{args.base}_subinterfaces.json", parent_type_filter='etherchannel')
             imported_any = True
         
         if args.only_security_zones:
             print("  - Security Zones")
-            import_security_zones(client, f"{args.base}_security_zones.json")
+            record_phase("Security Zones", import_security_zones, client, f"{args.base}_security_zones.json")
             imported_any = True
 
         if args.only_address_objects:
             print("  - Address Objects")
-            import_address_objects(client, f"{args.base}_address_objects.json")
+            record_phase("Address Objects", import_address_objects, client, f"{args.base}_address_objects.json", args.workers)
             imported_any = True
         
         if args.only_address_groups:
             print("  - Address Groups")
-            import_address_groups(client, f"{args.base}_address_groups.json")
+            record_phase("Address Groups", import_address_groups, client, f"{args.base}_address_groups.json")
             imported_any = True
         
         if args.only_service_objects:
             print("  - Service Objects")
-            import_service_objects(client, f"{args.base}_service_objects.json")
+            record_phase("Service Objects", import_service_objects, client, f"{args.base}_service_objects.json", args.workers)
             imported_any = True
         
         if args.only_service_groups:
             print("  - Service Groups")
-            import_service_groups(client, f"{args.base}_service_groups.json")
+            record_phase("Service Groups", import_service_groups, client, f"{args.base}_service_groups.json")
             imported_any = True
         
         if args.only_routes:
             print("  - Static Routes")
-            import_static_routes(client, f"{args.base}_static_routes.json")
+            record_phase("Static Routes", import_static_routes, client, f"{args.base}_static_routes.json")
             imported_any = True
         
         if args.only_rules:
             print("  - Access Rules")
-            import_access_rules(client, f"{args.base}_access_rules.json")
+            record_phase("Access Rules", import_access_rules, client, f"{args.base}_access_rules.json")
             imported_any = True
         
         if not imported_any:
@@ -2976,40 +3072,52 @@ Examples:
         print("  12. Access Rules")
         
         # Step 1: Update physical interfaces
-        import_physical_interfaces(client, f"{args.base}_physical_interfaces.json")
+        record_phase("Physical Interfaces", import_physical_interfaces, client, f"{args.base}_physical_interfaces.json")
         
         # Step 2: Create subinterfaces on physical interfaces BEFORE adding them to EtherChannels
-        import_subinterfaces(client, f"{args.base}_subinterfaces.json", parent_type_filter='physical')
+        record_phase("Subinterfaces (physical parents)", import_subinterfaces, client, f"{args.base}_subinterfaces.json", parent_type_filter='physical')
         
         # Step 3: Create etherchannels (this may add physical interfaces as members)
-        import_etherchannels(client, f"{args.base}_etherchannels.json")
+        record_phase("EtherChannels", import_etherchannels, client, f"{args.base}_etherchannels.json")
         
         # Step 4: Create subinterfaces on EtherChannels AFTER they are created
-        import_subinterfaces(client, f"{args.base}_subinterfaces.json", parent_type_filter='etherchannel')
+        record_phase("Subinterfaces (etherchannel parents)", import_subinterfaces, client, f"{args.base}_subinterfaces.json", parent_type_filter='etherchannel')
         
         # Step 5: Create bridge groups
-        import_bridge_groups(client, f"{args.base}_bridge_groups.json")
+        record_phase("Bridge Groups", import_bridge_groups, client, f"{args.base}_bridge_groups.json")
         
         # Step 6: Create security zones (required for access rules)
-        import_security_zones(client, f"{args.base}_security_zones.json")
+        record_phase("Security Zones", import_security_zones, client, f"{args.base}_security_zones.json")
 
         # Step 5: Import address objects
-        import_address_objects(client, f"{args.base}_address_objects.json")
+        record_phase("Address Objects", import_address_objects, client, f"{args.base}_address_objects.json", args.workers)
         
         # Step 6: Import address groups
-        import_address_groups(client, f"{args.base}_address_groups.json")
+        record_phase("Address Groups", import_address_groups, client, f"{args.base}_address_groups.json")
         
         # Step 7: Import service objects
-        import_service_objects(client, f"{args.base}_service_objects.json")
+        record_phase("Service Objects", import_service_objects, client, f"{args.base}_service_objects.json", args.workers)
         
         # Step 8: Import service groups
-        import_service_groups(client, f"{args.base}_service_groups.json")
+        record_phase("Service Groups", import_service_groups, client, f"{args.base}_service_groups.json")
         
         # Step 9: Import static routes
-        import_static_routes(client, f"{args.base}_static_routes.json")
+        record_phase("Static Routes", import_static_routes, client, f"{args.base}_static_routes.json")
         
         # Step 10: Import access rules
-        import_access_rules(client, f"{args.base}_access_rules.json")
+        record_phase("Access Rules", import_access_rules, client, f"{args.base}_access_rules.json")
+
+    if phase_timings:
+        print(f"\n{'='*60}")
+        print("TIMING SUMMARY (seconds)")
+        print(f"{'='*60}")
+        total_seconds = 0.0
+        for entry in phase_timings:
+            total_seconds += entry["seconds"]
+            status = "OK" if entry["success"] else "FAIL"
+            print(f"{entry['label']:<35}{entry['seconds']:.2f}s [{status}]")
+        print("-"*60)
+        print(f"{'Total':<35}{total_seconds:.2f}s")
     
     # Print statistics
     client.print_statistics()

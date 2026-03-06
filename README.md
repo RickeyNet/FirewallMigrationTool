@@ -220,12 +220,18 @@ python -c "import yaml, requests, urllib3; print('All libraries installed!')"
     python ftd_api_importer.py --host IP -u admin --only-security-zones
 
 □ Import objects and rules:
-    python ftd_api_importer.py --host IP -u admin
+  # Use --workers to control concurrent address/service object creation (default 6)
+  python ftd_api_importer.py --host IP -u admin --workers 6
 
 □ Deploy configuration in FDM
 □ Verify objects in FDM web interface
 □ Test traffic flows
 ```
+
+**Multithreaded imports:**
+- Applies to address objects and service objects in both full import mode and selective/single-file runs.
+- Flag: `--workers N` (default 6). Tune down if the FTD API rate-limits or up modestly if latency is high.
+- Behavior: bounded ThreadPool with jittered backoff on 429/5xx/timeouts; still idempotent (skips existing).
 
 ### If Something Goes Wrong
 
