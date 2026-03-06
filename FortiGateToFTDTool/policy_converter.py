@@ -59,32 +59,9 @@ IMPORTANT NOTES:
     - ruleId is assigned sequentially starting from 1
 """
 
-import re
 from typing import Dict, List, Any, Set, Tuple
 
-
-def sanitize_name(name: str) -> str:
-    """
-    Sanitize object names for FTD compatibility.
-    
-    FTD only allows alphanumeric characters and underscores in object names.
-    This function replaces any other character with an underscore.
-    
-    Args:
-        name: Original object name (may contain spaces, dashes, etc.)
-        
-    Returns:
-        Sanitized name safe for FTD
-    """
-    # Convert to string in case it's not
-    name = str(name)
-    # Replace any non-alphanumeric character (except underscore) with underscore
-    sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', name)
-    # Remove consecutive underscores
-    sanitized = re.sub(r'_+', '_', sanitized)
-    # Remove leading/trailing underscores
-    sanitized = sanitized.strip('_')
-    return sanitized
+from common import sanitize_name
 
 
 class PolicyConverter:

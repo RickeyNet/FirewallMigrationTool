@@ -43,33 +43,9 @@ FTD JSON OUTPUT FORMAT:
     }
 """
 
-import re
 from typing import Dict, List, Any, Set
 
-def sanitize_name(name: str) -> str:
-    """
-    Sanitize object names for FTD compatibility.
-    
-    FTD only allows alphanumeric characters and underscores in object names.
-    This function replaces any other character with an underscore.
-    
-    Args:
-        name: Original object name (may contain spaces, dashes, etc.)
-        
-    Returns:
-        Sanitized name with only alphanumeric characters and underscores
-    """
-    if name is None:
-        return ""
-    # Convert to string in case it's not
-    name = str(name)
-    # Replace any non-alphanumeric character (except underscore) with underscore
-    sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', name)
-    # Remove consecutive underscores
-    sanitized = re.sub(r'_+', '_', sanitized)
-    # Remove leading/trailing underscores
-    sanitized = sanitized.strip('_')
-    return sanitized
+from common import sanitize_name
 
 # FTD System-Defined Services - these names are reserved and cannot be used
 # If a FortiGate service has the same name, we'll add "_Custom" suffix
@@ -104,7 +80,6 @@ FTD_BUILTIN_TCP_SERVICES = {
     'TELNET': '23',
 }
 
-# Combined set of all built-in service names (sanitized)
 FTD_BUILTIN_SERVICES = set()
 for name in FTD_BUILTIN_UDP_SERVICES.keys():
     FTD_BUILTIN_SERVICES.add(sanitize_name(name))

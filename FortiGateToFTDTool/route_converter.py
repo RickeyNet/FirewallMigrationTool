@@ -54,35 +54,9 @@ IMPORTANT NOTES:
 """
 
 import json
-import re
 from typing import Dict, List, Any, Optional
 
-def sanitize_name(name: str) -> str:
-    """
-    Sanitize object names for FTD compatibility.
-    
-    FTD does not allow spaces in object names. This function replaces
-    spaces with underscores to ensure compatibility.
-    
-    Args:
-        name: Original object name (may contain spaces)
-        
-    Returns:
-        Sanitized name with spaces replaced by underscores
-    """
-    if name is None:
-        return ""
-    # Convert to string in case it's not
-    name = str(name)
-    # Replace any non-alphanumeric character (except underscore) with underscore
-    sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', name)
-    # Remove consecutive underscores
-    sanitized = re.sub(r'_+', '_', sanitized)
-    # Remove leading/trailing underscores
-    sanitized = sanitized.strip('_')
-    return sanitized
-
-
+from common import sanitize_name
 
 
 class RouteConverter:
@@ -149,6 +123,11 @@ class RouteConverter:
         # This list accumulates objects from _ensure_network_object_with_value()
         # and _ensure_network_object_for_value() for export by fortigate_converter.py
         self.generated_network_objects: List[Dict] = []
+
+        # Simple caches to avoid repeated lookups/calculations per run
+        self._destination_cache: Dict[tuple, Dict] = {}
+        self._gateway_cache: Dict[str, Dict] = {}
+        self._network_calc_cache: Dict[tuple, str] = {}
         
         # Build lookup dictionaries
         # Name -> full network object (for routes)
@@ -506,13 +485,20 @@ class RouteConverter:
     
     def _calculate_network_address(self, ip_addr: str, netmask: str) -> str:
         """Calculate the network address given an IP and netmask."""
+        key = (ip_addr, netmask)
+        if key in self._network_calc_cache:
+            return self._network_calc_cache[key]
+
         try:
             ip_octets = [int(o) for o in ip_addr.split('.')]
             mask_octets = [int(o) for o in netmask.split('.')]
             network_octets = [ip_octets[i] & mask_octets[i] for i in range(4)]
-            return '.'.join(str(o) for o in network_octets)
+            network_addr = '.'.join(str(o) for o in network_octets)
         except Exception:
-            return ip_addr
+            network_addr = ip_addr
+
+        self._network_calc_cache[key] = network_addr
+        return network_addr
         
 
     def _get_network_object_for_destination(self, dst: List) -> Optional[Dict]:
@@ -538,9 +524,16 @@ class RouteConverter:
         netmask = str(dst[1]).strip()
         cidr = self._netmask_to_cidr(netmask)
 
+        cache_key = (ip_addr, netmask)
+        cached = self._destination_cache.get(cache_key)
+        if cached:
+            return cached.copy()
+
         # Default route
         if ip_addr == "0.0.0.0" and cidr == 0:
-            return {"name": "any-ipv4", "type": "networkobject"}
+            ref = {"name": "any-ipv4", "type": "networkobject"}
+            self._destination_cache[cache_key] = ref
+            return ref.copy()
 
         # Calculate the actual network address for the destination
         network_addr = self._calculate_network_address(ip_addr, netmask)
@@ -551,21 +544,27 @@ class RouteConverter:
         if obj_name:
             obj = self.name_to_network_object.get(obj_name)
             if obj:
-                return obj.copy()
+                ref = obj.copy()
+                self._destination_cache[cache_key] = ref
+                return ref.copy()
 
         # 2) Match by network base address only
         obj_name = self.ip_to_network_object_name.get(network_addr)
         if obj_name:
             obj = self.name_to_network_object.get(obj_name)
             if obj:
-                return obj.copy()
+                ref = obj.copy()
+                self._destination_cache[cache_key] = ref
+                return ref.copy()
 
         # 3) Last resort: match by raw ip_addr (some object values might be host style)
         obj_name = self.ip_to_network_object_name.get(ip_addr)
         if obj_name:
             obj = self.name_to_network_object.get(obj_name)
             if obj:
-                return obj.copy()
+                ref = obj.copy()
+                self._destination_cache[cache_key] = ref
+                return ref.copy()
 
         if self.debug:
             print(f"    [DEBUG] Destination lookup miss for: dst={ip_addr} mask={netmask} -> {network_cidr}")
@@ -585,12 +584,15 @@ class RouteConverter:
             sub_type = "NETWORK"
             description = f"Auto-created for static route destination {network_cidr}"
 
-        return self._ensure_network_object_with_value(
+        ref = self._ensure_network_object_with_value(
             name=generated_name,
             value=value,
             sub_type=sub_type,
             description=description
         )
+
+        self._destination_cache[cache_key] = ref
+        return ref.copy()
 
     
     def _get_network_object_for_gateway(self, gateway_ip: str) -> Optional[Dict]:
@@ -618,12 +620,17 @@ class RouteConverter:
         # Normalize gateway formatting from FortiGate YAML (defensive)
         gateway_ip = str(gateway_ip).strip()
 
+        cached = self._gateway_cache.get(gateway_ip)
+        if cached:
+            return cached.copy()
+
         # Try with /32 CIDR notation first
         gateway_cidr = f"{gateway_ip}/32"
         if gateway_cidr in self.ip_to_network_object_name:
             obj_name = self.ip_to_network_object_name[gateway_cidr]
             obj = self.name_to_network_object.get(obj_name)
             if obj:
+                self._gateway_cache[gateway_ip] = obj
                 return obj.copy()
 
         # Try without CIDR
@@ -631,6 +638,7 @@ class RouteConverter:
             obj_name = self.ip_to_network_object_name[gateway_ip]
             obj = self.name_to_network_object.get(obj_name)
             if obj:
+                self._gateway_cache[gateway_ip] = obj
                 return obj.copy()
 
         if self.debug:
@@ -656,12 +664,15 @@ class RouteConverter:
             print(f"    [DEBUG] Creating gateway HOST object: name={generated_name}, value={gateway_value}")
 
         # Create (or reuse) an object with the computed value
-        return self._ensure_network_object_with_value(
+        ref = self._ensure_network_object_with_value(
             name=generated_name,
             value=gateway_value,
             sub_type=sub_type,
             description=f"Auto-created HOST for static route next-hop {gateway_ip}"
         )
+
+        self._gateway_cache[gateway_ip] = ref
+        return ref.copy()
 
 
     

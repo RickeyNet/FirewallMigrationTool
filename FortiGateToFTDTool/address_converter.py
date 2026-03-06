@@ -29,35 +29,9 @@ FTD JSON OUTPUT FORMAT:
         "value": "10.0.0.0/24"
     }
 """
-import re
 from typing import Dict, List, Any
 
-def sanitize_name(name: str) -> str:
-    """
-    Sanitize object names for FTD compatibility.
-    
-    FTD does not allow spaces in object names. This function replaces
-    spaces with underscores to ensure compatibility.
-    
-    Args:
-        name: Original object name (may contain spaces)
-        
-    Returns:
-        Sanitized name with spaces replaced by underscores
-    """
-    if name is None:
-        return ""
-    # Convert to string in case it's not
-    name = str(name)
-    # Replace any non-alphanumeric character (except underscore) with underscore
-    sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', name)
-    # Remove consecutive underscores
-    sanitized = re.sub(r'_+', '_', sanitized)
-    # Remove leading/trailing underscores
-    sanitized = sanitized.strip('_')
-    return sanitized
-
-
+from common import sanitize_name
 
 
 class AddressConverter:
