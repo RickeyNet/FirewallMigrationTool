@@ -44,7 +44,7 @@ import time
 import getpass
 import urllib3
 import threading
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 from concurrency_utils import run_with_retry, run_indexed_thread_pool
 
 
@@ -91,6 +91,7 @@ class FTDAPIClient:
         # Authentication token (obtained after login)
         self.access_token = None
         self.refresh_token = None
+        self.appliance_model = "generic"
         
         # =================================================================
         # REFERENCE CACHES - Prefetch and cache name->id mappings
@@ -146,6 +147,18 @@ class FTDAPIClient:
         """Thread-safe increment for statistics counters."""
         with self._stats_lock:
             self.stats[key] += 1
+
+    def _extract_error_message(self, response: requests.Response, default: str = "Unknown error") -> str:
+        """Best-effort API error extraction with safe fallbacks."""
+        try:
+            error_data = response.json()
+            messages = error_data.get("error", {}).get("messages", [])
+            if messages and isinstance(messages[0], dict):
+                return str(messages[0].get("description", default))
+            return str(error_data)
+        except (ValueError, TypeError, KeyError):
+            text = (response.text or "").strip()
+            return text if text else default
     
     # =========================================================================
     # REFERENCE CACHING METHODS
@@ -175,7 +188,7 @@ class FTDAPIClient:
                     if hardware_name:
                         self._physical_interface_cache[hardware_name] = intf
                 print(f"    Cached {len(self._physical_interface_cache)} physical interfaces")
-        except Exception as e:
+        except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
             print(f"    Warning: Failed to cache physical interfaces: {e}")
         
         # Fetch all etherchannels
@@ -190,7 +203,7 @@ class FTDAPIClient:
                     if hardware_name:
                         self._etherchannel_cache[hardware_name] = ec
                 print(f"    Cached {len(self._etherchannel_cache)} etherchannels")
-        except Exception as e:
+        except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
             print(f"    Warning: Failed to cache etherchannels: {e}")
 
         # Fetch all bridge-group interfaces (these often do NOT have hardwareName)
@@ -205,7 +218,7 @@ class FTDAPIClient:
                     if bg_name:
                         self._bridge_group_cache[bg_name] = bg
                 print(f"    Cached {len(self._bridge_group_cache)} bridge groups")
-        except Exception as e:
+        except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
             print(f"    Warning: Failed to cache bridge groups: {e}")
 
         self._caches_populated = True
@@ -266,10 +279,10 @@ class FTDAPIClient:
             
             print(f"    Cached {len(self._network_object_cache)} network objects")
             
-        except Exception as e:
+        except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
             print(f"    Warning: Failed to cache network objects: {e}")
     
-    def get_cached_physical_interface(self, hardware_name: str) -> Tuple[bool, Optional[Dict]]:
+    def get_cached_physical_interface(self, hardware_name: str) -> Tuple[bool, Union[Dict[str, Any], str, None]]:
         """
         Get a physical interface from cache (or fetch if not cached).
         
@@ -289,7 +302,7 @@ class FTDAPIClient:
             self._physical_interface_cache[hardware_name] = result
         return success, result
     
-    def get_cached_etherchannel(self, hardware_name: str) -> Tuple[bool, Optional[Dict]]:
+    def get_cached_etherchannel(self, hardware_name: str) -> Tuple[bool, Union[Dict[str, Any], str, None]]:
         """
         Get an etherchannel from cache (or fetch if not cached).
         
@@ -359,7 +372,7 @@ class FTDAPIClient:
                 offset += limit
 
             print(f"    Cached {len(self._physical_interface_cache)} existing physical interfaces")
-        except Exception as e:
+        except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
             print(f"[WARN] Exception while fetching physical interfaces: {e}")
     
     def clear_caches(self):
@@ -613,7 +626,7 @@ class FTDAPIClient:
                 self.record_stat("port_groups_failed")
             return False, str(e)
         
-    def resolve_route_references(self, route: Dict) -> Tuple[bool, Dict]:
+    def resolve_route_references(self, route: Dict) -> Tuple[bool, Union[Dict[str, Any], str]]:
         """
         Resolve all object references in a route to include IDs and versions.
         
@@ -640,18 +653,18 @@ class FTDAPIClient:
             if hardware_name:
                 # Look up interface by hardware name (fast path)
                 success, intf_obj = self.get_interface_by_hardware_name(hardware_name)
-                if not (success and intf_obj):
-                    return False, f"Could not resolve interface by hardwareName: {hardware_name}"  # pyright: ignore[reportReturnType]
+                if not (success and isinstance(intf_obj, dict)):
+                    return False, f"Could not resolve interface by hardwareName: {hardware_name}"
             else:
                 # Fallback: resolve by logical name (needed for bridgegroupinterface, etc.)
                 success, intf_obj = self.get_interface_by_name(str(iface_name or ""), iface_type=str(iface_type or ""))
-                if not (success and intf_obj):
-                    return False, f"Could not resolve interface by name: {iface_name}"  # pyright: ignore[reportReturnType]
+                if not (success and isinstance(intf_obj, dict)):
+                    return False, f"Could not resolve interface by name: {iface_name}"
 
             # Hard validation: if id is missing, FDM will throw "UUID null"
             intf_id = intf_obj.get("id")
             if not intf_id:
-                return False, f"Resolved interface has no id (would become UUID null): {intf_obj.get('name')}"  # pyright: ignore[reportReturnType]
+                return False, f"Resolved interface has no id (would become UUID null): {intf_obj.get('name')}"
 
             # Use minimal reference with id and version
             resolved_route["iface"] = {
@@ -672,7 +685,7 @@ class FTDAPIClient:
                 # Special case: any-ipv4 is a built-in object
                 if net_name == 'any-ipv4':
                     success, net_obj = self.get_network_object_by_name('any-ipv4')
-                    if success and net_obj:
+                    if success and isinstance(net_obj, dict):
                         resolved_networks.append({
                             "version": net_obj.get('version'),
                             "name": net_obj.get('name'),
@@ -680,10 +693,10 @@ class FTDAPIClient:
                             "type": "networkobject"
                         })
                     else:
-                        return False, f"Could not resolve built-in object: any-ipv4" # pyright: ignore[reportReturnType]
+                        return False, f"Could not resolve built-in object: any-ipv4"
                 else:
                     success, net_obj = self.get_network_object_by_name(net_name)
-                    if success and net_obj:
+                    if success and isinstance(net_obj, dict):
                         resolved_networks.append({
                             "version": net_obj.get('version'),
                             "name": net_obj.get('name'),
@@ -691,7 +704,7 @@ class FTDAPIClient:
                             "type": "networkobject"
                         })
                     else:
-                        return False, f"Could not resolve network object: {net_name}" # pyright: ignore[reportReturnType]
+                        return False, f"Could not resolve network object: {net_name}"
             
             resolved_route['networks'] = resolved_networks
         
@@ -701,7 +714,7 @@ class FTDAPIClient:
             gw_name = gw_ref.get('name')
             
             success, gw_obj = self.get_network_object_by_name(gw_name)
-            if success and gw_obj:
+            if success and isinstance(gw_obj, dict):
                 resolved_route['gateway'] = {
                     "version": gw_obj.get('version'),
                     "name": gw_obj.get('name'),
@@ -709,7 +722,7 @@ class FTDAPIClient:
                     "type": "networkobject"
                 }
             else:
-                return False, f"Could not resolve gateway object: {gw_name}" # pyright: ignore[reportReturnType]
+                return False, f"Could not resolve gateway object: {gw_name}"
         
         return True, resolved_route
     
@@ -739,7 +752,7 @@ class FTDAPIClient:
                 return False, "No virtual routers found"
             else:
                 return False, f"API error: {response.status_code}"
-        except Exception as e:
+        except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
             return False, str(e)
 
     def create_static_route(self, route: Dict) -> Tuple[bool, Optional[str]]:
@@ -828,7 +841,7 @@ class FTDAPIClient:
             self.stats["rules_failed"] += 1
             return False, str(e)
     
-    def get_interface_by_name(self, name: str, iface_type: Optional[str] = None) -> Tuple[bool, Optional[Dict]]:
+    def get_interface_by_name(self, name: str, iface_type: Optional[str] = None) -> Tuple[bool, Union[Dict[str, Any], str]]:
         """
         Resolve an interface by *logical name* when hardwareName is not available.
 
@@ -844,7 +857,7 @@ class FTDAPIClient:
         """
         search = (name or "").strip()
         if not search:
-            return False, "Empty interface name"  # pyright: ignore[reportReturnType]
+            return False, "Empty interface name"
 
         # Ensure caches are populated
         self.prefetch_interface_cache()
@@ -854,7 +867,7 @@ class FTDAPIClient:
             bg = self._bridge_group_cache.get(search)
             if bg:
                 return True, bg
-            return False, f"Bridge-group interface {search} not found"  # pyright: ignore[reportReturnType]
+            return False, f"Bridge-group interface {search} not found"
 
         # 2) Check physical/etherchannel caches by *name* (not hardwareName)
         for d in (self._physical_interface_cache, self._etherchannel_cache):
@@ -867,10 +880,10 @@ class FTDAPIClient:
         if bg:
             return True, bg
 
-        return False, f"Interface {search} not found"  # pyright: ignore[reportReturnType]
+        return False, f"Interface {search} not found"
 
 
-    def get_physical_interface(self, hardware_name: str) -> Tuple[bool, Optional[Dict]]:
+    def get_physical_interface(self, hardware_name: str) -> Tuple[bool, Union[Dict[str, Any], str]]:
         """
         Get a physical interface by hardware name to retrieve its ID.
         
@@ -887,7 +900,7 @@ class FTDAPIClient:
         
         try:
             # Use pagination to get all interfaces
-            all_interfaces = []
+            all_interfaces: List[Dict[str, Any]] = []
             offset = 0
             limit = 100
             
@@ -911,7 +924,7 @@ class FTDAPIClient:
                     
                     offset += limit
                 else:
-                    return False, f"HTTP {response.status_code}: {response.text}" # pyright: ignore[reportReturnType]
+                    return False, f"HTTP {response.status_code}: {response.text}"
             
             # Search for the interface (case-insensitive)
             for intf in all_interfaces:
@@ -920,12 +933,14 @@ class FTDAPIClient:
                     return True, intf
             
             # Interface not found - this might be because it's disabled/unconfigured
-            return False, f"Interface {hardware_name} not found (may be disabled or not present on this device)" # pyright: ignore[reportReturnType]
+            return False, f"Interface {hardware_name} not found (may be disabled or not present on this device)"
                 
+        except (ValueError, TypeError, KeyError) as e:
+            return False, f"Invalid interface response payload: {e}"
         except requests.exceptions.RequestException as e:
-            return False, str(e) # pyright: ignore[reportReturnType]
+            return False, str(e)
         
-    def get_interface_by_hardware_name(self, hardware_name: str) -> Tuple[bool, Optional[Dict]]:
+    def get_interface_by_hardware_name(self, hardware_name: str) -> Tuple[bool, Union[Dict[str, Any], str]]:
         """
         Get any interface (physical, subinterface, etherchannel, bridge group) by hardware name.
         
@@ -1017,9 +1032,11 @@ class FTDAPIClient:
                         self._etherchannel_cache[hardware_name] = intf
                         return True, intf
             
-            return False, f"Interface not found: {hardware_name}"  # type: ignore
-        except Exception as e:
-            return False, str(e)  # type: ignore
+            return False, f"Interface not found: {hardware_name}"
+        except (ValueError, TypeError, KeyError) as e:
+            return False, f"Invalid interface response payload: {e}"
+        except requests.exceptions.RequestException as e:
+            return False, str(e)
     
     def _apply_model_specific_media_defaults(self, existing_intf: Dict, update_payload: Dict,) -> None:
         """
@@ -1114,20 +1131,25 @@ class FTDAPIClient:
         hardware_name = intf.get('hardwareName')
         
         # First, get the existing interface to retrieve its ID and version
-        success, existing = self.get_physical_interface(hardware_name) # pyright: ignore[reportArgumentType]
-        if not success:
+        if not isinstance(hardware_name, str) or not hardware_name.strip():
+            self.stats["physical_interfaces_failed"] += 1
+            return False, "Missing or invalid hardwareName"
+
+        success, existing = self.get_physical_interface(hardware_name)
+        if not success or not isinstance(existing, dict):
             # Interface not found - skip it instead of failing
             self.stats["physical_interfaces_skipped"] += 1
             return True, f"SKIPPED: {existing}"
         
         # Merge our updates with the existing interface
-        intf_id = existing.get('id') # pyright: ignore[reportOptionalMemberAccess]
-        intf_version = existing.get('version') # pyright: ignore[reportOptionalMemberAccess]
-        intf_type = existing.get('type', 'physicalinterface') # pyright: ignore[reportOptionalMemberAccess]
+        intf_id = existing.get('id')
+        if not intf_id:
+            self.stats["physical_interfaces_failed"] += 1
+            return False, f"Resolved interface {hardware_name} has no ID"
         
         # Check if interface is in switchport mode
-        current_mode = existing.get('mode', None) # pyright: ignore[reportOptionalMemberAccess]
-        is_switchport = current_mode == 'SWITCHPORT' or existing.get('switchPortMode') is not None # pyright: ignore[reportOptionalMemberAccess]
+        current_mode = existing.get('mode', None)
+        is_switchport = current_mode == 'SWITCHPORT' or existing.get('switchPortMode') is not None
         
         # If interface is a switchport and we want to configure it as routed,
         # we need to change it to routed mode first
@@ -1135,12 +1157,12 @@ class FTDAPIClient:
             if self.debug:
                 print(f"\n      [DEBUG] Interface {hardware_name} switchport details:")
                 print(f"              Mode: {current_mode}")
-                print(f"              SwitchPortMode: {existing.get('switchPortMode')}") # type: ignore
-                print(f"              Has VLAN config: {existing.get('vlanId') is not None}") # type: ignore
+                print(f"              SwitchPortMode: {existing.get('switchPortMode')}")
+                print(f"              Has VLAN config: {existing.get('vlanId') is not None}")
             
             print(f"\n      [INFO] {hardware_name} is in switchport mode, converting to routed mode...", end=" ")
             
-            convert_success, convert_msg = self._convert_switchport_to_routed(existing) # pyright: ignore[reportArgumentType]
+            convert_success, convert_msg = self._convert_switchport_to_routed(existing)
             if not convert_success:
                 self.stats["physical_interfaces_failed"] += 1
                 if self.debug:
@@ -1150,16 +1172,19 @@ class FTDAPIClient:
             print("[OK]")
             
             # Re-fetch the interface after mode change to get updated version
-            success, existing = self.get_physical_interface(hardware_name) # pyright: ignore[reportArgumentType]
-            if not success:
+            success, existing = self.get_physical_interface(hardware_name)
+            if not success or not isinstance(existing, dict):
                 self.stats["physical_interfaces_failed"] += 1
                 return False, f"Failed to re-fetch interface after mode change: {existing}"
             
-            intf_id = existing.get('id') # pyright: ignore[reportOptionalMemberAccess]
+            intf_id = existing.get('id')
+            if not intf_id:
+                self.stats["physical_interfaces_failed"] += 1
+                return False, f"Interface {hardware_name} has no ID after mode conversion"
         
         # Start with the existing interface configuration
         # This preserves ALL existing settings including hardware config
-        update_payload = existing.copy() # pyright: ignore[reportOptionalMemberAccess]
+        update_payload = existing.copy()
         
         # Only update the fields we want to change (logical config)
         # Name - only update if we have a name to set
@@ -1191,7 +1216,7 @@ class FTDAPIClient:
             update_payload['mode'] = 'ROUTED'
         
         # Get current interface speed type to determine if SFP or copper
-        current_speed = existing.get("speedType", "AUTO")  # pyright: ignore[reportOptionalMemberAccess]
+        current_speed = existing.get("speedType", "AUTO")
         is_sfp_port = current_speed in {"DETECT_SFP", "SFP_DETECT"}
         
         # Get appliance model for platform-specific behavior
@@ -1212,7 +1237,7 @@ class FTDAPIClient:
             # SFP interface - preserve existing speed, use FULL duplex
             update_payload["speedType"] = current_speed
             update_payload["duplexType"] = "FULL"
-            if 'fecMode' in existing:  # pyright: ignore[reportOperatorIssue]
+            if 'fecMode' in existing:
                 update_payload["fecMode"] = "AUTO"
             # Only set autoNeg for platforms that support it
             if model not in ftd_1000_series:
@@ -1269,8 +1294,7 @@ class FTDAPIClient:
                 self.stats["physical_interfaces_updated"] += 1
                 return True, updated_obj.get("id")
             elif response.status_code == 422:
-                error_data = response.json()
-                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
+                error_msg = self._extract_error_message(response)
                 self.stats["physical_interfaces_failed"] += 1
                 return False, error_msg
             else:
@@ -1278,6 +1302,9 @@ class FTDAPIClient:
                 error_msg = response.text
                 return False, error_msg
                 
+        except (ValueError, TypeError, KeyError) as e:
+            self.stats["physical_interfaces_failed"] += 1
+            return False, f"Invalid interface update response payload: {e}"
         except requests.exceptions.RequestException as e:
             self.stats["physical_interfaces_failed"] += 1
             return False, str(e)
@@ -1408,12 +1435,20 @@ class FTDAPIClient:
             if self.debug:
                 print(f"              Skipping subinterface creation (parent not available)")
             return True, f"SKIPPED: Parent interface {parent_hardware} not found"
+
+        if not isinstance(parent_intf, dict):
+            self.stats["subinterfaces_failed"] += 1
+            return False, f"Resolved parent interface is invalid: {parent_intf}"
         
         if self.debug:
-            print(f"              Found: {parent_intf.get('name')} (ID: {parent_intf.get('id')})") # type: ignore
+            print(f"              Found: {parent_intf.get('name')} (ID: {parent_intf.get('id')})")
         
-        parent_id = parent_intf.get('id') # pyright: ignore[reportOptionalMemberAccess]
-        parent_type = parent_intf.get('type', 'physicalinterface') # pyright: ignore[reportOptionalMemberAccess]
+        parent_id = parent_intf.get('id')
+        if not parent_id:
+            self.stats["subinterfaces_failed"] += 1
+            return False, f"Parent interface {parent_hardware} has no ID"
+
+        parent_type = parent_intf.get('type', 'physicalinterface')
         
         # Get interface name - ensure it's valid
         subintf_name = intf.get('name', '')
@@ -1506,7 +1541,7 @@ class FTDAPIClient:
                     
                     self.stats["subinterfaces_failed"] += 1
                     return False, f"422: {error_msg}"
-                except Exception:
+                except (ValueError, TypeError, KeyError):
                     self.stats["subinterfaces_failed"] += 1
                     return False, f"422: {response.text[:300]}"
             else:
@@ -1517,7 +1552,7 @@ class FTDAPIClient:
             self.stats["subinterfaces_failed"] += 1
             return False, str(e)
     
-    def _get_etherchannel_by_hardware(self, hardware_name: str) -> Tuple[bool, Optional[Dict]]:
+    def _get_etherchannel_by_hardware(self, hardware_name: str) -> Tuple[bool, Union[Dict[str, Any], str]]:
         """
         Get an etherchannel interface by hardware name.
         
@@ -1542,12 +1577,12 @@ class FTDAPIClient:
                     if intf_hardware == search_name:
                         return True, intf
                 
-                return False, f"EtherChannel {hardware_name} not found" # pyright: ignore[reportReturnType]
+                return False, f"EtherChannel {hardware_name} not found"
             else:
-                return False, f"HTTP {response.status_code}" # pyright: ignore[reportReturnType]
+                return False, f"HTTP {response.status_code}"
                 
         except requests.exceptions.RequestException as e:
-            return False, str(e) # pyright: ignore[reportReturnType]
+            return False, str(e)
     
     def create_etherchannel(self, intf: Dict) -> Tuple[bool, Optional[str]]:
         """
@@ -1575,14 +1610,14 @@ class FTDAPIClient:
             for member in intf['memberInterfaces']:
                 hardware_name = member.get('hardwareName')
                 success, existing = self.get_physical_interface(hardware_name)
-                if success:
+                if success and isinstance(existing, dict):
                     resolved_members.append({
-                        "id": existing.get('id'), # pyright: ignore[reportOptionalMemberAccess]
+                        "id": existing.get('id'),
                         "type": "physicalinterface"
                     })
                     # Get speedType from first member interface
                     if member_speed_type is None:
-                        member_speed_type = existing.get('speedType') # pyright: ignore[reportOptionalMemberAccess]
+                        member_speed_type = existing.get('speedType')
                         if member_speed_type in {'DETECT_SFP', 'SFP_DETECT'}:
                             is_sfp_member = True
                 else:
@@ -1644,8 +1679,7 @@ class FTDAPIClient:
                 self.stats["etherchannels_created"] += 1
                 return True, created_obj.get("id")
             elif response.status_code == 422:
-                error_data = response.json()
-                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
+                error_msg = self._extract_error_message(response)
                 
                 if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
                     self.stats["etherchannels_skipped"] += 1
@@ -1658,6 +1692,9 @@ class FTDAPIClient:
                 error_msg = response.text
                 return False, error_msg
                 
+        except (ValueError, TypeError, KeyError) as e:
+            self.stats["etherchannels_failed"] += 1
+            return False, f"Invalid etherchannel response payload: {e}"
         except requests.exceptions.RequestException as e:
             self.stats["etherchannels_failed"] += 1
             return False, str(e)
@@ -1693,17 +1730,17 @@ class FTDAPIClient:
                 
                 # Look up the physical interface by hardware name
                 success, existing = self.get_physical_interface(hardware_name)
-                if success:
+                if success and isinstance(existing, dict):
                     # Add the member with ID reference
                     # Note: Member should be in ROUTED mode - FTD will manage bridge membership
                     resolved_members.append({
-                        "id": existing.get('id'), # pyright: ignore[reportOptionalMemberAccess]
+                        "id": existing.get('id'),
                         "type": "physicalinterface"
                     })
                     
                     if self.debug:
-                        current_mode = existing.get('mode') # pyright: ignore[reportOptionalMemberAccess]
-                        print(f"\n      [DEBUG] Resolved member: {hardware_name} -> ID {existing.get('id')} (mode: {current_mode})") # pyright: ignore[reportOptionalMemberAccess]
+                        current_mode = existing.get('mode')
+                        print(f"\n      [DEBUG] Resolved member: {hardware_name} -> ID {existing.get('id')} (mode: {current_mode})")
                 else:
                     # Member interface not found - this is a problem
                     print(f"\n      [WARNING] Could not resolve member {hardware_name}")
@@ -1731,8 +1768,7 @@ class FTDAPIClient:
                 self.stats["bridge_groups_created"] += 1
                 return True, created_obj.get("id")
             elif response.status_code == 422:
-                error_data = response.json()
-                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
+                error_msg = self._extract_error_message(response)
                 
                 if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
                     self.stats["bridge_groups_skipped"] += 1
@@ -1745,6 +1781,9 @@ class FTDAPIClient:
                 error_msg = response.text
                 return False, error_msg
                 
+        except (ValueError, TypeError, KeyError) as e:
+            self.stats["bridge_groups_failed"] += 1
+            return False, f"Invalid bridge-group response payload: {e}"
         except requests.exceptions.RequestException as e:
             self.stats["bridge_groups_failed"] += 1
             return False, str(e)
@@ -1783,7 +1822,7 @@ class FTDAPIClient:
                 # Try to get the interface ID from FTD
                 if hardware_name:
                     success, intf_obj = self.get_interface_by_hardware_name(hardware_name)
-                    if success and intf_obj:
+                    if success and isinstance(intf_obj, dict):
                         resolved_interfaces.append({
                             "id": intf_obj.get("id"),
                             "name": intf_obj.get("name"),
@@ -1810,8 +1849,7 @@ class FTDAPIClient:
                 self.stats["security_zones_created"] += 1
                 return True, created_obj.get("id")
             elif response.status_code == 422:
-                error_data = response.json()
-                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
+                error_msg = self._extract_error_message(response)
                 
                 if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
                     self.stats["security_zones_skipped"] += 1
@@ -1824,11 +1862,14 @@ class FTDAPIClient:
                 error_msg = response.text
                 return False, error_msg
                 
+        except (ValueError, TypeError, KeyError) as e:
+            self.stats["security_zones_failed"] += 1
+            return False, f"Invalid security-zone response payload: {e}"
         except requests.exceptions.RequestException as e:
             self.stats["security_zones_failed"] += 1
             return False, str(e)
 
-    def get_network_object_by_name(self, name: str) -> Tuple[bool, Optional[Dict]]:
+    def get_network_object_by_name(self, name: str) -> Tuple[bool, Union[Dict[str, Any], str]]:
         """
         Get a network object by name to retrieve its ID and version.
         
@@ -1879,7 +1920,7 @@ class FTDAPIClient:
                 response = self.session.get(endpoint, params=params, timeout=30)
                 
                 if response.status_code != 200:
-                    return False, f"API error: {response.status_code}"  # type: ignore
+                    return False, f"API error: {response.status_code}"
                 
                 data = response.json()
                 items = data.get('items', [])
@@ -1902,10 +1943,10 @@ class FTDAPIClient:
                 # Move to next page
                 offset += limit
             
-            return False, f"Network object not found: {name}"  # type: ignore
+            return False, f"Network object not found: {name}"
             
-        except Exception as e:
-            return False, str(e)  # type: ignore
+        except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+            return False, str(e)
     
     def deploy_changes(self) -> bool:
         """
@@ -2029,7 +2070,7 @@ def load_metadata_file(path: str) -> dict:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
-    except Exception:
+    except (FileNotFoundError, OSError, json.JSONDecodeError, TypeError, ValueError):
         return {}
 
 
@@ -2493,11 +2534,11 @@ def import_etherchannels(client: FTDAPIClient, filename: str) -> bool:
         
         success, result = client.create_etherchannel(intf)
         if success:
-            if "SKIPPED" in str(result):
-                if "already exists" in str(result).lower():
+            if isinstance(result, str) and result.startswith("SKIPPED"):
+                if "already exists" in result.lower():
                     print("SKIP (already exists)")
                 else:
-                    print(f"SKIP ({result.split('SKIPPED:')[-1].strip()[:50]})") # pyright: ignore[reportOptionalMemberAccess]
+                    print(f"SKIP ({result.split('SKIPPED:')[-1].strip()[:50]})")
             else:
                 print("OK")
         else:
@@ -2540,11 +2581,11 @@ def import_bridge_groups(client: FTDAPIClient, filename: str) -> bool:
         
         success, result = client.create_bridge_group(intf)
         if success:
-            if "SKIPPED" in str(result):
-                if "already exists" in str(result).lower():
+            if isinstance(result, str) and result.startswith("SKIPPED"):
+                if "already exists" in result.lower():
                     print("SKIP (already exists)")
                 else:
-                    print(f"SKIP ({result.split('SKIPPED:')[-1].strip()[:50]})") # pyright: ignore[reportOptionalMemberAccess]
+                    print(f"SKIP ({result.split('SKIPPED:')[-1].strip()[:50]})")
             else:
                 print("OK")
         else:
@@ -2641,11 +2682,11 @@ def import_subinterfaces(client: FTDAPIClient, filename: str, parent_type_filter
         
         success, result = client.create_subinterface(intf)
         if success:
-            if "SKIPPED" in str(result):
-                if "already exists" in str(result).lower():
+            if isinstance(result, str) and result.startswith("SKIPPED"):
+                if "already exists" in result.lower():
                     print("SKIP (already exists)")
                 else:
-                    print(f"SKIP ({result.split('SKIPPED:')[-1].strip()[:50]})") # pyright: ignore[reportOptionalMemberAccess]
+                    print(f"SKIP ({result.split('SKIPPED:')[-1].strip()[:50]})")
                 skipped_api_count += 1
             else:
                 print("OK")
@@ -2909,7 +2950,7 @@ Examples:
     
     # Store model hint on the client for downstream logic
     target_model = str(metadata.get("target_model", "generic")).lower().strip()
-    client.appliance_model = target_model # pyright: ignore[reportAttributeAccessIssue]
+    client.appliance_model = target_model
     
     if target_model and target_model != "generic":
         print(f"[INFO] Target firewall model: {target_model}")

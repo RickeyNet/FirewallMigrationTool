@@ -14,20 +14,27 @@ This checklist tracks technical debt, performance hardening, and usability impro
   - Done: `FortiGateToFTDTool/concurrency_utils.py` added and wired into importer/cleanup threaded paths.
   - Benefit: Less duplication, easier tuning, fewer regressions.
 
-- [~] Add regression tests for threaded paths
+- [x] Add regression tests for threaded paths
   - Done:
     - `import_address_objects` retry/stat behavior
+    - `import_service_objects` retry/stat behavior
     - `delete_all_custom_objects` retry/stat behavior
-    - `run_with_retry` transient retry behavior
-  - Remaining:
-    - `import_service_objects`
-    - `delete_all_static_routes`
+    - `delete_all_static_routes` retry/stat behavior
     - explicit 503 retry case
     - hard-failure case (max attempts exhausted) assertions
+    - `run_with_retry` transient retry behavior
   - Benefit: Prevent silent regressions in concurrency refactors.
 
-- [ ] Tighten exception handling and typing in importer
+- [x] Tighten exception handling and typing in importer
   - Scope: Replace broad `except Exception` and reduce `# pyright: ignore` in `ftd_api_importer.py`.
+  - Done:
+    - Added `_extract_error_message` helper for safer API error parsing.
+    - Tightened exception handling in `get_interface_by_hardware_name`, `get_physical_interface`, `update_physical_interface`, and `create_subinterface`.
+    - Added explicit type guards (`isinstance(..., dict)`) at interface lookup call sites.
+    - Updated return typing contracts for interface lookup helpers to match runtime behavior.
+    - Hardened adjacent interface paths (`get_interface_by_name`, `_get_etherchannel_by_hardware`, `create_etherchannel`, `create_bridge_group`, `create_security_zone`) with stricter type guards and safer error parsing.
+    - Replaced broad importer exception handlers in cache/lookup and metadata-loading paths with explicit exception sets.
+    - Removed importer `# pyright: ignore` suppressions and validated clean diagnostics.
   - Focus first on:
     - `get_interface_by_hardware_name`
     - `get_physical_interface`
