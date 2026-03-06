@@ -41,9 +41,8 @@ import time
 import getpass
 import urllib3
 import threading
-import random
-import concurrent.futures
 from typing import Dict, List, Optional, Tuple
+from concurrency_utils import run_with_retry, run_indexed_thread_pool
 
 # Disable SSL warnings for self-signed certificates
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -297,12 +296,6 @@ class FTDBulkDelete:
         failed_objects = []
         counters = {"deleted": 0, "failed": 0}
 
-        def should_retry(err: Optional[str]) -> bool:
-            if not err:
-                return False
-            msg = str(err).lower()
-            return any(token in msg for token in ["429", "too many", "rate limit", "timeout", "temporarily", "503", "504"])
-
         def worker(idx: int, r: Dict) -> None:
             name = r.get("name", "UNNAMED")
             obj_id = r.get("id")
@@ -314,30 +307,24 @@ class FTDBulkDelete:
                 failure_flag[0] = True
                 return
 
-            backoff = 0.3
-            for attempt in range(max_attempts):
-                ok, err = self.delete_object(endpoint, obj_id)
-                if ok:
-                    with print_lock:
-                        print(f"  [{idx+1}/{len(routes)}] Deleting: {name}... [Deleted]")
-                        counters["deleted"] += 1
-                    return
-
-                if attempt < max_attempts - 1 and should_retry(err):
-                    time.sleep(backoff + random.uniform(0, 0.25))
-                    backoff *= 2
-                    continue
-
+            ok, err = run_with_retry(
+                lambda: self.delete_object(endpoint, obj_id),
+                max_attempts=max_attempts,
+            )
+            if ok:
                 with print_lock:
-                    print(f"  [{idx+1}/{len(routes)}] Deleting: {name}... [ERROR] {err}")
-                    counters["failed"] += 1
-                    failed_objects.append((name, err))
-                failure_flag[0] = True
+                    print(f"  [{idx+1}/{len(routes)}] Deleting: {name}... [Deleted]")
+                    counters["deleted"] += 1
                 return
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            for idx, r in enumerate(routes):
-                executor.submit(worker, idx, r)
+            with print_lock:
+                print(f"  [{idx+1}/{len(routes)}] Deleting: {name}... [ERROR] {err}")
+                counters["failed"] += 1
+                failed_objects.append((name, err))
+            failure_flag[0] = True
+            return
+
+        run_indexed_thread_pool(max_workers=max_workers, items=routes, worker=worker)
 
         print(f"\n  Summary: {counters['deleted']} deleted, {counters['failed']} failed")
 
@@ -464,12 +451,6 @@ class FTDBulkDelete:
         failed_objects = []
         counters = {"deleted": 0, "failed": 0}
 
-        def should_retry(err: Optional[str]) -> bool:
-            if not err:
-                return False
-            msg = str(err).lower()
-            return any(token in msg for token in ["429", "too many", "rate limit", "timeout", "temporarily", "503", "504"])
-
         def worker(idx: int, obj: Dict) -> None:
             name = obj.get('name', 'UNNAMED')
             obj_id = obj.get('id')
@@ -477,37 +458,30 @@ class FTDBulkDelete:
             if not obj_id:
                 with print_lock:
                     print(f"  [{idx+1}/{len(custom_objects)}] Error: {name} - No ID")
-                with print_lock:
                     counters["failed"] += 1
                 failure_flag[0] = True
                 return
 
-            backoff = 0.3
-            for attempt in range(max_attempts):
-                success, error_msg = self.delete_object(endpoint, obj_id)
+            success, error_msg = run_with_retry(
+                lambda: self.delete_object(endpoint, obj_id),
+                max_attempts=max_attempts,
+            )
 
-                if success:
-                    with print_lock:
-                        status = "[OK] (already deleted)" if error_msg == "already deleted" else "[Deleted]"
-                        print(f"  [{idx+1}/{len(custom_objects)}] Deleting: {name}... {status}")
-                        counters["deleted"] += 1
-                    return
-
-                if attempt < max_attempts - 1 and should_retry(error_msg):
-                    time.sleep(backoff + random.uniform(0, 0.25))
-                    backoff *= 2
-                    continue
-
+            if success:
                 with print_lock:
-                    print(f"  [{idx+1}/{len(custom_objects)}] Deleting: {name}... [ERROR] {error_msg}")
-                    counters["failed"] += 1
-                    failed_objects.append((name, error_msg))
-                failure_flag[0] = True
+                    status = "[OK] (already deleted)" if error_msg == "already deleted" else "[Deleted]"
+                    print(f"  [{idx+1}/{len(custom_objects)}] Deleting: {name}... {status}")
+                    counters["deleted"] += 1
                 return
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            for idx, obj in enumerate(custom_objects):
-                executor.submit(worker, idx, obj)
+            with print_lock:
+                print(f"  [{idx+1}/{len(custom_objects)}] Deleting: {name}... [ERROR] {error_msg}")
+                counters["failed"] += 1
+                failed_objects.append((name, error_msg))
+            failure_flag[0] = True
+            return
+
+        run_indexed_thread_pool(max_workers=max_workers, items=custom_objects, worker=worker)
 
         self.stats["deleted"] = counters["deleted"]
         self.stats["failed"] = counters["failed"]

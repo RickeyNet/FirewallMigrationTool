@@ -44,9 +44,8 @@ import time
 import getpass
 import urllib3
 import threading
-import random
-import concurrent.futures
 from typing import Dict, List, Optional, Tuple
+from concurrency_utils import run_with_retry, run_indexed_thread_pool
 
 
 # Disable SSL warnings for self-signed certificates
@@ -2148,43 +2147,31 @@ def import_address_objects(client: FTDAPIClient, filename: str, max_workers: int
     print_lock = threading.Lock()
     failure_flag = [False]
 
-    def should_retry(err: Optional[str]) -> bool:
-        if not err:
-            return False
-        msg = str(err).lower()
-        return any(token in msg for token in ["429", "too many", "rate limit", "timeout", "temporarily", "503", "504"])
-
     def worker(idx: int, obj: Dict) -> None:
         name = obj.get("name", "Unknown")
-        backoff = 0.3
-        for attempt in range(max_attempts):
-            success, result = client.create_network_object(obj, track_stats=False)
-            if success:
-                if isinstance(result, str) and str(result).startswith("SKIPPED"):
-                    client.record_stat("address_objects_skipped")
-                    line = f"  [{idx+1}/{total}] Creating: {name}... SKIP"
-                else:
-                    client.record_stat("address_objects_created")
-                    line = f"  [{idx+1}/{total}] Creating: {name}... OK"
-                with print_lock:
-                    print(line)
-                return
-
-            if attempt < max_attempts - 1 and should_retry(result):
-                time.sleep(backoff + random.uniform(0, 0.25))
-                backoff *= 2
-                continue
-
-            client.record_stat("address_objects_failed")
-            line = f"  [{idx+1}/{total}] Creating: {name}... FAIL {result}"
+        success, result = run_with_retry(
+            lambda: client.create_network_object(obj, track_stats=False),
+            max_attempts=max_attempts,
+        )
+        if success:
+            if isinstance(result, str) and str(result).startswith("SKIPPED"):
+                client.record_stat("address_objects_skipped")
+                line = f"  [{idx+1}/{total}] Creating: {name}... SKIP"
+            else:
+                client.record_stat("address_objects_created")
+                line = f"  [{idx+1}/{total}] Creating: {name}... OK"
             with print_lock:
                 print(line)
-            failure_flag[0] = True
             return
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        for idx, obj in enumerate(objects):
-            executor.submit(worker, idx, obj)
+        client.record_stat("address_objects_failed")
+        line = f"  [{idx+1}/{total}] Creating: {name}... FAIL {result}"
+        with print_lock:
+            print(line)
+        failure_flag[0] = True
+        return
+
+    run_indexed_thread_pool(max_workers=max_workers, items=objects, worker=worker)
 
     return not failure_flag[0]
 
@@ -2304,44 +2291,32 @@ def import_service_objects(client: FTDAPIClient, filename: str, max_workers: int
     print_lock = threading.Lock()
     failure_flag = [False]
 
-    def should_retry(err: Optional[str]) -> bool:
-        if not err:
-            return False
-        msg = str(err).lower()
-        return any(token in msg for token in ["429", "too many", "rate limit", "timeout", "temporarily", "503", "504"])
-
     def worker(idx: int, obj: Dict) -> None:
         name = obj.get("name", "Unknown")
         obj_type = obj.get("type", "")
-        backoff = 0.3
-        for attempt in range(max_attempts):
-            success, result = client.create_port_object(obj, track_stats=False)
-            if success:
-                if isinstance(result, str) and str(result).startswith("SKIPPED"):
-                    client.record_stat("port_objects_skipped")
-                    line = f"  [{idx+1}/{total}] Creating: {name} ({obj_type})... SKIP"
-                else:
-                    client.record_stat("port_objects_created")
-                    line = f"  [{idx+1}/{total}] Creating: {name} ({obj_type})... OK"
-                with print_lock:
-                    print(line)
-                return
-
-            if attempt < max_attempts - 1 and should_retry(result):
-                time.sleep(backoff + random.uniform(0, 0.25))
-                backoff *= 2
-                continue
-
-            client.record_stat("port_objects_failed")
-            line = f"  [{idx+1}/{total}] Creating: {name} ({obj_type})... FAIL {result}"
+        success, result = run_with_retry(
+            lambda: client.create_port_object(obj, track_stats=False),
+            max_attempts=max_attempts,
+        )
+        if success:
+            if isinstance(result, str) and str(result).startswith("SKIPPED"):
+                client.record_stat("port_objects_skipped")
+                line = f"  [{idx+1}/{total}] Creating: {name} ({obj_type})... SKIP"
+            else:
+                client.record_stat("port_objects_created")
+                line = f"  [{idx+1}/{total}] Creating: {name} ({obj_type})... OK"
             with print_lock:
                 print(line)
-            failure_flag[0] = True
             return
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        for idx, obj in enumerate(objects):
-            executor.submit(worker, idx, obj)
+        client.record_stat("port_objects_failed")
+        line = f"  [{idx+1}/{total}] Creating: {name} ({obj_type})... FAIL {result}"
+        with print_lock:
+            print(line)
+        failure_flag[0] = True
+        return
+
+    run_indexed_thread_pool(max_workers=max_workers, items=objects, worker=worker)
 
     return not failure_flag[0]
 
