@@ -949,6 +949,7 @@ class FTDAPIClient:
         
         # Try all physical interfaces endpoint first
         endpoint = f"{self.base_url}/devices/default/interfaces"
+        items: List[Dict] = []
         
         try:
             response = self.session.get(endpoint, params={"limit": 200}, timeout=30)
