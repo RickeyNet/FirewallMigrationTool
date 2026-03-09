@@ -43,6 +43,7 @@ import urllib3
 import threading
 from typing import Dict, List, Optional, Tuple
 from concurrency_utils import run_with_retry, run_indexed_thread_pool
+from platform_profiles import is_ftd_1000, is_ftd_3100
 
 # Disable SSL warnings for self-signed certificates
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -76,6 +77,7 @@ class FTDBulkDelete:
         
         self.access_token = None
         self.refresh_token = None
+        self.appliance_model = "generic"
         
         # Track statistics
         self.stats = {
@@ -122,12 +124,22 @@ class FTDBulkDelete:
                 print("Authentication successful!")
                 return True
             else:
-                print(f"[ERROR] Authentication failed: {response.status_code}")
+                print(f"[FAIL] Authentication failed: {response.status_code}")
                 print(f"  Response: {response.text}")
                 return False
                 
         except requests.exceptions.RequestException as e:
-            print(f"[ERROR] Connection error: {e}")
+            print(f"[FAIL] Connection error: {e}")
+            return False
+
+    @staticmethod
+    def write_json_report(path: str, payload: Dict) -> bool:
+        """Write a machine-readable cleanup report to disk."""
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+            return True
+        except (OSError, TypeError, ValueError):
             return False
     
     def get_all_objects(self, endpoint: str) -> List[Dict]:
@@ -257,7 +269,7 @@ class FTDBulkDelete:
 
         success, vr_id_or_error = self.get_default_virtual_router_id()
         if not success:
-            print(f"  [ERROR] Failed to resolve virtual router: {vr_id_or_error}")
+            print(f"  [FAIL] Failed to resolve virtual router: {vr_id_or_error}")
             return False
 
         vr_id = vr_id_or_error
@@ -302,7 +314,7 @@ class FTDBulkDelete:
 
             if not obj_id:
                 with print_lock:
-                    print(f"  [{idx+1}/{len(routes)}] Skipping: {name} [ERROR] missing id")
+                    print(f"  [{idx+1}/{len(routes)}] Skipping: {name} [FAIL] missing id", flush=True)
                     counters["failed"] += 1
                 failure_flag[0] = True
                 return
@@ -313,12 +325,12 @@ class FTDBulkDelete:
             )
             if ok:
                 with print_lock:
-                    print(f"  [{idx+1}/{len(routes)}] Deleting: {name}... [Deleted]")
+                    print(f"  [{idx+1}/{len(routes)}] Deleting: {name}... [OK]", flush=True)
                     counters["deleted"] += 1
                 return
 
             with print_lock:
-                print(f"  [{idx+1}/{len(routes)}] Deleting: {name}... [ERROR] {err}")
+                print(f"  [{idx+1}/{len(routes)}] Deleting: {name}... [FAIL] {err}", flush=True)
                 counters["failed"] += 1
                 failed_objects.append((name, err))
             failure_flag[0] = True
@@ -457,7 +469,7 @@ class FTDBulkDelete:
 
             if not obj_id:
                 with print_lock:
-                    print(f"  [{idx+1}/{len(custom_objects)}] Error: {name} - No ID")
+                    print(f"  [{idx+1}/{len(custom_objects)}] Deleting: {name}... [FAIL] missing id", flush=True)
                     counters["failed"] += 1
                 failure_flag[0] = True
                 return
@@ -469,13 +481,13 @@ class FTDBulkDelete:
 
             if success:
                 with print_lock:
-                    status = "[OK] (already deleted)" if error_msg == "already deleted" else "[Deleted]"
-                    print(f"  [{idx+1}/{len(custom_objects)}] Deleting: {name}... {status}")
+                    status = "[SKIP] already deleted" if error_msg == "already deleted" else "[OK]"
+                    print(f"  [{idx+1}/{len(custom_objects)}] Deleting: {name}... {status}", flush=True)
                     counters["deleted"] += 1
                 return
 
             with print_lock:
-                print(f"  [{idx+1}/{len(custom_objects)}] Deleting: {name}... [ERROR] {error_msg}")
+                print(f"  [{idx+1}/{len(custom_objects)}] Deleting: {name}... [FAIL] {error_msg}", flush=True)
                 counters["failed"] += 1
                 failed_objects.append((name, error_msg))
             failure_flag[0] = True
@@ -593,19 +605,6 @@ class FTDBulkDelete:
         # Get the appliance model for platform-specific behavior
         model = str(getattr(self, 'appliance_model', 'generic')).lower().strip()
         
-        # Define platform families
-        # 1000-series: Support AUTO speed, do NOT support autoNeg field
-        # 3100-series: Do NOT support AUTO speed on copper, require explicit speed + autoNeg
-        ftd_1000_series = {"ftd-1010", "1010", "ftd1010", 
-                          "ftd-1120", "1120", "ftd1120",
-                          "ftd-1140", "1140", "ftd1140"}
-        ftd_3100_series = {"ftd-3105", "3105", "ftd3105",
-                          "ftd-3110", "3110", "ftd3110",
-                          "ftd-3120", "3120", "ftd3120",
-                          "ftd-3130", "3130", "ftd3130",
-                          "ftd-3140", "3140", "ftd3140",
-                          "ftd-4215", "4215", "ftd4215"}
-        
         # --- Determine if the port is SFP or copper ---
         # On known platforms we use the hardware port number because speedType
         # is unreliable after EtherChannel/bridge-group membership changes.
@@ -615,7 +614,7 @@ class FTDBulkDelete:
         # FTD-3140 port layout: Ethernet1/1-1/8 = copper, Ethernet1/9-1/24 = SFP
         is_sfp = current_speed in {'DETECT_SFP', 'SFP_DETECT'}  # default fallback
         
-        if model in ftd_3100_series:
+        if is_ftd_3100(model):
             # Parse port number from hardwareName (e.g. "Ethernet1/9" -> 9)
             port_num = self._parse_port_number(hardware_name)
             if port_num is not None:
@@ -629,7 +628,7 @@ class FTDBulkDelete:
             if 'fecMode' in intf:
                 reset_payload['fecMode'] = 'AUTO'
             # Only set autoNeg for platforms that support it
-            if model not in ftd_1000_series:
+            if not is_ftd_1000(model):
                 reset_payload['autoNegotiation'] = True
                 reset_payload['autoNeg'] = True
             else:
@@ -637,14 +636,14 @@ class FTDBulkDelete:
                 reset_payload.pop('autoNeg', None)
                 reset_payload.pop('autoNegotiation', None)
                 
-        elif model in ftd_3100_series:
+        elif is_ftd_3100(model):
             # 3100-series copper: Cannot use AUTO speed, must use THOUSAND
             reset_payload['speedType'] = 'THOUSAND'
             reset_payload['duplexType'] = 'FULL'
             reset_payload['autoNegotiation'] = True
             reset_payload['autoNeg'] = True
             
-        elif model in ftd_1000_series:
+        elif is_ftd_1000(model):
             # 1000-series copper: Support AUTO speed, do NOT support autoNeg
             reset_payload['speedType'] = 'AUTO'
             reset_payload['duplexType'] = 'AUTO'
@@ -782,10 +781,10 @@ class FTDBulkDelete:
                 success, error_msg = self.reset_physical_interface(intf, dry_run)
                 
                 if success:
-                    print("[Destroyed]")
+                    print("[OK]")
                     success_count += 1
                 else:
-                    print(f"[ERROR]   -> {error_msg}")
+                    print(f"[FAIL] {error_msg}")
                     fail_count += 1
                 
                 time.sleep(0.2)
@@ -953,10 +952,10 @@ class FTDBulkDelete:
                 success, error_msg = self.delete_subinterface(intf, dry_run)
                 
                 if success:
-                    print("[Thrown into the abyss]")
+                    print("[OK]")
                     success_count += 1
                 else:
-                    print(f"[ERROR] {error_msg}")
+                    print(f"[FAIL] {error_msg}")
                     fail_count += 1
                     failed_objects.append((name, error_msg))
                 
@@ -1093,7 +1092,7 @@ class FTDBulkDelete:
                     "/devices/default/etherchannelinterfaces", obj_id, name  # pyright: ignore[reportArgumentType]
                 )
                 if not ha_ok:
-                    print(f"[ERROR] Could not disable HA monitor: {ha_err}")
+                    print(f"[FAIL] Could not disable HA monitor: {ha_err}")
                     fail_count += 1
                     time.sleep(0.3)
                     continue
@@ -1102,10 +1101,10 @@ class FTDBulkDelete:
                 success, error_msg = self.delete_object("/devices/default/etherchannelinterfaces", obj_id)  # pyright: ignore[reportArgumentType]
 
                 if success:
-                    print("[Thrown in the Garbage]")
+                    print("[OK]")
                     success_count += 1
                 else:
-                    print(f"[ERROR] {error_msg}")
+                    print(f"[FAIL] {error_msg}")
                     fail_count += 1
 
                 time.sleep(0.3)
@@ -1172,7 +1171,7 @@ class FTDBulkDelete:
                     "/devices/default/bridgegroupinterfaces", obj_id, name  # pyright: ignore[reportArgumentType]
                 )
                 if not ha_ok:
-                    print(f"[ERROR] Could not disable HA monitor: {ha_err}")
+                    print(f"[FAIL] Could not disable HA monitor: {ha_err}")
                     fail_count += 1
                     time.sleep(0.3)
                     continue
@@ -1181,10 +1180,10 @@ class FTDBulkDelete:
                 success, error_msg = self.delete_object("/devices/default/bridgegroupinterfaces", obj_id)  # pyright: ignore[reportArgumentType]
 
                 if success:
-                    print("[Lost in space]")
+                    print("[OK]")
                     success_count += 1
                 else:
-                    print(f"[ERROR] {error_msg}")
+                    print(f"[FAIL] {error_msg}")
                     fail_count += 1
 
                 time.sleep(0.3)
@@ -1204,15 +1203,15 @@ class FTDBulkDelete:
             response = self.session.post(endpoint, json={}, timeout=30)
             
             if response.status_code in [200, 201, 202]:
-                print("[Lift off!] Deployment initiated")
+                print("[OK] Deployment initiated")
                 print("  (Deployment may take several minutes)")
                 return True
             else:
-                print(f"[ERROR] Deployment failed: {response.status_code}")
+                print(f"[FAIL] Deployment failed: {response.status_code}")
                 return False
                 
         except requests.exceptions.RequestException as e:
-            print(f"[ERROR] Deployment error: {e}")
+            print(f"[FAIL] Deployment error: {e}")
             return False
 
 
@@ -1263,6 +1262,7 @@ Examples:
     parser.add_argument('--yes', action='store_true', help='Skip confirmation')
     parser.add_argument('--workers', type=int, default=6,
                         help='Max concurrent workers for object/static route deletions (default: 6)')
+    parser.add_argument('--json-report', default='', help='Write cleanup summary to a JSON report file')
     parser.add_argument("--metadata-file", default="", help="Path to *_metadata.json generated by fortigate_converter.py (used for model-specific behavior).",)
     parser.add_argument("--appliance-model", default="generic", dest="appliance_model",
                        help="Target FTD appliance model (e.g., ftd-3120). Auto-detected from metadata if not specified.")
@@ -1343,9 +1343,9 @@ Examples:
     )
     
     # Set appliance model on client for platform-specific behavior
-    client.appliance_model = args.appliance_model # pyright: ignore[reportAttributeAccessIssue]
-    if client.appliance_model and client.appliance_model != "generic": # pyright: ignore[reportAttributeAccessIssue]
-        print(f"[INFO] Target firewall model: {client.appliance_model}") # pyright: ignore[reportAttributeAccessIssue]
+    client.appliance_model = args.appliance_model
+    if client.appliance_model and client.appliance_model != "generic":
+        print(f"[INFO] Target firewall model: {client.appliance_model}")
     
     # Authenticate
     if not client.authenticate():
@@ -1434,6 +1434,35 @@ Examples:
     # Deploy if requested
     if args.deploy and not args.dry_run:
         client.deploy_changes()
+
+    if args.json_report:
+        report_payload = {
+            "host": args.host,
+            "mode": mode,
+            "workers": args.workers,
+            "deploy_requested": args.deploy,
+            "target_model": client.appliance_model,
+            "stats": client.stats,
+            "selected_actions": {
+                "delete_address_objects": args.delete_address_objects,
+                "delete_address_groups": args.delete_address_groups,
+                "delete_service_objects": args.delete_service_objects,
+                "delete_service_groups": args.delete_service_groups,
+                "delete_security_zones": args.delete_security_zones,
+                "delete_routes": args.delete_routes,
+                "delete_rules": args.delete_rules,
+                "delete_subinterfaces": args.delete_subinterfaces,
+                "delete_etherchannels": args.delete_etherchannels,
+                "delete_bridge_groups": args.delete_bridge_groups,
+                "reset_physical_interfaces": args.reset_physical_interfaces,
+                "delete_all_interfaces": args.delete_all_interfaces,
+                "delete_all": args.delete_all,
+            },
+        }
+        if FTDBulkDelete.write_json_report(args.json_report, report_payload):
+            print(f"[OK] JSON report written: {args.json_report}")
+        else:
+            print(f"[FAIL] Could not write JSON report: {args.json_report}")
     
     print(f"\n{'='*60}")
     if args.dry_run:

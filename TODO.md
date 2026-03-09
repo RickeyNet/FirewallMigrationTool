@@ -47,20 +47,30 @@ This checklist tracks technical debt, performance hardening, and usability impro
 
 ## P1: Consistency and Maintainability
 
-- [ ] Normalize interface/media model logic
+- [x] Normalize interface/media model logic
   - Scope: Move model family sets (`ftd_1000_series`, `ftd_3100_series`, etc.) to one shared module.
   - Candidate file: `FortiGateToFTDTool/platform_profiles.py`
+  - Done:
+    - Added shared model-family module: `FortiGateToFTDTool/platform_profiles.py`.
+    - Replaced duplicated inline model sets in importer with `is_ftd_1000(...)` and `is_ftd_3100(...)` helpers.
+    - Replaced duplicated inline model sets in cleanup with shared helpers.
   - Acceptance:
     - Single source of truth for model families
     - Importer and cleanup use shared constants/helpers
   - Benefit: Fewer drift bugs when tweaking platform behavior.
 
-- [ ] Standardize operator UX/logging
+- [~] Standardize operator UX/logging
   - Scope:
     - Normalize statuses to `OK | SKIP | FAIL`
     - Ensure threaded progress output flushes consistently
     - Optional `--verbose` levels
     - Optional `--json-report <path>`
+  - Done:
+    - Standardized many importer/cleanup action outcomes to `[OK] | [SKIP] | [FAIL]`.
+    - Added `flush=True` to threaded progress prints for more reliable live output.
+    - Added `--json-report` to both importer and cleanup CLIs with machine-readable summaries.
+  - Remaining:
+    - Add configurable `--verbose` levels and gate non-essential output by verbosity.
   - Acceptance:
     - Consistent message format across importer/cleanup
     - Machine-readable summary output option

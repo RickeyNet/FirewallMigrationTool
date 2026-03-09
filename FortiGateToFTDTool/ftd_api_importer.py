@@ -46,6 +46,7 @@ import urllib3
 import threading
 from typing import Any, Dict, List, Optional, Tuple, Union
 from concurrency_utils import run_with_retry, run_indexed_thread_pool
+from platform_profiles import is_ftd_1000, is_ftd_3100
 
 
 # Disable SSL warnings for self-signed certificates
@@ -1064,25 +1065,7 @@ class FTDAPIClient:
         if speed in {"DETECT_SFP", "SFP_DETECT"}:
             return
 
-        # Define platform families for model-specific behavior
-        # 1000-series: Do NOT support autoNeg field (must be null/omitted)
-        # 2000-series: Support AUTO speed, autoNeg may vary
-        # 3100-series: Require explicit speed + autoNeg enabled
-        ftd_1000_series = {"ftd-1010", "1010", "ftd1010", 
-                          "ftd-1120", "1120", "ftd1120",
-                          "ftd-1140", "1140", "ftd1140"}
-        ftd_2000_series = {"ftd-2110", "2110", "ftd2110",
-                          "ftd-2120", "2120", "ftd2120",
-                          "ftd-2130", "2130", "ftd2130",
-                          "ftd-2140", "2140", "ftd2140"}
-        ftd_3100_series = {"ftd-3105", "3105", "ftd3105",
-                          "ftd-3110", "3110", "ftd3110",
-                          "ftd-3120", "3120", "ftd3120",
-                          "ftd-3130", "3130", "ftd3130",
-                          "ftd-3140", "3140", "ftd3140",
-                          "ftd-4215", "4215", "ftd4215"}
-
-        if model in ftd_1000_series:
+        if is_ftd_1000(model):
             # 1000-series: autoNeg field must be null/omitted
             # Remove autoNeg fields if present (they cause API errors)
             update_payload.pop("autoNeg", None)
@@ -1091,7 +1074,7 @@ class FTDAPIClient:
             update_payload["speedType"] = "AUTO"
             update_payload["duplexType"] = "AUTO"
             
-        elif model in ftd_3100_series:
+        elif is_ftd_3100(model):
             # 3100-series: Require explicit speed + autoNeg enabled
             update_payload["autoNegotiation"] = True
             update_payload["autoNeg"] = True
@@ -1221,16 +1204,6 @@ class FTDAPIClient:
         
         # Get appliance model for platform-specific behavior
         model = str(getattr(self, "appliance_model", "generic")).lower().strip()
-        ftd_1000_series = {"ftd-1010", "1010", "ftd1010", 
-                          "ftd-1120", "1120", "ftd1120",
-                          "ftd-1140", "1140", "ftd1140"}
-        ftd_3100_series = {"ftd-3105", "3105", "ftd3105",
-                          "ftd-3110", "3110", "ftd3110",
-                          "ftd-3120", "3120", "ftd3120",
-                          "ftd-3130", "3130", "ftd3130",
-                          "ftd-3140", "3140", "ftd3140",
-                          "ftd-4215", "4215", "ftd4215"}
-        
         # Handle speed/duplex/autoNeg settings based on port type and platform
         # CRITICAL: SFP ports must preserve SFP_DETECT speed - never override!
         if is_sfp_port:
@@ -1240,7 +1213,7 @@ class FTDAPIClient:
             if 'fecMode' in existing:
                 update_payload["fecMode"] = "AUTO"
             # Only set autoNeg for platforms that support it
-            if model not in ftd_1000_series:
+            if not is_ftd_1000(model):
                 update_payload["autoNegotiation"] = True
                 update_payload["autoNeg"] = True
             else:
@@ -1249,7 +1222,7 @@ class FTDAPIClient:
         else:
             # Copper interface - apply platform-specific defaults
             # Only apply converter's duplex/autoNeg if NOT on a platform that needs special handling
-            if model in ftd_3100_series:
+            if is_ftd_3100(model):
                 # 3100-series copper: preserve existing speed, use FULL duplex
                 explicit_ok = {'TEN', 'HUNDRED', 'THOUSAND', 'TEN_THOUSAND'}
                 if current_speed in explicit_ok:
@@ -1259,7 +1232,7 @@ class FTDAPIClient:
                 update_payload['duplexType'] = 'FULL'
                 update_payload['autoNegotiation'] = True
                 update_payload['autoNeg'] = True
-            elif model in ftd_1000_series:
+            elif is_ftd_1000(model):
                 # 1000-series copper: AUTO speed, no autoNeg field
                 update_payload['speedType'] = 'AUTO'
                 update_payload['duplexType'] = 'AUTO'
@@ -1626,25 +1599,15 @@ class FTDAPIClient:
         
         # Get appliance model for platform-specific behavior
         model = str(getattr(self, "appliance_model", "generic")).lower().strip()
-        ftd_1000_series = {"ftd-1010", "1010", "ftd1010", 
-                          "ftd-1120", "1120", "ftd1120",
-                          "ftd-1140", "1140", "ftd1140"}
-        ftd_3100_series = {"ftd-3105", "3105", "ftd3105",
-                          "ftd-3110", "3110", "ftd3110",
-                          "ftd-3120", "3120", "ftd3120",
-                          "ftd-3130", "3130", "ftd3130",
-                          "ftd-3140", "3140", "ftd3140",
-                          "ftd-4215", "4215", "ftd4215"}
-        
         # Set speedType and duplexType based on member interfaces and platform
         # CRITICAL: Use correct field names (speedType, duplexType) NOT (speed, duplex)
         if is_sfp_member:
             # SFP members - use SFP_DETECT speed
             intf['speedType'] = member_speed_type  # Preserve SFP_DETECT
             intf['duplexType'] = 'FULL'
-            if model not in ftd_1000_series:
+            if not is_ftd_1000(model):
                 intf['autoNeg'] = True
-        elif model in ftd_3100_series:
+        elif is_ftd_3100(model):
             # 3100-series: Cannot use AUTO speed, use explicit speed
             explicit_ok = {'TEN', 'HUNDRED', 'THOUSAND', 'TEN_THOUSAND'}
             if member_speed_type in explicit_ok:
@@ -1653,7 +1616,7 @@ class FTDAPIClient:
                 intf['speedType'] = 'TEN_THOUSAND'  # Default for 3100-series
             intf['duplexType'] = 'FULL'
             intf['autoNeg'] = True
-        elif model in ftd_1000_series:
+        elif is_ftd_1000(model):
             # 1000-series: Support AUTO speed, no autoNeg field
             intf['speedType'] = 'AUTO'
             intf['duplexType'] = 'AUTO'
@@ -2074,6 +2037,16 @@ def load_metadata_file(path: str) -> dict:
         return {}
 
 
+def write_json_report(path: str, payload: Dict[str, Any]) -> bool:
+    """Write a machine-readable run report to disk."""
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
+
+
 def auto_discover_metadata(base_name: str) -> dict:
     """
     Auto-discover metadata file based on the --base argument.
@@ -2202,13 +2175,13 @@ def import_address_objects(client: FTDAPIClient, filename: str, max_workers: int
                 client.record_stat("address_objects_created")
                 line = f"  [{idx+1}/{total}] Creating: {name}... OK"
             with print_lock:
-                print(line)
+                print(line, flush=True)
             return
 
         client.record_stat("address_objects_failed")
         line = f"  [{idx+1}/{total}] Creating: {name}... FAIL {result}"
         with print_lock:
-            print(line)
+            print(line, flush=True)
         failure_flag[0] = True
         return
 
@@ -2251,7 +2224,7 @@ def import_address_groups(client: FTDAPIClient, filename: str) -> bool:
         
         success, result = client.create_network_group(cleaned_group)
         if success:
-            print("[Success!]")
+            print("[OK]")
         else:
             print(f"[FAIL {result}]")
             all_success = False
@@ -2347,13 +2320,13 @@ def import_service_objects(client: FTDAPIClient, filename: str, max_workers: int
                 client.record_stat("port_objects_created")
                 line = f"  [{idx+1}/{total}] Creating: {name} ({obj_type})... OK"
             with print_lock:
-                print(line)
+                print(line, flush=True)
             return
 
         client.record_stat("port_objects_failed")
         line = f"  [{idx+1}/{total}] Creating: {name} ({obj_type})... FAIL {result}"
         with print_lock:
-            print(line)
+            print(line, flush=True)
         failure_flag[0] = True
         return
 
@@ -2396,7 +2369,7 @@ def import_service_groups(client: FTDAPIClient, filename: str) -> bool:
         
         success, result = client.create_port_group(cleaned_group)
         if success:
-            print("[Success!]")
+            print("[OK]")
         else:
             print(f"[FAIL {result}]")
             all_success = False
@@ -2485,7 +2458,7 @@ def import_physical_interfaces(client: FTDAPIClient, filename: str) -> bool:
                 skipped_count += 1
             else:
                 # Update successful
-                print("[Success!]")
+                print("[OK]")
                 updated_count += 1
         else:
             # Update failed
@@ -2536,13 +2509,13 @@ def import_etherchannels(client: FTDAPIClient, filename: str) -> bool:
         if success:
             if isinstance(result, str) and result.startswith("SKIPPED"):
                 if "already exists" in result.lower():
-                    print("SKIP (already exists)")
+                    print("[SKIP] already exists")
                 else:
-                    print(f"SKIP ({result.split('SKIPPED:')[-1].strip()[:50]})")
+                    print(f"[SKIP] {result.split('SKIPPED:')[-1].strip()[:50]}")
             else:
-                print("OK")
+                print("[OK]")
         else:
-            print(f"FAIL {result}")
+            print(f"[FAIL] {result}")
             all_success = False
         
         time.sleep(0.2)
@@ -2583,13 +2556,13 @@ def import_bridge_groups(client: FTDAPIClient, filename: str) -> bool:
         if success:
             if isinstance(result, str) and result.startswith("SKIPPED"):
                 if "already exists" in result.lower():
-                    print("SKIP (already exists)")
+                    print("[SKIP] already exists")
                 else:
-                    print(f"SKIP ({result.split('SKIPPED:')[-1].strip()[:50]})")
+                    print(f"[SKIP] {result.split('SKIPPED:')[-1].strip()[:50]}")
             else:
-                print("OK")
+                print("[OK]")
         else:
-            print(f"FAIL {result}")
+            print(f"[FAIL] {result}")
             all_success = False
         
         time.sleep(0.2)
@@ -2684,15 +2657,15 @@ def import_subinterfaces(client: FTDAPIClient, filename: str, parent_type_filter
         if success:
             if isinstance(result, str) and result.startswith("SKIPPED"):
                 if "already exists" in result.lower():
-                    print("SKIP (already exists)")
+                    print("[SKIP] already exists")
                 else:
-                    print(f"SKIP ({result.split('SKIPPED:')[-1].strip()[:50]})")
+                    print(f"[SKIP] {result.split('SKIPPED:')[-1].strip()[:50]}")
                 skipped_api_count += 1
             else:
-                print("OK")
+                print("[OK]")
                 created_count += 1
         else:
-            print(f"FAIL {result}")
+            print(f"[FAIL] {result}")
             failed_count += 1
             all_success = False
         
@@ -2875,6 +2848,8 @@ Examples:
                        help="Path to *_metadata.json generated by fortigate_converter.py (used for model-specific behavior).",)
     parser.add_argument('--workers', type=int, default=6,
                        help='Max concurrent workers for address/service object imports (default: 6)')
+    parser.add_argument('--json-report', default='',
+                       help='Write run summary to a JSON report file')
 
     
     # Selective import options - allows importing only specific object types
@@ -3135,6 +3110,8 @@ Examples:
             print(f"{entry['label']:<35}{entry['seconds']:.2f}s [{status}]")
         print("-"*60)
         print(f"{'Total':<35}{total_seconds:.2f}s")
+    else:
+        total_seconds = 0.0
     
     # Print statistics
     client.print_statistics()
@@ -3149,6 +3126,34 @@ Examples:
         print("  1. Run this script again with --deploy flag")
         print("  2. Deploy manually from the FDM web interface")
         print(f"{'='*60}")
+
+    if args.json_report:
+        report_payload = {
+            "host": args.host,
+            "mode": "file" if args.file else ("selective" if any([
+                args.only_physical_interfaces,
+                args.only_etherchannels,
+                args.only_bridge_groups,
+                args.only_subinterfaces,
+                args.only_security_zones,
+                args.only_address_objects,
+                args.only_address_groups,
+                args.only_service_objects,
+                args.only_service_groups,
+                args.only_routes,
+                args.only_rules,
+            ]) else "full"),
+            "workers": args.workers,
+            "deploy_requested": args.deploy,
+            "target_model": target_model,
+            "stats": client.stats,
+            "phase_timings": phase_timings,
+            "total_seconds": total_seconds,
+        }
+        if write_json_report(args.json_report, report_payload):
+            print(f"[OK] JSON report written: {args.json_report}")
+        else:
+            print(f"[FAIL] Could not write JSON report: {args.json_report}")
     
     return 0
 
