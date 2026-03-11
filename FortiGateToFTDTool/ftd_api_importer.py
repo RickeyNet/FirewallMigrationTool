@@ -160,6 +160,74 @@ class FTDAPIClient:
         except (ValueError, TypeError, KeyError):
             text = (response.text or "").strip()
             return text if text else default
+
+    def _disable_cts_settings_for_member_prep(self, payload: Dict[str, Any]) -> int:
+        """
+        Disable CTS/TrustSec-like settings in an interface payload before PUT.
+
+        Returns:
+            Number of fields modified.
+        """
+        changed = 0
+
+        def walk(node: Any) -> Any:
+            nonlocal changed
+
+            if isinstance(node, dict):
+                updated = {}
+                for key, value in node.items():
+                    key_name = str(key)
+                    if _is_cts_related_key(key_name):
+                        if isinstance(value, bool):
+                            if value:
+                                changed += 1
+                            updated[key] = False
+                            continue
+                        if isinstance(value, str):
+                            normalized = value.strip().upper()
+                            if normalized in {"ENABLED", "ENABLE", "TRUE", "ON", "YES"}:
+                                changed += 1
+                                updated[key] = "DISABLED"
+                            else:
+                                updated[key] = value
+                            continue
+                        if isinstance(value, (int, float)):
+                            if value != 0:
+                                changed += 1
+                            updated[key] = 0
+                            continue
+                        if isinstance(value, dict):
+                            nested = walk(value)
+                            if nested == value:
+                                # If nested object had no obvious on/off values, clear it.
+                                # This avoids carrying an enabled CTS profile into EC members.
+                                changed += 1
+                                updated[key] = {}
+                            else:
+                                updated[key] = nested
+                            continue
+                        if isinstance(value, list):
+                            if value:
+                                changed += 1
+                            updated[key] = []
+                            continue
+                        if value is not None:
+                            changed += 1
+                        updated[key] = None
+                        continue
+
+                    updated[key] = walk(value)
+                return updated
+
+            if isinstance(node, list):
+                return [walk(item) for item in node]
+
+            return node
+
+        patched = walk(payload)
+        payload.clear()
+        payload.update(patched)
+        return changed
     
     # =========================================================================
     # REFERENCE CACHING METHODS
@@ -1245,10 +1313,13 @@ class FTDAPIClient:
                 if 'autoNegotiation' in intf:
                     update_payload['autoNegotiation'] = intf['autoNegotiation']
         
-        # If this is an EtherChannel member prep (name is empty string), 
-        # ensure name is cleared
+        # If this is an EtherChannel member prep (name is empty string),
+        # ensure name is cleared and CTS/TrustSec is disabled.
         if intf.get('name') == '':
             update_payload['name'] = ''
+            cts_fields_changed = self._disable_cts_settings_for_member_prep(update_payload)
+            if self.debug and cts_fields_changed > 0:
+                print(f"\n      [DEBUG] Cleared/disabled {cts_fields_changed} CTS-related field(s) on {hardware_name}")
 
         
         # Remove switchport-specific fields if present (they're not valid in routed mode)
@@ -2133,6 +2204,52 @@ def physical_interface_matches_json_config(current: Dict, desired_json: Dict) ->
     return True
 
 
+def _is_cts_related_key(key: str) -> bool:
+    """Return True when a key name appears related to CTS/TrustSec settings."""
+    lowered = str(key).lower()
+    markers = ("cts", "trustsec", "trust_sec", "securitygroup", "security_group", "sgt")
+    return any(marker in lowered for marker in markers)
+
+
+def _is_enabled_like_value(value: Any) -> bool:
+    """Return True for values that semantically represent an enabled state."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().upper() in {"ENABLED", "ENABLE", "TRUE", "ON", "YES"}
+    return False
+
+
+def interface_has_cts_enabled(obj: Any) -> bool:
+    """
+    Best-effort recursive check for CTS/TrustSec enabled flags in an interface object.
+
+    This is intentionally permissive so we can avoid false "no change" skips for
+    EtherChannel member prep updates.
+    """
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if _is_cts_related_key(str(key)):
+                if _is_enabled_like_value(value):
+                    return True
+                if isinstance(value, dict) and interface_has_cts_enabled(value):
+                    return True
+                if isinstance(value, list):
+                    for item in value:
+                        if interface_has_cts_enabled(item):
+                            return True
+            elif interface_has_cts_enabled(value):
+                return True
+        return False
+
+    if isinstance(obj, list):
+        return any(interface_has_cts_enabled(item) for item in obj)
+
+    return False
+
+
 def import_address_objects(client: FTDAPIClient, filename: str, max_workers: int = 1, max_attempts: int = 4) -> bool:
     """
     Import address objects from JSON file to FTD.
@@ -2437,12 +2554,20 @@ def import_physical_interfaces(client: FTDAPIClient, filename: str) -> bool:
         # Get the original interface from cache
         original = client._physical_interface_cache[hardware]
 
-        # Check if the interface already matches the desired JSON config
-        if physical_interface_matches_json_config(original, intf):
+        is_etherchannel_member_prep = intf.get("name") == ""
+        member_has_cts_enabled = is_etherchannel_member_prep and interface_has_cts_enabled(original)
+
+        # Check if the interface already matches the desired JSON config.
+        # For EtherChannel member prep, force an update when CTS is still enabled
+        # on the existing FTD interface object.
+        if physical_interface_matches_json_config(original, intf) and not member_has_cts_enabled:
             print("[OK] No changes needed.")
             skipped_count += 1
             client.stats["physical_interfaces_skipped"] += 1
             continue
+
+        if member_has_cts_enabled:
+            print("[INFO] CTS detected, forcing member prep update...", end=" ")
 
         # Use the client's update_physical_interface method
         # This method properly handles:
