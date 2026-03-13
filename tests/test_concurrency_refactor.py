@@ -366,3 +366,52 @@ def test_cleanup_validate_endpoints_partial_fail():
     })
 
     assert client.validate_endpoints() is False
+
+
+# --- concurrency helper edge-case tests ---
+
+def test_run_with_retry_max_attempts_one(monkeypatch):
+    """max_attempts=1 means no retry — one call, immediate result."""
+    monkeypatch.setattr(concurrency_utils.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(concurrency_utils.random, "uniform", lambda _a, _b: 0.0)
+
+    attempts = {"count": 0}
+
+    def always_fails():
+        attempts["count"] += 1
+        return False, "HTTP 503 Service Unavailable"
+
+    success, result = concurrency_utils.run_with_retry(always_fails, max_attempts=1)
+
+    assert success is False
+    assert attempts["count"] == 1
+
+
+def test_run_with_retry_non_retryable_fails_immediately(monkeypatch):
+    """Non-retryable error should fail on first attempt, not retry."""
+    monkeypatch.setattr(concurrency_utils.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(concurrency_utils.random, "uniform", lambda _a, _b: 0.0)
+
+    attempts = {"count": 0}
+
+    def non_retryable():
+        attempts["count"] += 1
+        return False, "HTTP 400 Bad Request - invalid payload"
+
+    success, result = concurrency_utils.run_with_retry(non_retryable, max_attempts=4)
+
+    assert success is False
+    assert result == "HTTP 400 Bad Request - invalid payload"
+    assert attempts["count"] == 1
+
+
+def test_run_indexed_thread_pool_empty_list():
+    """Empty item list should complete without error."""
+    calls = []
+
+    def worker(idx: int, item: str) -> None:
+        calls.append(item)
+
+    concurrency_utils.run_indexed_thread_pool(max_workers=4, items=[], worker=worker)
+
+    assert calls == []

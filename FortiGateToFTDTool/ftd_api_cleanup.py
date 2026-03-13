@@ -315,7 +315,7 @@ class FTDBulkDelete:
             return False, str(e)
 
 
-    def delete_all_static_routes(self, dry_run: bool = False, max_workers: int = 1, max_attempts: int = 4) -> bool:
+    def delete_all_static_routes(self, dry_run: bool = False, max_workers: int = 1, max_attempts: int = 4, base_backoff: float = 0.3, max_jitter: float = 0.25) -> bool:
         """
         Delete all static route entries from the default Virtual Router.
 
@@ -388,6 +388,8 @@ class FTDBulkDelete:
             ok, err = run_with_retry(
                 lambda: self.delete_object(endpoint, obj_id),
                 max_attempts=max_attempts,
+                base_backoff=base_backoff,
+                max_jitter=max_jitter,
             )
             if ok:
                 with print_lock:
@@ -465,6 +467,8 @@ class FTDBulkDelete:
         dry_run: bool = False,
         max_workers: int = 1,
         max_attempts: int = 4,
+        base_backoff: float = 0.3,
+        max_jitter: float = 0.25,
     ) -> bool:
         """
         Delete ALL custom (non-system) objects of a type.
@@ -548,6 +552,8 @@ class FTDBulkDelete:
             success, error_msg = run_with_retry(
                 lambda: self.delete_object(endpoint, obj_id),
                 max_attempts=max_attempts,
+                base_backoff=base_backoff,
+                max_jitter=max_jitter,
             )
 
             if success:
@@ -767,7 +773,7 @@ class FTDBulkDelete:
         except requests.exceptions.RequestException as e:
             return False, str(e)
     
-    def reset_all_physical_interfaces(self, dry_run: bool = False) -> bool:
+    def reset_all_physical_interfaces(self, dry_run: bool = False, delay: float = 0.2) -> bool:
         """
         Reset ALL physical interfaces to default state.
         
@@ -858,7 +864,7 @@ class FTDBulkDelete:
                     print(f"[FAIL] {error_msg}")
                     fail_count += 1
                 
-                time.sleep(0.2)
+                time.sleep(delay)
         
         self.stats["total_found"] += len(configured_interfaces)
         self.stats["custom_objects"] += len(configured_interfaces)
@@ -975,7 +981,7 @@ class FTDBulkDelete:
 
         return self.delete_object(endpoint, obj_id)
     
-    def delete_all_subinterfaces(self, dry_run: bool = False) -> bool:
+    def delete_all_subinterfaces(self, dry_run: bool = False, delay: float = 0.2) -> bool:
         """
         Delete all subinterfaces.
         
@@ -1035,7 +1041,7 @@ class FTDBulkDelete:
                     fail_count += 1
                     failed_objects.append((name, error_msg))
                 
-                time.sleep(0.2)
+                time.sleep(delay)
         
         self.stats["total_found"] += len(all_subinterfaces)
         self.stats["custom_objects"] += len(all_subinterfaces)
@@ -1119,7 +1125,7 @@ class FTDBulkDelete:
         except requests.exceptions.RequestException as exc:
             return False, f"Request error (disable HA monitor): {exc}"
 
-    def delete_all_etherchannels(self, dry_run: bool = False) -> bool:
+    def delete_all_etherchannels(self, dry_run: bool = False, delay: float = 0.3) -> bool:
         """
         Delete all EtherChannel interfaces.
         
@@ -1175,7 +1181,7 @@ class FTDBulkDelete:
                 if not ha_ok:
                     print(f"[FAIL] Could not disable HA monitor: {ha_err}")
                     fail_count += 1
-                    time.sleep(0.3)
+                    time.sleep(delay)
                     continue
 
                 # --- Now delete the EtherChannel ------------------------------
@@ -1188,7 +1194,7 @@ class FTDBulkDelete:
                     print(f"[FAIL] {error_msg}")
                     fail_count += 1
 
-                time.sleep(0.3)
+                time.sleep(delay)
         
         self.stats["total_found"] += len(all_etherchannels)
         self.stats["custom_objects"] += len(all_etherchannels)
@@ -1204,7 +1210,7 @@ class FTDBulkDelete:
 
         return fail_count == 0
 
-    def delete_all_bridge_groups(self, dry_run: bool = False) -> bool:
+    def delete_all_bridge_groups(self, dry_run: bool = False, delay: float = 0.3) -> bool:
         """
         Delete all bridge group interfaces.
         
@@ -1259,7 +1265,7 @@ class FTDBulkDelete:
                 if not ha_ok:
                     print(f"[FAIL] Could not disable HA monitor: {ha_err}")
                     fail_count += 1
-                    time.sleep(0.3)
+                    time.sleep(delay)
                     continue
 
                 # --- Now delete the bridge group ------------------------------
@@ -1272,7 +1278,7 @@ class FTDBulkDelete:
                     print(f"[FAIL] {error_msg}")
                     fail_count += 1
 
-                time.sleep(0.3)
+                time.sleep(delay)
         
         self.stats["total_found"] += len(all_bridge_groups)
         self.stats["custom_objects"] += len(all_bridge_groups)
@@ -1358,6 +1364,14 @@ Examples:
         return ivalue
     parser.add_argument('--workers', type=_positive_int, default=6,
                         help='Max concurrent workers for object/static route deletions (1-32, default: 6)')
+    parser.add_argument('--max-attempts', type=int, default=4,
+                        help='Max retry attempts for transient API errors (default: 4)')
+    parser.add_argument('--base-backoff', type=float, default=0.3,
+                        help='Initial backoff delay in seconds between retries (default: 0.3)')
+    parser.add_argument('--max-jitter', type=float, default=0.25,
+                        help='Max random jitter in seconds added to backoff (default: 0.25)')
+    parser.add_argument('--delay', type=float, default=0.2,
+                        help='Delay in seconds between sequential API calls (default: 0.2)')
     parser.add_argument('--json-report', default='', help='Write cleanup summary to a JSON report file')
     parser.add_argument('--validate-only', action='store_true',
                         help='Authenticate and probe all API endpoints without deleting anything')
@@ -1459,82 +1473,129 @@ Examples:
     print(f"\n{'='*60}")
     print(f"BULK DELETE MODE: {mode}")
     print(f"{'='*60}")
-    
+
+    # Track per-phase timings for performance comparisons
+    phase_timings = []
+
+    def record_phase(label: str, func, *func_args, **func_kwargs):
+        """Run a phase, time it, and capture success for summary output."""
+        start = time.perf_counter()
+        result = func(*func_args, **func_kwargs)
+        duration = time.perf_counter() - start
+        success = True if result is None else bool(result)
+        phase_timings.append({"label": label, "seconds": duration, "success": success})
+        return result
+
     # Delete in reverse dependency order
     if args.delete_all or args.delete_rules:
-        client.delete_all_custom_objects(
+        record_phase("Access Rules", client.delete_all_custom_objects,
             "/policy/accesspolicies/default/accessrules",
             "Access Rules",
             args.dry_run,
             args.workers,
+            args.max_attempts,
+            args.base_backoff,
+            args.max_jitter,
         )
-    
+
     if args.delete_all or args.delete_routes:
-        client.delete_all_static_routes(args.dry_run, args.workers)
+        record_phase("Static Routes", client.delete_all_static_routes, args.dry_run, args.workers, args.max_attempts, args.base_backoff, args.max_jitter)
 
     # Security zones depend on interfaces, delete zones before interfaces
     if args.delete_all or args.delete_security_zones:
-        client.delete_all_custom_objects(
+        record_phase("Security Zones", client.delete_all_custom_objects,
             "/object/securityzones",
             "Security Zones",
             args.dry_run,
             args.workers,
+            args.max_attempts,
+            args.base_backoff,
+            args.max_jitter,
         )
-    
+
     # Delete interfaces BEFORE objects (interfaces may reference objects)
     # Order: subinterfaces -> etherchannels -> bridge groups -> physical reset
     if args.delete_all or args.delete_all_interfaces or args.delete_subinterfaces:
-        client.delete_all_subinterfaces(args.dry_run)
-    
+        record_phase("Subinterfaces", client.delete_all_subinterfaces, args.dry_run, delay=args.delay)
+
     if args.delete_all or args.delete_all_interfaces or args.delete_etherchannels:
-        client.delete_all_etherchannels(args.dry_run)
-    
+        record_phase("EtherChannels", client.delete_all_etherchannels, args.dry_run, delay=args.delay)
+
     if args.delete_all or args.delete_all_interfaces or args.delete_bridge_groups:
-        client.delete_all_bridge_groups(args.dry_run)
-    
+        record_phase("Bridge Groups", client.delete_all_bridge_groups, args.dry_run, delay=args.delay)
+
     if args.delete_all or args.delete_all_interfaces or args.reset_physical_interfaces:
-        client.reset_all_physical_interfaces(args.dry_run)
-    
+        record_phase("Physical Interfaces", client.reset_all_physical_interfaces, args.dry_run, delay=args.delay)
+
     if args.delete_all or args.delete_service_groups:
-        client.delete_all_custom_objects(
+        record_phase("Service Groups", client.delete_all_custom_objects,
             "/object/portgroups",
             "Service Groups",
             args.dry_run,
             args.workers,
+            args.max_attempts,
+            args.base_backoff,
+            args.max_jitter,
         )
-    
+
     if args.delete_all or args.delete_service_objects:
         # Delete TCP ports
-        client.delete_all_custom_objects(
+        record_phase("TCP Port Objects", client.delete_all_custom_objects,
             "/object/tcpports",
             "TCP Port Objects",
             args.dry_run,
             args.workers,
+            args.max_attempts,
+            args.base_backoff,
+            args.max_jitter,
         )
         # Delete UDP ports
-        client.delete_all_custom_objects(
+        record_phase("UDP Port Objects", client.delete_all_custom_objects,
             "/object/udpports",
             "UDP Port Objects",
             args.dry_run,
             args.workers,
+            args.max_attempts,
+            args.base_backoff,
+            args.max_jitter,
         )
-    
+
     if args.delete_all or args.delete_address_groups:
-        client.delete_all_custom_objects(
+        record_phase("Address Groups", client.delete_all_custom_objects,
             "/object/networkgroups",
             "Address Groups",
             args.dry_run,
             args.workers,
+            args.max_attempts,
+            args.base_backoff,
+            args.max_jitter,
         )
-    
+
     if args.delete_all or args.delete_address_objects:
-        client.delete_all_custom_objects(
+        record_phase("Address Objects", client.delete_all_custom_objects,
             "/object/networks",
             "Address Objects",
             args.dry_run,
             args.workers,
+            args.max_attempts,
+            args.base_backoff,
+            args.max_jitter,
         )
-    
+
+    if phase_timings:
+        print(f"\n{'='*60}")
+        print("TIMING SUMMARY (seconds)")
+        print(f"{'='*60}")
+        total_seconds = 0.0
+        for entry in phase_timings:
+            total_seconds += entry["seconds"]
+            status = "OK" if entry["success"] else "FAIL"
+            print(f"{entry['label']:<35}{entry['seconds']:.2f}s [{status}]")
+        print("-"*60)
+        print(f"{'Total':<35}{total_seconds:.2f}s")
+    else:
+        total_seconds = 0.0
+
     # Deploy if requested
     if args.deploy and not args.dry_run:
         client.deploy_changes()
@@ -1549,6 +1610,8 @@ Examples:
             "deploy_requested": args.deploy,
             "target_model": client.appliance_model,
             "stats": client.stats,
+            "phase_timings": phase_timings,
+            "total_seconds": total_seconds,
             "selected_actions": {
                 "delete_address_objects": args.delete_address_objects,
                 "delete_address_groups": args.delete_address_groups,

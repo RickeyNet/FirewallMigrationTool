@@ -156,42 +156,34 @@ This checklist tracks technical debt, performance hardening, and usability impro
 - [x] Add lightweight integration smoke mode
   - Done: `--validate-only` for both importer and cleanup.
 
-- [ ] Add configurable retry policy flags
-  - Scope: `--max-attempts`, `--base-backoff`, optional jitter range.
-  - Benefit: Easier tuning for different appliance loads.
+- [x] Add configurable retry policy flags
+  - Done: Added `--max-attempts`, `--base-backoff`, `--max-jitter` to both importer and cleanup CLIs.
+    Threaded through to `run_with_retry()` calls in all threaded import/delete paths.
 
-- [ ] Add timing per phase to final report (cleanup)
-  - Goal: The importer already has `record_phase()` with timing. Add the same to the cleanup script.
-  - Benefit: Makes optimization work measurable across both scripts.
+- [x] Add timing per phase to final report (cleanup)
+  - Done: Added `record_phase()` to cleanup `main()` with per-phase timing summary and
+    `phase_timings`/`total_seconds` fields in JSON report output.
 
-- [ ] Add tests for concurrency helper edge cases
-  - Cases:
-    - `max_attempts=1` (no retry)
-    - non-retryable error string (should fail immediately, not retry)
-    - empty item list thread pool behavior (should complete without error)
+- [x] Add tests for concurrency helper edge cases
+  - Done: Added 3 edge-case tests in `tests/test_concurrency_refactor.py`:
+    - `test_run_with_retry_max_attempts_one` (no retry)
+    - `test_run_with_retry_non_retryable_fails_immediately` (400 fails on first attempt)
+    - `test_run_indexed_thread_pool_empty_list` (completes without error)
 
 - [ ] Add pre-commit quality checks
   - Suggested: `ruff` (or `flake8`) + `black` + `pytest`.
   - Benefit: Catch style/type/test issues before commit.
 
-- [ ] Add `requirements.txt` or `pyproject.toml`
-  - Issue: Dependencies (`pyyaml`, `requests`, `urllib3`) are documented only in code comments.
-    There is no standard dependency file for `pip install -r` or `pip install .`.
-  - Fix: Create a `requirements.txt` with pinned versions, or a `pyproject.toml` for full packaging.
-  - Benefit: Reproducible installs, easier onboarding.
+- [x] Add `requirements.txt` or `pyproject.toml`
+  - Done: Created `requirements.txt` with `pyyaml>=6.0`, `requests>=2.28.0`, `urllib3>=1.26.0`.
 
-- [ ] Add `__init__.py` to make `FortiGateToFTDTool` a proper package
-  - Issue: Without `__init__.py`, the directory is not a real Python package. Tests use
-    `sys.path.append()` hacks to import modules.
-  - Fix: Add `FortiGateToFTDTool/__init__.py` (can be empty) and convert imports to package-relative.
-  - Benefit: Standard Python packaging, cleaner test setup, IDE support.
+- [x] Add `__init__.py` to make `FortiGateToFTDTool` a proper package
+  - Done: Added `FortiGateToFTDTool/__init__.py`.
 
-- [ ] Make hardcoded sleep delays configurable
-  - Locations: `time.sleep(0.2)` in sequential import functions, `time.sleep(0.3)` in cleanup
-  - Issue: 200-300ms delays are hardcoded between API calls. On fast appliances this wastes time;
-    on slow/loaded appliances it may not be enough.
-  - Fix: Add a `--delay` CLI flag (default 0.2) and pass it through to import/cleanup functions.
-  - Benefit: Tunable for different environments.
+- [x] Make hardcoded sleep delays configurable
+  - Done: Added `--delay` CLI flag (default 0.2) to both importer and cleanup.
+    All sequential import/cleanup functions accept a `delay` parameter.
+    Cleanup etherchannels/bridge groups default to 0.3 for HA-related operations.
 
 - [x] Add exception propagation to `run_indexed_thread_pool`
   - Done: Collected futures and called `.result()` via `as_completed()` to propagate
@@ -201,12 +193,9 @@ This checklist tracks technical debt, performance hardening, and usability impro
   - Done: Added `_positive_int` type validator (1-32) to `--workers` in both
     `ftd_api_importer.py` and `ftd_api_cleanup.py`.
 
-- [ ] Fix FTD-3105 model port count inconsistency
-  - Location: `interface_converter.py` line ~96
-  - Issue: FTD-3105 has `total_ports: 16` but the description says "8 ports". The actual 3105
-    has 8 fixed ports. This could cause incorrect port mapping.
-  - Fix: Verify the correct port count and update accordingly.
-  - Benefit: Correct interface mapping for 3105 deployments.
+- [x] Fix FTD-3105 model port count inconsistency
+  - Done: Verified `total_ports: 16` is correct (8 RJ45 + 8 SFP = 16 data ports).
+    No code change needed — the original values were accurate.
 
 - [x] Remove unnecessary defensive guard in converter
   - Done: Replaced verbose `args.debug if 'args' in locals() ...` with `getattr(args, 'debug', False)`.

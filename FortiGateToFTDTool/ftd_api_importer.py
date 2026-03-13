@@ -2324,7 +2324,7 @@ def interface_has_cts_enabled(obj: Any) -> bool:
     return False
 
 
-def import_address_objects(client: FTDAPIClient, filename: str, max_workers: int = 1, max_attempts: int = 4) -> bool:
+def import_address_objects(client: FTDAPIClient, filename: str, max_workers: int = 1, max_attempts: int = 4, base_backoff: float = 0.3, max_jitter: float = 0.25) -> bool:
     """
     Import address objects from JSON file to FTD.
     
@@ -2357,6 +2357,8 @@ def import_address_objects(client: FTDAPIClient, filename: str, max_workers: int
         success, result = run_with_retry(
             lambda: client.create_network_object(obj, track_stats=False),
             max_attempts=max_attempts,
+            base_backoff=base_backoff,
+            max_jitter=max_jitter,
         )
         if success:
             if isinstance(result, str) and str(result).startswith("SKIPPED"):
@@ -2381,7 +2383,7 @@ def import_address_objects(client: FTDAPIClient, filename: str, max_workers: int
     return not failure_flag[0]
 
 
-def import_address_groups(client: FTDAPIClient, filename: str) -> bool:
+def import_address_groups(client: FTDAPIClient, filename: str, delay: float = 0.2) -> bool:
     """
     Import address groups from JSON file to FTD.
     
@@ -2420,7 +2422,7 @@ def import_address_groups(client: FTDAPIClient, filename: str) -> bool:
             print(f"[FAIL {result}]")
             all_success = False
         
-        time.sleep(0.2)
+        time.sleep(delay)
     
     return all_success
 
@@ -2468,7 +2470,7 @@ def clean_group_object(group: Dict) -> Dict:
     return cleaned
 
 
-def import_service_objects(client: FTDAPIClient, filename: str, max_workers: int = 1, max_attempts: int = 4) -> bool:
+def import_service_objects(client: FTDAPIClient, filename: str, max_workers: int = 1, max_attempts: int = 4, base_backoff: float = 0.3, max_jitter: float = 0.25) -> bool:
     """
     Import service port objects from JSON file to FTD.
     
@@ -2502,6 +2504,8 @@ def import_service_objects(client: FTDAPIClient, filename: str, max_workers: int
         success, result = run_with_retry(
             lambda: client.create_port_object(obj, track_stats=False),
             max_attempts=max_attempts,
+            base_backoff=base_backoff,
+            max_jitter=max_jitter,
         )
         if success:
             if isinstance(result, str) and str(result).startswith("SKIPPED"):
@@ -2526,7 +2530,7 @@ def import_service_objects(client: FTDAPIClient, filename: str, max_workers: int
     return not failure_flag[0]
 
 
-def import_service_groups(client: FTDAPIClient, filename: str) -> bool:
+def import_service_groups(client: FTDAPIClient, filename: str, delay: float = 0.2) -> bool:
     """
     Import service port groups from JSON file to FTD.
     
@@ -2565,12 +2569,12 @@ def import_service_groups(client: FTDAPIClient, filename: str) -> bool:
             print(f"[FAIL {result}]")
             all_success = False
         
-        time.sleep(0.2)
+        time.sleep(delay)
     
     return all_success
 
 
-def import_physical_interfaces(client: FTDAPIClient, filename: str) -> bool:
+def import_physical_interfaces(client: FTDAPIClient, filename: str, delay: float = 0.2) -> bool:
     """
     Update existing physical interfaces using PUT if they exist on the device.
     Physical interfaces cannot be created via POST - they are pre-provisioned.
@@ -2667,7 +2671,7 @@ def import_physical_interfaces(client: FTDAPIClient, filename: str) -> bool:
             failed_count += 1
             all_success = False
 
-        time.sleep(0.2)
+        time.sleep(delay)
     
     # Print summary
     print(f"\n  Summary: {updated_count} updated, {skipped_count} skipped (not present or no changes needed), {failed_count} failed")
@@ -2675,7 +2679,7 @@ def import_physical_interfaces(client: FTDAPIClient, filename: str) -> bool:
     return all_success
 
 
-def import_etherchannels(client: FTDAPIClient, filename: str) -> bool:
+def import_etherchannels(client: FTDAPIClient, filename: str, delay: float = 0.2) -> bool:
     """
     Import EtherChannel interfaces from JSON file to FTD.
     
@@ -2717,12 +2721,12 @@ def import_etherchannels(client: FTDAPIClient, filename: str) -> bool:
             print(f"[FAIL] {result}")
             all_success = False
         
-        time.sleep(0.2)
+        time.sleep(delay)
     
     return all_success
 
 
-def import_bridge_groups(client: FTDAPIClient, filename: str) -> bool:
+def import_bridge_groups(client: FTDAPIClient, filename: str, delay: float = 0.2) -> bool:
     """
     Import Bridge Group interfaces from JSON file to FTD.
     
@@ -2764,12 +2768,12 @@ def import_bridge_groups(client: FTDAPIClient, filename: str) -> bool:
             print(f"[FAIL] {result}")
             all_success = False
         
-        time.sleep(0.2)
+        time.sleep(delay)
     
     return all_success
 
 
-def import_subinterfaces(client: FTDAPIClient, filename: str, parent_type_filter: Optional[str] = None) -> bool:
+def import_subinterfaces(client: FTDAPIClient, filename: str, parent_type_filter: Optional[str] = None, delay: float = 0.2) -> bool:
     """
     Import subinterfaces (VLANs) from JSON file to FTD.
     
@@ -2868,14 +2872,14 @@ def import_subinterfaces(client: FTDAPIClient, filename: str, parent_type_filter
             failed_count += 1
             all_success = False
         
-        time.sleep(0.2)
+        time.sleep(delay)
     
     # Print summary
     print(f"\n  Summary: {created_count} created, {skipped_api_count} skipped, {failed_count} failed")
     
     return all_success
 
-def import_security_zones(client: FTDAPIClient, filename: str) -> bool:
+def import_security_zones(client: FTDAPIClient, filename: str, delay: float = 0.2) -> bool:
     """
     Import security zones from JSON file to FTD.
     
@@ -2913,11 +2917,11 @@ def import_security_zones(client: FTDAPIClient, filename: str) -> bool:
             print(f"[FAIL {result}]")
             all_success = False
         
-        time.sleep(0.2)
+        time.sleep(delay)
     
     return all_success
 
-def import_static_routes(client: FTDAPIClient, filename: str) -> bool:
+def import_static_routes(client: FTDAPIClient, filename: str, delay: float = 0.2) -> bool:
     """
     Import static routes from JSON file to FTD.
     
@@ -2958,11 +2962,11 @@ def import_static_routes(client: FTDAPIClient, filename: str) -> bool:
             print(f"[FAIL {result}]")
             all_success = False
         
-        time.sleep(0.2)
+        time.sleep(delay)
     
     return all_success
 
-def import_access_rules(client: FTDAPIClient, filename: str) -> bool:
+def import_access_rules(client: FTDAPIClient, filename: str, delay: float = 0.2) -> bool:
     """
     Import access rules from JSON file to FTD.
     
@@ -2998,7 +3002,7 @@ def import_access_rules(client: FTDAPIClient, filename: str) -> bool:
             print(f"[FAIL {result}]")
             all_success = False
         
-        time.sleep(0.2)
+        time.sleep(delay)
     
     return all_success
 
@@ -3052,6 +3056,14 @@ Examples:
         return ivalue
     parser.add_argument('--workers', type=_positive_int, default=6,
                        help='Max concurrent workers for address/service object imports (1-32, default: 6)')
+    parser.add_argument('--max-attempts', type=int, default=4,
+                       help='Max retry attempts for transient API errors (default: 4)')
+    parser.add_argument('--base-backoff', type=float, default=0.3,
+                       help='Initial backoff delay in seconds between retries (default: 0.3)')
+    parser.add_argument('--max-jitter', type=float, default=0.25,
+                       help='Max random jitter in seconds added to backoff (default: 0.25)')
+    parser.add_argument('--delay', type=float, default=0.2,
+                       help='Delay in seconds between sequential API calls (default: 0.2)')
     parser.add_argument('--json-report', default='',
                        help='Write run summary to a JSON report file')
     parser.add_argument('--validate-only', action='store_true',
@@ -3165,31 +3177,31 @@ Examples:
         
         # Import based on type
         if args.type == 'physical-interfaces':
-            record_phase("Physical Interfaces", import_physical_interfaces, client, args.file)
+            record_phase("Physical Interfaces", import_physical_interfaces, client, args.file, delay=args.delay)
         elif args.type == 'etherchannels':
-            record_phase("EtherChannels", import_etherchannels, client, args.file)
+            record_phase("EtherChannels", import_etherchannels, client, args.file, delay=args.delay)
         elif args.type == 'bridge-groups':
-            record_phase("Bridge Groups", import_bridge_groups, client, args.file)
+            record_phase("Bridge Groups", import_bridge_groups, client, args.file, delay=args.delay)
         elif args.type == 'subinterfaces':
             # Import subinterfaces in two phases for correct parent dependency order
             print("\nPhase 1: Subinterfaces on Physical Interfaces")
-            record_phase("Subinterfaces (physical parents)", import_subinterfaces, client, args.file, parent_type_filter='physical')
+            record_phase("Subinterfaces (physical parents)", import_subinterfaces, client, args.file, parent_type_filter='physical', delay=args.delay)
             print("\nPhase 2: Subinterfaces on EtherChannels")
-            record_phase("Subinterfaces (etherchannel parents)", import_subinterfaces, client, args.file, parent_type_filter='etherchannel')
+            record_phase("Subinterfaces (etherchannel parents)", import_subinterfaces, client, args.file, parent_type_filter='etherchannel', delay=args.delay)
         elif args.type == 'security-zones':
-            record_phase("Security Zones", import_security_zones, client, args.file)
+            record_phase("Security Zones", import_security_zones, client, args.file, delay=args.delay)
         elif args.type == 'address-objects':
-            record_phase("Address Objects", import_address_objects, client, args.file, args.workers)
+            record_phase("Address Objects", import_address_objects, client, args.file, args.workers, args.max_attempts, args.base_backoff, args.max_jitter)
         elif args.type == 'address-groups':
-            record_phase("Address Groups", import_address_groups, client, args.file)
+            record_phase("Address Groups", import_address_groups, client, args.file, delay=args.delay)
         elif args.type == 'service-objects':
-            record_phase("Service Objects", import_service_objects, client, args.file, args.workers)
+            record_phase("Service Objects", import_service_objects, client, args.file, args.workers, args.max_attempts, args.base_backoff, args.max_jitter)
         elif args.type == 'service-groups':
-            record_phase("Service Groups", import_service_groups, client, args.file)
+            record_phase("Service Groups", import_service_groups, client, args.file, delay=args.delay)
         elif args.type == 'routes':
-            record_phase("Static Routes", import_static_routes, client, args.file)
+            record_phase("Static Routes", import_static_routes, client, args.file, delay=args.delay)
         elif args.type == 'rules':
-            record_phase("Access Rules", import_access_rules, client, args.file)
+            record_phase("Access Rules", import_access_rules, client, args.file, delay=args.delay)
     
     # Check if any --only flags are set
     elif any([args.only_physical_interfaces, args.only_etherchannels,
@@ -3203,55 +3215,55 @@ Examples:
         imported_any = False
         
         if args.only_physical_interfaces:
-            record_phase("Physical Interfaces", import_physical_interfaces, client, f"{args.base}_physical_interfaces.json")
+            record_phase("Physical Interfaces", import_physical_interfaces, client, f"{args.base}_physical_interfaces.json", delay=args.delay)
             imported_any = True
-        
+
         if args.only_etherchannels:
-            record_phase("EtherChannels", import_etherchannels, client, f"{args.base}_etherchannels.json")
+            record_phase("EtherChannels", import_etherchannels, client, f"{args.base}_etherchannels.json", delay=args.delay)
             imported_any = True
-        
+
         if args.only_bridge_groups:
-            record_phase("Bridge Groups", import_bridge_groups, client, f"{args.base}_bridge_groups.json")
+            record_phase("Bridge Groups", import_bridge_groups, client, f"{args.base}_bridge_groups.json", delay=args.delay)
             imported_any = True
-        
+
         if args.only_subinterfaces:
-            record_phase("Subinterfaces (physical parents)", import_subinterfaces, client, f"{args.base}_subinterfaces.json", parent_type_filter='physical')
-            record_phase("Subinterfaces (etherchannel parents)", import_subinterfaces, client, f"{args.base}_subinterfaces.json", parent_type_filter='etherchannel')
+            record_phase("Subinterfaces (physical parents)", import_subinterfaces, client, f"{args.base}_subinterfaces.json", parent_type_filter='physical', delay=args.delay)
+            record_phase("Subinterfaces (etherchannel parents)", import_subinterfaces, client, f"{args.base}_subinterfaces.json", parent_type_filter='etherchannel', delay=args.delay)
             imported_any = True
-        
+
         if args.only_security_zones:
             print("  - Security Zones")
-            record_phase("Security Zones", import_security_zones, client, f"{args.base}_security_zones.json")
+            record_phase("Security Zones", import_security_zones, client, f"{args.base}_security_zones.json", delay=args.delay)
             imported_any = True
 
         if args.only_address_objects:
             print("  - Address Objects")
-            record_phase("Address Objects", import_address_objects, client, f"{args.base}_address_objects.json", args.workers)
+            record_phase("Address Objects", import_address_objects, client, f"{args.base}_address_objects.json", args.workers, args.max_attempts, args.base_backoff, args.max_jitter)
             imported_any = True
-        
+
         if args.only_address_groups:
             print("  - Address Groups")
-            record_phase("Address Groups", import_address_groups, client, f"{args.base}_address_groups.json")
+            record_phase("Address Groups", import_address_groups, client, f"{args.base}_address_groups.json", delay=args.delay)
             imported_any = True
-        
+
         if args.only_service_objects:
             print("  - Service Objects")
-            record_phase("Service Objects", import_service_objects, client, f"{args.base}_service_objects.json", args.workers)
+            record_phase("Service Objects", import_service_objects, client, f"{args.base}_service_objects.json", args.workers, args.max_attempts, args.base_backoff, args.max_jitter)
             imported_any = True
-        
+
         if args.only_service_groups:
             print("  - Service Groups")
-            record_phase("Service Groups", import_service_groups, client, f"{args.base}_service_groups.json")
+            record_phase("Service Groups", import_service_groups, client, f"{args.base}_service_groups.json", delay=args.delay)
             imported_any = True
-        
+
         if args.only_routes:
             print("  - Static Routes")
-            record_phase("Static Routes", import_static_routes, client, f"{args.base}_static_routes.json")
+            record_phase("Static Routes", import_static_routes, client, f"{args.base}_static_routes.json", delay=args.delay)
             imported_any = True
-        
+
         if args.only_rules:
             print("  - Access Rules")
-            record_phase("Access Rules", import_access_rules, client, f"{args.base}_access_rules.json")
+            record_phase("Access Rules", import_access_rules, client, f"{args.base}_access_rules.json", delay=args.delay)
             imported_any = True
         
         if not imported_any:
@@ -3274,40 +3286,40 @@ Examples:
         print("  12. Access Rules")
         
         # Step 1: Update physical interfaces
-        record_phase("Physical Interfaces", import_physical_interfaces, client, f"{args.base}_physical_interfaces.json")
-        
+        record_phase("Physical Interfaces", import_physical_interfaces, client, f"{args.base}_physical_interfaces.json", delay=args.delay)
+
         # Step 2: Create subinterfaces on physical interfaces BEFORE adding them to EtherChannels
-        record_phase("Subinterfaces (physical parents)", import_subinterfaces, client, f"{args.base}_subinterfaces.json", parent_type_filter='physical')
-        
+        record_phase("Subinterfaces (physical parents)", import_subinterfaces, client, f"{args.base}_subinterfaces.json", parent_type_filter='physical', delay=args.delay)
+
         # Step 3: Create etherchannels (this may add physical interfaces as members)
-        record_phase("EtherChannels", import_etherchannels, client, f"{args.base}_etherchannels.json")
-        
+        record_phase("EtherChannels", import_etherchannels, client, f"{args.base}_etherchannels.json", delay=args.delay)
+
         # Step 4: Create subinterfaces on EtherChannels AFTER they are created
-        record_phase("Subinterfaces (etherchannel parents)", import_subinterfaces, client, f"{args.base}_subinterfaces.json", parent_type_filter='etherchannel')
-        
+        record_phase("Subinterfaces (etherchannel parents)", import_subinterfaces, client, f"{args.base}_subinterfaces.json", parent_type_filter='etherchannel', delay=args.delay)
+
         # Step 5: Create bridge groups
-        record_phase("Bridge Groups", import_bridge_groups, client, f"{args.base}_bridge_groups.json")
-        
+        record_phase("Bridge Groups", import_bridge_groups, client, f"{args.base}_bridge_groups.json", delay=args.delay)
+
         # Step 6: Create security zones (required for access rules)
-        record_phase("Security Zones", import_security_zones, client, f"{args.base}_security_zones.json")
+        record_phase("Security Zones", import_security_zones, client, f"{args.base}_security_zones.json", delay=args.delay)
 
         # Step 7: Import address objects
-        record_phase("Address Objects", import_address_objects, client, f"{args.base}_address_objects.json", args.workers)
+        record_phase("Address Objects", import_address_objects, client, f"{args.base}_address_objects.json", args.workers, args.max_attempts, args.base_backoff, args.max_jitter)
 
         # Step 8: Import address groups
-        record_phase("Address Groups", import_address_groups, client, f"{args.base}_address_groups.json")
+        record_phase("Address Groups", import_address_groups, client, f"{args.base}_address_groups.json", delay=args.delay)
 
         # Step 9: Import service objects
-        record_phase("Service Objects", import_service_objects, client, f"{args.base}_service_objects.json", args.workers)
+        record_phase("Service Objects", import_service_objects, client, f"{args.base}_service_objects.json", args.workers, args.max_attempts, args.base_backoff, args.max_jitter)
 
         # Step 10: Import service groups
-        record_phase("Service Groups", import_service_groups, client, f"{args.base}_service_groups.json")
+        record_phase("Service Groups", import_service_groups, client, f"{args.base}_service_groups.json", delay=args.delay)
 
         # Step 11: Import static routes
-        record_phase("Static Routes", import_static_routes, client, f"{args.base}_static_routes.json")
+        record_phase("Static Routes", import_static_routes, client, f"{args.base}_static_routes.json", delay=args.delay)
 
         # Step 12: Import access rules
-        record_phase("Access Rules", import_access_rules, client, f"{args.base}_access_rules.json")
+        record_phase("Access Rules", import_access_rules, client, f"{args.base}_access_rules.json", delay=args.delay)
 
     if phase_timings:
         print(f"\n{'='*60}")
