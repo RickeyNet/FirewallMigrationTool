@@ -47,53 +47,37 @@ import threading
 from typing import Any, Dict, List, Optional, Tuple, Union
 from concurrency_utils import run_with_retry, run_indexed_thread_pool
 from platform_profiles import is_ftd_1000, is_ftd_3100
+from ftd_api_base import FTDBaseClient
 
 
 # Disable SSL warnings for self-signed certificates
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
-class FTDAPIClient:
+class FTDAPIClient(FTDBaseClient):
     """
     Client for interacting with Cisco FTD Firewall Device Manager (FDM) API.
-    
+
     This class handles:
     - Authentication and token management
     - CRUD operations for network objects, services, routes, and policies
     - Deployment of configuration changes
     - Error handling and retry logic
     """
-    
+
     def __init__(self, host: str, username: str, password: str, verify_ssl: bool = False):
         """
         Initialize the FTD API client.
-        
+
         Args:
             host: FTD management IP address or hostname
             username: FDM username (typically 'admin')
             password: FDM password
             verify_ssl: Whether to verify SSL certificates (False for self-signed)
-            debug: Enable debug output
         """
-        self.host = host
-        self.username = username
-        self.password = password
-        self.verify_ssl = verify_ssl
-        self.debug = False  # Will be set by caller if needed
+        super().__init__(host, username, password, verify_ssl)
         self._stats_lock = threading.Lock()
-        
-        # Base URL for FDM API
-        self.base_url = f"https://{host}/api/fdm/latest"
-        
-        # Session for maintaining connection
-        self.session = requests.Session()
-        self.session.verify = verify_ssl
-        
-        # Authentication token (obtained after login)
-        self.access_token = None
-        self.refresh_token = None
-        self.appliance_model = "generic"
-        
+
         # =================================================================
         # REFERENCE CACHES - Prefetch and cache name->id mappings
         # =================================================================
@@ -106,7 +90,7 @@ class FTDAPIClient:
         self._network_object_cache = {}          # object_name -> {id: xxx, .}
         self._caches_populated = False
 
-        
+
         # Track statistics
         self.stats = {
             "address_objects_created": 0,
@@ -472,117 +456,6 @@ class FTDAPIClient:
         self._network_object_cache.clear()
         self._caches_populated = False
 
-    def validate_endpoints(self) -> bool:
-        """Probe required FDM API endpoints and print a capability summary.
-
-        Each endpoint is tested with a lightweight GET (limit=1).  This is
-        intended as a fast preflight check before a long import run.
-
-        Returns:
-            True if all endpoints are reachable, False otherwise.
-        """
-        endpoints = [
-            ("/devices/default/interfaces", "Physical Interfaces"),
-            ("/devices/default/etherchannelinterfaces", "EtherChannels"),
-            ("/devices/default/bridgegroupinterfaces", "Bridge Groups"),
-            ("/object/securityzones", "Security Zones"),
-            ("/object/networks", "Address Objects"),
-            ("/object/networkgroups", "Address Groups"),
-            ("/object/tcpports", "TCP Port Objects"),
-            ("/object/udpports", "UDP Port Objects"),
-            ("/object/portgroups", "Port Groups"),
-            ("/devices/default/routing/virtualrouters", "Virtual Routers"),
-            ("/policy/accesspolicies/default/accessrules", "Access Rules"),
-        ]
-
-        print(f"\n{'='*60}")
-        print("ENDPOINT VALIDATION")
-        print(f"{'='*60}")
-
-        all_ok = True
-        for path, label in endpoints:
-            url = f"{self.base_url}{path}"
-            try:
-                resp = self.session.get(url, params={"limit": 1}, timeout=15)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    count = data.get("paging", {}).get("count", "?")
-                    print(f"  [OK]   {label:<25} ({count} objects)")
-                else:
-                    print(f"  [FAIL] {label:<25} HTTP {resp.status_code}")
-                    all_ok = False
-            except requests.exceptions.RequestException as e:
-                print(f"  [FAIL] {label:<25} {e}")
-                all_ok = False
-
-        print(f"{'='*60}")
-        if all_ok:
-            print("All endpoints reachable. Ready for import.")
-        else:
-            print("Some endpoints failed. Review errors above before importing.")
-        print(f"{'='*60}")
-        return all_ok
-    
-    def authenticate(self) -> bool:
-        """
-        Authenticate to the FTD FDM API and obtain access tokens.
-        
-        The FDM API uses OAuth 2.0 token-based authentication.
-        After successful authentication, tokens are stored for subsequent requests.
-        
-        Returns:
-            True if authentication successful, False otherwise
-        """
-        print(f"\n{'='*60}")
-        print(f"Authenticating to FTD at {self.host}")
-        print(f"{'='*60}")
-        
-        # Authentication endpoint
-        auth_url = f"{self.base_url}/fdm/token"
-        
-        # OAuth 2.0 grant type for password-based authentication
-        payload = {
-            "grant_type": "password",
-            "username": self.username,
-            "password": self.password
-        }
-        
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-        }
-        
-        try:
-            response = self.session.post(
-                auth_url,
-                json=payload,
-                headers=headers,
-                timeout=30
-            )
-            
-            if response.status_code == 200:
-                tokens = response.json()
-                self.access_token = tokens.get("access_token")
-                self.refresh_token = tokens.get("refresh_token")
-                
-                # Set the authorization header for all future requests
-                self.session.headers.update({
-                    "Authorization": f"Bearer {self.access_token}",
-                    "Content-Type": "application/json",
-                    "Accept": "application/json"
-                })
-                
-                print("Authentication successful")
-                return True
-            else:
-                print(f"[FAIL] Authentication failed: {response.status_code}")
-                print(f"  Response: {response.text}")
-                return False
-                
-        except requests.exceptions.RequestException as e:
-            print(f"FAIL Connection error: {e}")
-            return False
-    
     def create_network_object(self, obj: Dict, track_stats: bool = True) -> Tuple[bool, Optional[str]]:
         """
         Create a network object (address object) in FTD.
@@ -865,35 +738,6 @@ class FTDAPIClient:
                 return False, f"Could not resolve gateway object: {gw_name}"
         
         return True, resolved_route
-    
-    def get_default_virtual_router_id(self) -> Tuple[bool, Optional[str]]:
-        """Get the ID of the default virtual router (Global)."""
-        if hasattr(self, '_default_vr_id') and self._default_vr_id:
-            return True, self._default_vr_id
-        
-        endpoint = f"{self.base_url}/devices/default/routing/virtualrouters"
-        
-        try:
-            response = self.session.get(endpoint, timeout=30)
-            if response.status_code == 200:
-                data = response.json()
-                items = data.get('items', [])
-                
-                for vr in items:
-                    vr_name = vr.get('name', '').lower()
-                    if vr_name in ['global', 'default', 'global-vr']:
-                        self._default_vr_id = vr.get('id')
-                        return True, self._default_vr_id
-                
-                if items:
-                    self._default_vr_id = items[0].get('id')
-                    return True, self._default_vr_id
-                
-                return False, "No virtual routers found"
-            else:
-                return False, f"API error: {response.status_code}"
-        except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
-            return False, str(e)
 
     def create_static_route(self, route: Dict) -> Tuple[bool, Optional[str]]:
         """

@@ -99,29 +99,24 @@ This checklist tracks technical debt, performance hardening, and usability impro
 - [x] README operational docs refresh
   - Done: Performance/concurrency section, `--workers` guidance, API rate-limit troubleshooting.
 
-- [ ] Extract shared API base class for importer and cleanup
-  - Scope: `FTDAPIClient` and `FTDBulkDelete` share substantial duplicated code:
-    - `authenticate()` (~40 lines, identical)
-    - `get_default_virtual_router_id()` (~25 lines, identical)
-    - `validate_endpoints()` (~40 lines, identical)
-    - `compute_outcome()` (similar logic)
-  - Fix: Create `FTDBaseClient` in a shared module (e.g., `ftd_api_base.py`) with these methods,
-    then have both `FTDAPIClient` and `FTDBulkDelete` inherit from it.
+- [x] Extract shared API base class for importer and cleanup
+  - Done: Created `FTDBaseClient` in `FortiGateToFTDTool/ftd_api_base.py` with:
+    - `authenticate()` – unified OAuth 2.0 token flow
+    - `validate_endpoints()` – preflight probe of all FDM endpoints
+    - `get_default_virtual_router_id()` – cached VR discovery
+    - Shared `__init__` for host/session/token attributes
+  - Both `FTDAPIClient` and `FTDBulkDelete` now inherit from `FTDBaseClient`.
+  - `compute_outcome()` remains in each subclass (different stat structures).
   - Benefit: Single point of change for auth, endpoint validation, and VR discovery.
 
-- [ ] Use `write_json_file()` helper consistently in converter
-  - Location: `fortigate_converter.py` lines 666-814
-  - Issue: The `write_json_file()` helper exists at line 183 but is only used once (for metadata).
-    The remaining 11 JSON writes repeat the `if args.pretty / json.dump` pattern inline.
-  - Fix: Replace all inline `json.dump` blocks with `write_json_file(path, data, args.pretty)`.
-  - Benefit: ~100 lines removed, single place to change JSON output behavior.
+- [x] Use `write_json_file()` helper consistently in converter
+  - Done: Replaced all 12 inline `json.dump` blocks in `fortigate_converter.py` with
+    `write_json_file(path, data, args.pretty)`. ~90 lines removed.
 
-- [ ] Extract duplicated group-flattening logic to a shared base or utility
-  - Location: `address_group_converter.py` and `service_group_converter.py`
-  - Issue: `_build_group_lookup()`, `_is_group()`, and `_flatten_members()` are near-identical
-    (copy-pasted) between both modules.
-  - Fix: Extract to a `GroupFlatteningMixin` or shared function in `common.py`.
-  - Benefit: Single implementation to maintain and test.
+- [x] Extract duplicated group-flattening logic to a shared base or utility
+  - Done: Added `build_group_lookup()` and `flatten_group_members()` to `common.py`.
+    Removed `_build_group_lookup()`, `_is_group()`, and `_flatten_members()` from both
+    `address_group_converter.py` and `service_group_converter.py`.
 
 - [ ] Extract duplicated API create/error pattern in importer
   - Location: `ftd_api_importer.py`

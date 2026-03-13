@@ -628,114 +628,37 @@ Supported FTD Models:
                 existing_names.add(obj_name)
 
     try:
-        # ====================================================================
-        # Save address objects
-        # ====================================================================
-        with open(address_objects_output, 'w') as f:
-            if args.pretty:
-                json.dump(network_objects, f, indent=2)
-            else:
-                json.dump(network_objects, f)
+        write_json_file(address_objects_output, network_objects, args.pretty)
         print(f"[OK] Address objects saved to: {address_objects_output}")
-        
-        # ====================================================================
-        # Save address groups
-        # ====================================================================
-        with open(address_groups_output, 'w') as f:
-            if args.pretty:
-                json.dump(network_groups, f, indent=2)
-            else:
-                json.dump(network_groups, f)
+
+        write_json_file(address_groups_output, network_groups, args.pretty)
         print(f"[OK] Address groups saved to: {address_groups_output}")
-        
-        # ====================================================================
-        # Save service port objects
-        # ====================================================================
-        with open(service_objects_output, 'w') as f:
-            if args.pretty:
-                json.dump(port_objects, f, indent=2)
-            else:
-                json.dump(port_objects, f)
+
+        write_json_file(service_objects_output, port_objects, args.pretty)
         print(f"[OK] Service objects saved to: {service_objects_output}")
-        
-        # ====================================================================
-        # Save service port groups
-        # ====================================================================
-        with open(service_groups_output, 'w') as f:
-            if args.pretty:
-                json.dump(port_groups, f, indent=2)
-            else:
-                json.dump(port_groups, f)
+
+        write_json_file(service_groups_output, port_groups, args.pretty)
         print(f"[OK] Service groups saved to: {service_groups_output}")
-        
-        # ====================================================================
-        # Save access rules
-        # ====================================================================
-        with open(access_rules_output, 'w') as f:
-            if args.pretty:
-                json.dump(access_rules, f, indent=2)
-            else:
-                json.dump(access_rules, f)
+
+        write_json_file(access_rules_output, access_rules, args.pretty)
         print(f"[OK] Access rules saved to: {access_rules_output}")
-        
-        # ====================================================================
-        # Save static routes
-        # ====================================================================
-        with open(static_routes_output, 'w') as f:
-            if args.pretty:
-                json.dump(static_routes, f, indent=2)
-            else:
-                json.dump(static_routes, f)
+
+        write_json_file(static_routes_output, static_routes, args.pretty)
         print(f"[OK] Static routes saved to: {static_routes_output}")
-        
-        # ====================================================================
-        # Save physical interfaces (for PUT updates)
-        # ====================================================================
-        with open(physical_interfaces_output, 'w') as f:
-            if args.pretty:
-                json.dump(interface_results['physical_interfaces'], f, indent=2)
-            else:
-                json.dump(interface_results['physical_interfaces'], f)
+
+        write_json_file(physical_interfaces_output, interface_results['physical_interfaces'], args.pretty)
         print(f"[OK] Physical interfaces saved to: {physical_interfaces_output}")
-        
-        # ====================================================================
-        # Save subinterfaces (for POST creation)
-        # ====================================================================
-        with open(subinterfaces_output, 'w') as f:
-            if args.pretty:
-                json.dump(interface_results['subinterfaces'], f, indent=2)
-            else:
-                json.dump(interface_results['subinterfaces'], f)
+
+        write_json_file(subinterfaces_output, interface_results['subinterfaces'], args.pretty)
         print(f"[OK] Subinterfaces saved to: {subinterfaces_output}")
-        
-        # ====================================================================
-        # Save etherchannels (for POST creation)
-        # ====================================================================
-        with open(etherchannels_output, 'w') as f:
-            if args.pretty:
-                json.dump(interface_results['etherchannels'], f, indent=2)
-            else:
-                json.dump(interface_results['etherchannels'], f)
+
+        write_json_file(etherchannels_output, interface_results['etherchannels'], args.pretty)
         print(f"[OK] EtherChannels saved to: {etherchannels_output}")
-        
-        # ====================================================================
-        # Save bridge groups (for POST creation)
-        # ====================================================================
-        with open(bridge_groups_output, 'w') as f:
-            if args.pretty:
-                json.dump(interface_results['bridge_groups'], f, indent=2)
-            else:
-                json.dump(interface_results['bridge_groups'], f)
+
+        write_json_file(bridge_groups_output, interface_results['bridge_groups'], args.pretty)
         print(f"[OK] Bridge groups saved to: {bridge_groups_output}")
 
-        # ====================================================================
-        # Save security zones (for POST creation)
-        # ====================================================================
-        with open(security_zones_output, 'w') as f:
-            if args.pretty:
-                json.dump(interface_results.get('security_zones', []), f, indent=2)
-            else:
-                json.dump(interface_results.get('security_zones', []), f)
+        write_json_file(security_zones_output, interface_results.get('security_zones', []), args.pretty)
         print(f"[OK] Security zones saved to: {security_zones_output}")
         
         # ====================================================================
@@ -773,8 +696,7 @@ Supported FTD Models:
                 }
             }
         }
-        with open(summary_output, 'w') as f:
-            json.dump(summary, f, indent=2)
+        write_json_file(summary_output, summary, pretty=True)
         print(f"[OK] Summary saved to: {summary_output}")
         
     except IOError as e:
