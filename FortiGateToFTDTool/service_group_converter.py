@@ -46,7 +46,7 @@ NOTE ON MEMBER TYPES:
     - The type field is set generically (could be refined in post-processing)
 """
 
-from typing import Dict, List, Any, Set
+from typing import Dict, List, Any, Optional, Set
 
 from common import sanitize_name
 
@@ -64,10 +64,10 @@ class ServiceGroupConverter:
     6. Expanding services that were split into multiple FTD objects
     """
     
-    def __init__(self, fortigate_config: Dict[str, Any], 
-                 split_services: Set[str] = None, # pyright: ignore[reportArgumentType]
-                 service_name_mapping: Dict[str, List[str]] = None, # pyright: ignore[reportArgumentType]
-                 skipped_services: Set[str] = None): # pyright: ignore[reportArgumentType]
+    def __init__(self, fortigate_config: Dict[str, Any],
+                 split_services: Optional[Set[str]] = None,
+                 service_name_mapping: Optional[Dict[str, List[str]]] = None,
+                 skipped_services: Optional[Set[str]] = None):
         """
         Initialize the converter with FortiGate configuration data.
         
@@ -135,7 +135,7 @@ class ServiceGroupConverter:
         """
         return name in self.group_members
     
-    def _flatten_members(self, members: List[str], visited: set = None) -> List[str]: # pyright: ignore[reportArgumentType]
+    def _flatten_members(self, members: List[str], visited: Optional[set] = None) -> List[str]:
         """
         Recursively flatten a list of members, expanding any nested groups.
         
@@ -344,9 +344,9 @@ class ServiceGroupConverter:
         self.ftd_port_groups = port_groups
         return port_groups
     
-    def set_split_services(self, split_services: Set[str] = None,  # pyright: ignore[reportArgumentType]
-                           service_name_mapping: Dict[str, List[str]] = None, # pyright: ignore[reportArgumentType]
-                           skipped_services: Set[str] = None): # pyright: ignore[reportArgumentType]
+    def set_split_services(self, split_services: Optional[Set[str]] = None,
+                           service_name_mapping: Optional[Dict[str, List[str]]] = None,
+                           skipped_services: Optional[Set[str]] = None):
 
         """
         Update the service expansion information.

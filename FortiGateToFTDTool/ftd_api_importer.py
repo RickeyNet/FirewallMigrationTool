@@ -149,6 +149,26 @@ class FTDAPIClient:
         with self._stats_lock:
             self.stats[key] += 1
 
+    def compute_outcome(self) -> tuple:
+        """Determine overall run outcome from stats.
+
+        Returns:
+            (exit_code, outcome_label) where:
+                0, "SUCCESS"         – every item succeeded or was skipped
+                2, "PARTIAL_FAILURE" – at least one item failed but some succeeded/skipped
+                3, "ALL_FAILED"      – every attempted item failed (nothing created/updated/skipped)
+        """
+        total_failed = sum(v for k, v in self.stats.items() if k.endswith("_failed"))
+        total_ok = sum(
+            v for k, v in self.stats.items()
+            if k.endswith(("_created", "_updated", "_skipped"))
+        )
+        if total_failed == 0:
+            return 0, "SUCCESS"
+        if total_ok > 0:
+            return 2, "PARTIAL_FAILURE"
+        return 3, "ALL_FAILED"
+
     def _extract_error_message(self, response: requests.Response, default: str = "Unknown error") -> str:
         """Best-effort API error extraction with safe fallbacks."""
         try:
@@ -451,6 +471,57 @@ class FTDAPIClient:
         self._security_zone_cache.clear()
         self._network_object_cache.clear()
         self._caches_populated = False
+
+    def validate_endpoints(self) -> bool:
+        """Probe required FDM API endpoints and print a capability summary.
+
+        Each endpoint is tested with a lightweight GET (limit=1).  This is
+        intended as a fast preflight check before a long import run.
+
+        Returns:
+            True if all endpoints are reachable, False otherwise.
+        """
+        endpoints = [
+            ("/devices/default/interfaces", "Physical Interfaces"),
+            ("/devices/default/etherchannelinterfaces", "EtherChannels"),
+            ("/devices/default/bridgegroupinterfaces", "Bridge Groups"),
+            ("/object/securityzones", "Security Zones"),
+            ("/object/networks", "Address Objects"),
+            ("/object/networkgroups", "Address Groups"),
+            ("/object/tcpports", "TCP Port Objects"),
+            ("/object/udpports", "UDP Port Objects"),
+            ("/object/portgroups", "Port Groups"),
+            ("/devices/default/routing/virtualrouters", "Virtual Routers"),
+            ("/policy/accesspolicies/default/accessrules", "Access Rules"),
+        ]
+
+        print(f"\n{'='*60}")
+        print("ENDPOINT VALIDATION")
+        print(f"{'='*60}")
+
+        all_ok = True
+        for path, label in endpoints:
+            url = f"{self.base_url}{path}"
+            try:
+                resp = self.session.get(url, params={"limit": 1}, timeout=15)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    count = data.get("paging", {}).get("count", "?")
+                    print(f"  [OK]   {label:<25} ({count} objects)")
+                else:
+                    print(f"  [FAIL] {label:<25} HTTP {resp.status_code}")
+                    all_ok = False
+            except requests.exceptions.RequestException as e:
+                print(f"  [FAIL] {label:<25} {e}")
+                all_ok = False
+
+        print(f"{'='*60}")
+        if all_ok:
+            print("All endpoints reachable. Ready for import.")
+        else:
+            print("Some endpoints failed. Review errors above before importing.")
+        print(f"{'='*60}")
+        return all_ok
     
     def authenticate(self) -> bool:
         """
@@ -504,7 +575,7 @@ class FTDAPIClient:
                 print("Authentication successful")
                 return True
             else:
-                print(f"FAIL Authentication failed: {response.status_code}")
+                print(f"[FAIL] Authentication failed: {response.status_code}")
                 print(f"  Response: {response.text}")
                 return False
                 
@@ -618,7 +689,7 @@ class FTDAPIClient:
         elif obj_type == "udpportobject":
             endpoint = f"{self.base_url}/object/udpports"
         else:
-            self.stats["port_objects_failed"] += 1
+            self.record_stat("port_objects_failed")
             return False, f"Unknown port type: {obj_type}"
         
         try:
@@ -836,40 +907,40 @@ class FTDAPIClient:
         """
         success, vr_id = self.get_default_virtual_router_id()
         if not success:
-            self.stats["routes_failed"] += 1
+            self.record_stat("routes_failed")
             return False, f"Failed to get virtual router ID: {vr_id}"
         # Resolve all object references to include IDs and versions
         success, resolved_route = self.resolve_route_references(route)
         if not success:
-            self.stats["routes_failed"] += 1
+            self.record_stat("routes_failed")
             return False, f"Failed to resolve references: {resolved_route}"
-        
+
         endpoint = f"{self.base_url}/devices/default/routing/virtualrouters/{vr_id}/staticrouteentries"
-        
+
         try:
             response = self.session.post(endpoint, json=resolved_route, timeout=30)
-            
+
             if response.status_code in [200, 201]:
                 created_obj = response.json()
-                self.stats["routes_created"] += 1
+                self.record_stat("routes_created")
                 return True, created_obj.get("id")
             elif response.status_code == 422:
                 error_data = response.json()
                 error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
-                
+
                 if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
-                    self.stats["routes_skipped"] += 1
+                    self.record_stat("routes_skipped")
                     return True, f"SKIPPED: {error_msg}"
                 else:
-                    self.stats["routes_failed"] += 1
+                    self.record_stat("routes_failed")
                     return False, error_msg
             else:
-                self.stats["routes_failed"] += 1
+                self.record_stat("routes_failed")
                 error_msg = response.text
                 return False, error_msg
-                
+
         except requests.exceptions.RequestException as e:
-            self.stats["routes_failed"] += 1
+            self.record_stat("routes_failed")
             return False, str(e)
     
     def create_access_rule(self, rule: Dict) -> Tuple[bool, Optional[str]]:
@@ -886,28 +957,28 @@ class FTDAPIClient:
         
         try:
             response = self.session.post(endpoint, json=rule, timeout=30)
-            
+
             if response.status_code in [200, 201]:
                 created_obj = response.json()
-                self.stats["rules_created"] += 1
+                self.record_stat("rules_created")
                 return True, created_obj.get("id")
             elif response.status_code == 422:
                 error_data = response.json()
                 error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
-                
+
                 if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
-                    self.stats["rules_skipped"] += 1
+                    self.record_stat("rules_skipped")
                     return True, f"SKIPPED: {error_msg}"
                 else:
-                    self.stats["rules_failed"] += 1
+                    self.record_stat("rules_failed")
                     return False, error_msg
             else:
-                self.stats["rules_failed"] += 1
+                self.record_stat("rules_failed")
                 error_msg = response.text
                 return False, error_msg
-                
+
         except requests.exceptions.RequestException as e:
-            self.stats["rules_failed"] += 1
+            self.record_stat("rules_failed")
             return False, str(e)
     
     def get_interface_by_name(self, name: str, iface_type: Optional[str] = None) -> Tuple[bool, Union[Dict[str, Any], str]]:
@@ -2066,7 +2137,10 @@ class FTDAPIClient:
         print(f"  Created: {self.stats['rules_created']}")
         print(f"  Skipped: {self.stats['rules_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['rules_failed']}")
-        print(f"\n{'='*60}")
+
+        exit_code, outcome = self.compute_outcome()
+        print(f"\nOutcome: {outcome} (exit code {exit_code})")
+        print(f"{'='*60}")
 
 
 def load_json_file(filename: str) -> Optional[List[Dict]]:
@@ -2919,7 +2993,7 @@ def import_access_rules(client: FTDAPIClient, filename: str) -> bool:
         
         success, result = client.create_access_rule(rule)
         if success:
-            print("[Success!]")
+            print("[OK]")
         else:
             print(f"[FAIL {result}]")
             all_success = False
@@ -2971,12 +3045,18 @@ Examples:
                        help='Enable debug output (shows API payloads)')
     parser.add_argument("--metadata-file", default="",
                        help="Path to *_metadata.json generated by fortigate_converter.py (used for model-specific behavior).",)
-    parser.add_argument('--workers', type=int, default=6,
-                       help='Max concurrent workers for address/service object imports (default: 6)')
+    def _positive_int(value: str) -> int:
+        ivalue = int(value)
+        if ivalue < 1 or ivalue > 32:
+            raise argparse.ArgumentTypeError(f"workers must be between 1 and 32, got {ivalue}")
+        return ivalue
+    parser.add_argument('--workers', type=_positive_int, default=6,
+                       help='Max concurrent workers for address/service object imports (1-32, default: 6)')
     parser.add_argument('--json-report', default='',
                        help='Write run summary to a JSON report file')
+    parser.add_argument('--validate-only', action='store_true',
+                       help='Authenticate and probe all API endpoints without importing anything')
 
-    
     # Selective import options - allows importing only specific object types
     parser.add_argument('--only-physical-interfaces', action='store_true',
                        help='Update only physical interfaces')
@@ -3062,9 +3142,14 @@ Examples:
     
     # Authenticate
     if not client.authenticate():
-        print("\nFAIL Authentication failed. Exiting.")
+        print("\n[FAIL] Authentication failed. Exiting.")
         return 1
-    
+
+    # Validate-only mode: probe endpoints and exit
+    if args.validate_only:
+        ok = client.validate_endpoints()
+        return 0 if ok else 1
+
     # Populate required caches before importing interfaces
     client.populate_physical_interface_cache()
     
@@ -3206,22 +3291,22 @@ Examples:
         # Step 6: Create security zones (required for access rules)
         record_phase("Security Zones", import_security_zones, client, f"{args.base}_security_zones.json")
 
-        # Step 5: Import address objects
+        # Step 7: Import address objects
         record_phase("Address Objects", import_address_objects, client, f"{args.base}_address_objects.json", args.workers)
-        
-        # Step 6: Import address groups
+
+        # Step 8: Import address groups
         record_phase("Address Groups", import_address_groups, client, f"{args.base}_address_groups.json")
-        
-        # Step 7: Import service objects
+
+        # Step 9: Import service objects
         record_phase("Service Objects", import_service_objects, client, f"{args.base}_service_objects.json", args.workers)
-        
-        # Step 8: Import service groups
+
+        # Step 10: Import service groups
         record_phase("Service Groups", import_service_groups, client, f"{args.base}_service_groups.json")
-        
-        # Step 9: Import static routes
+
+        # Step 11: Import static routes
         record_phase("Static Routes", import_static_routes, client, f"{args.base}_static_routes.json")
-        
-        # Step 10: Import access rules
+
+        # Step 12: Import access rules
         record_phase("Access Rules", import_access_rules, client, f"{args.base}_access_rules.json")
 
     if phase_timings:
@@ -3252,6 +3337,8 @@ Examples:
         print("  2. Deploy manually from the FDM web interface")
         print(f"{'='*60}")
 
+    exit_code, outcome = client.compute_outcome()
+
     if args.json_report:
         report_payload = {
             "host": args.host,
@@ -3274,13 +3361,15 @@ Examples:
             "stats": client.stats,
             "phase_timings": phase_timings,
             "total_seconds": total_seconds,
+            "exit_code": exit_code,
+            "outcome": outcome,
         }
         if write_json_report(args.json_report, report_payload):
             print(f"[OK] JSON report written: {args.json_report}")
         else:
             print(f"[FAIL] Could not write JSON report: {args.json_report}")
-    
-    return 0
+
+    return exit_code
 
 
 if __name__ == '__main__':

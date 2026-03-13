@@ -39,7 +39,7 @@ IMPORTANT NOTES:
     - The 'type' is always 'networkobject' for address group members
 """
 
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 from common import sanitize_name
 
@@ -56,7 +56,7 @@ class AddressGroupConverter:
     5. Handling edge cases (empty groups, single vs multiple members)
     """
     
-    def __init__(self, fortigate_config: Dict[str, Any], address_object_names: set = None): # pyright: ignore[reportArgumentType]
+    def __init__(self, fortigate_config: Dict[str, Any], address_object_names: Optional[set] = None):
         """
         Initialize the converter with FortiGate configuration data.
         
@@ -115,7 +115,7 @@ class AddressGroupConverter:
         """
         return name in self.group_members
     
-    def _flatten_members(self, members: List[str], visited: set = None) -> List[str]: # pyright: ignore[reportArgumentType]
+    def _flatten_members(self, members: List[str], visited: Optional[set] = None) -> List[str]:
         """
         Recursively flatten a list of members, expanding any nested groups.
         
@@ -275,40 +275,6 @@ class AddressGroupConverter:
         return network_groups
 
 
-# =============================================================================
-# ADDITIONAL HELPER METHODS (if needed in the future)
-# =============================================================================
-
-    def _validate_group(self, group_name: str, properties: Dict) -> bool:
-        """
-        Validate that a group has all required fields.
-        This is an optional validation method that could be called before conversion.
-        
-        Args:
-            group_name: Name of the group being validated
-            properties: Dictionary of group properties
-            
-        Returns:
-            True if valid, False otherwise
-        """
-        # Check if the group has members
-        if 'member' not in properties:
-            print(f"  Warning: Group '{group_name}' has no members")
-            return False
-        
-        members = properties['member']
-        
-        # Check if members is empty
-        if isinstance(members, list) and len(members) == 0:
-            print(f"  Warning: Group '{group_name}' has empty member list")
-            return False
-        
-        if isinstance(members, str) and members.strip() == '':
-            print(f"  Warning: Group '{group_name}' has empty member string")
-            return False
-        
-        return True
-    
     def get_group_count(self) -> int:
         """
         Get the number of address groups that were converted.

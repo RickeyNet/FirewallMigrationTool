@@ -58,5 +58,9 @@ def run_indexed_thread_pool(max_workers: int, items: Iterable[T], worker: Callab
     """Execute a worker for each indexed item using a bounded thread pool."""
     workers = max(1, max_workers)
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = []
         for idx, item in enumerate(items):
-            executor.submit(worker, idx, item)
+            futures.append(executor.submit(worker, idx, item))
+        # Propagate any unhandled worker exceptions
+        for future in concurrent.futures.as_completed(futures):
+            future.result()

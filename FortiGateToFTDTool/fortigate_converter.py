@@ -316,41 +316,6 @@ Supported FTD Models:
         
         print("[OK] YAML file loaded and cleaned successfully")
 
-
-
-
-# ## **Which Method to Use?**
-
-# ### **Method 1 (Simple - First Solution):**
-# - Use this if the YAML file **parses successfully** but those sections cause problems later
-# - Removes sections **after** parsing
-# - Easier to implement
-
-# ### **Method 2 (Robust - Second Solution):**
-# - Use this if those sections **prevent YAML parsing** entirely
-# - Removes sections **before** parsing
-# - More reliable for badly-formatted sections
-
-# ---
-
-# ## **What This Does:**
-
-# ### **Sections Removed:**
-# 1. **`system_automation-trigger`** - Contains escape characters like `\'` in strings
-# 2. **`dlp_filepattern`** - Contains wildcard patterns like `*.bat` that confuse YAML
-# 3. **`system_automation-action`** - May have similar formatting issues
-# 4. **`dlp_sensor`** - DLP policies (not needed for FTD conversion)
-# 5. **`dlp_settings`** - DLP settings (not needed for FTD conversion)
-
-# ### **Console Output:**
-# ```
-# Loading FortiGate configuration from: fortigate.yaml
-#   Pre-processing YAML file to remove problematic sections...
-#     Skipping section: system_automation-trigger:
-#     Skipping section: dlp_filepattern:
-#   [OK] Pre-processing complete
-# [OK] YAML file loaded and cleaned successfully
-     
         # ================================================================
         # Remove problematic sections that cause parsing errors
         # ================================================================
@@ -474,8 +439,7 @@ Supported FTD Models:
         'bridge_groups': interface_results.get('bridge_groups', [])
     }
     
-    # Pass debug flag if available
-    debug_mode = args.debug if 'args' in locals() and hasattr(args, 'debug') else False
+    debug_mode = getattr(args, 'debug', False)
     
     route_converter = RouteConverter(
         fortigate_config=fg_config,
@@ -582,7 +546,7 @@ Supported FTD Models:
     # Update the policy converter with service, address, and interface mappings
     policy_converter.set_split_services(
         split_services=split_services,
-        service_name_mapping=service_name_mapping, # pyright: ignore[reportArgumentType]
+        service_name_mapping=service_name_mapping,
         skipped_services=skipped_services,
         address_groups=address_groups,
         service_groups=service_groups,

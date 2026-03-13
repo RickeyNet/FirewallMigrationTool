@@ -155,6 +155,44 @@ def test_import_service_objects_hard_failure_exhausts_attempts(monkeypatch):
     assert client._attempts["svc-hard-fail"] == 1
 
 
+def test_importer_compute_outcome_success():
+    """All items created/skipped, none failed → exit 0."""
+    client = _FakeImporterClient()
+    client.stats["address_objects_created"] = 5
+    client.stats["address_objects_skipped"] = 2
+    client.stats["address_objects_failed"] = 0
+    client.stats["port_objects_created"] = 3
+    # Graft compute_outcome from the real class
+    client.compute_outcome = ftd_api_importer.FTDAPIClient.compute_outcome.__get__(client)
+
+    code, label = client.compute_outcome()
+    assert code == 0
+    assert label == "SUCCESS"
+
+
+def test_importer_compute_outcome_partial_failure():
+    """Some items succeeded, some failed → exit 2."""
+    client = _FakeImporterClient()
+    client.stats["address_objects_created"] = 3
+    client.stats["address_objects_failed"] = 2
+    client.compute_outcome = ftd_api_importer.FTDAPIClient.compute_outcome.__get__(client)
+
+    code, label = client.compute_outcome()
+    assert code == 2
+    assert label == "PARTIAL_FAILURE"
+
+
+def test_importer_compute_outcome_all_failed():
+    """Every item failed, nothing succeeded → exit 3."""
+    client = _FakeImporterClient()
+    client.stats["address_objects_failed"] = 5
+    client.compute_outcome = ftd_api_importer.FTDAPIClient.compute_outcome.__get__(client)
+
+    code, label = client.compute_outcome()
+    assert code == 3
+    assert label == "ALL_FAILED"
+
+
 class _FakeBulkDelete(ftd_api_cleanup.FTDBulkDelete):
     def __init__(self):
         super().__init__(host="dummy", username="user", password="pass", debug=False)
@@ -224,3 +262,107 @@ def test_cleanup_static_routes_retries_on_503(monkeypatch):
     assert success is True
     assert client._delete_attempts["r1"] == 2
     assert client._delete_attempts["r2"] == 1
+
+
+def test_cleanup_compute_outcome_success(monkeypatch):
+    """All deletions succeeded → exit 0."""
+    monkeypatch.setattr(concurrency_utils.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(concurrency_utils.random, "uniform", lambda _a, _b: 0.0)
+
+    client = _FakeBulkDelete()
+    client.delete_all_custom_objects("/object/networks", "Address Objects", False, 2, 3)
+
+    code, label = client.compute_outcome()
+    assert code == 0
+    assert label == "SUCCESS"
+
+
+def test_cleanup_compute_outcome_partial_failure():
+    """Some items deleted, some failed → exit 2."""
+    client = _FakeBulkDelete()
+    client.stats["deleted"] = 3
+    client.stats["failed"] = 2
+
+    code, label = client.compute_outcome()
+    assert code == 2
+    assert label == "PARTIAL_FAILURE"
+
+
+def test_cleanup_compute_outcome_all_failed():
+    """No items deleted, all failed → exit 3."""
+    client = _FakeBulkDelete()
+    client.stats["deleted"] = 0
+    client.stats["failed"] = 5
+
+    code, label = client.compute_outcome()
+    assert code == 3
+    assert label == "ALL_FAILED"
+
+
+# --- validate_endpoints tests ---
+
+class _FakeResponse:
+    def __init__(self, status_code, json_data=None):
+        self.status_code = status_code
+        self._json = json_data or {}
+
+    def json(self):
+        return self._json
+
+
+class _FakeSession:
+    """Minimal mock that records GET calls and returns canned responses."""
+    def __init__(self, responses=None):
+        self.calls = []
+        self._responses = responses or {}
+
+    def get(self, url, params=None, timeout=None):
+        self.calls.append(url)
+        # Return specific response if URL matches, else 200 OK
+        for pattern, resp in self._responses.items():
+            if pattern in url:
+                return resp
+        return _FakeResponse(200, {"paging": {"count": 5}})
+
+
+def test_importer_validate_endpoints_all_ok():
+    """All endpoints return 200 → validate_endpoints returns True."""
+    client = ftd_api_importer.FTDAPIClient.__new__(ftd_api_importer.FTDAPIClient)
+    client.base_url = "https://fake/api/fdm/latest"
+    client.session = _FakeSession()
+
+    assert client.validate_endpoints() is True
+    # Should have probed 11 endpoints
+    assert len(client.session.calls) == 11
+
+
+def test_importer_validate_endpoints_partial_fail():
+    """One endpoint returns 403 → validate_endpoints returns False."""
+    client = ftd_api_importer.FTDAPIClient.__new__(ftd_api_importer.FTDAPIClient)
+    client.base_url = "https://fake/api/fdm/latest"
+    client.session = _FakeSession(responses={
+        "/object/networks": _FakeResponse(403),
+    })
+
+    assert client.validate_endpoints() is False
+
+
+def test_cleanup_validate_endpoints_all_ok():
+    """All endpoints return 200 → validate_endpoints returns True."""
+    client = ftd_api_cleanup.FTDBulkDelete.__new__(ftd_api_cleanup.FTDBulkDelete)
+    client.base_url = "https://fake/api/fdm/latest"
+    client.session = _FakeSession()
+
+    assert client.validate_endpoints() is True
+    assert len(client.session.calls) == 11
+
+
+def test_cleanup_validate_endpoints_partial_fail():
+    """One endpoint returns 500 → validate_endpoints returns False."""
+    client = ftd_api_cleanup.FTDBulkDelete.__new__(ftd_api_cleanup.FTDBulkDelete)
+    client.base_url = "https://fake/api/fdm/latest"
+    client.session = _FakeSession(responses={
+        "/object/tcpports": _FakeResponse(500),
+    })
+
+    assert client.validate_endpoints() is False

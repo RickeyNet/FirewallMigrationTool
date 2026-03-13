@@ -59,7 +59,7 @@ IMPORTANT NOTES:
     - ruleId is assigned sequentially starting from 1
 """
 
-from typing import Dict, List, Any, Set, Tuple
+from typing import Dict, List, Any, Optional, Set, Tuple
 
 from common import sanitize_name
 
@@ -77,15 +77,15 @@ class PolicyConverter:
     6. Converting to FTD's accessrule format
     """
     
-    def __init__(self, fortigate_config: Dict[str, Any], 
-                 split_services: Set[str] = None, # pyright: ignore[reportArgumentType]
-                 service_name_mapping: Dict[str, List[Tuple[str, str]]] = None, # pyright: ignore[reportArgumentType]
-                 skipped_services: Set[str] = None, # pyright: ignore[reportArgumentType]
-                 address_name_mapping: Dict[str, List[str]] = None, # pyright: ignore[reportArgumentType]
-                 address_group_members: Dict[str, List[str]] = None, # pyright: ignore[reportArgumentType]
-                 address_groups: Set[str] = None, # pyright: ignore[reportArgumentType]
-                 service_groups: Set[str] = None, # pyright: ignore[reportArgumentType]
-                 interface_name_mapping: Dict[str, str] = None): # pyright: ignore[reportArgumentType]
+    def __init__(self, fortigate_config: Dict[str, Any],
+                 split_services: Optional[Set[str]] = None,
+                 service_name_mapping: Optional[Dict[str, List[Tuple[str, str]]]] = None,
+                 skipped_services: Optional[Set[str]] = None,
+                 address_name_mapping: Optional[Dict[str, List[str]]] = None,
+                 address_group_members: Optional[Dict[str, List[str]]] = None,
+                 address_groups: Optional[Set[str]] = None,
+                 service_groups: Optional[Set[str]] = None,
+                 interface_name_mapping: Optional[Dict[str, str]] = None):
         """
         Initialize the converter with FortiGate configuration data.
         
@@ -528,14 +528,14 @@ class PolicyConverter:
         
         return port_objects
     
-    def set_split_services(self, split_services: Set[str] = None, # pyright: ignore[reportArgumentType]
-                           service_name_mapping: Dict[str, List[Tuple[str, str]]] = None, # pyright: ignore[reportArgumentType]
-                           skipped_services: Set[str] = None, # pyright: ignore[reportArgumentType]
-                           address_name_mapping: Dict[str, str] = None, # pyright: ignore[reportArgumentType]
-                           address_group_members: Dict[str, List[str]] = None, # pyright: ignore[reportArgumentType]
-                           address_groups: Set[str] = None, # pyright: ignore[reportArgumentType]
-                           service_groups: Set[str] = None, # pyright: ignore[reportArgumentType]
-                           interface_name_mapping: Dict[str, str] = None): # pyright: ignore[reportArgumentType]
+    def set_split_services(self, split_services: Optional[Set[str]] = None,
+                           service_name_mapping: Optional[Dict[str, List[Tuple[str, str]]]] = None,
+                           skipped_services: Optional[Set[str]] = None,
+                           address_name_mapping: Optional[Dict[str, str]] = None,
+                           address_group_members: Optional[Dict[str, List[str]]] = None,
+                           address_groups: Optional[Set[str]] = None,
+                           service_groups: Optional[Set[str]] = None,
+                           interface_name_mapping: Optional[Dict[str, str]] = None):
         """
         Update the service and address mappings.
         
