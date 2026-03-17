@@ -1,0 +1,9 @@
+{
+  "include": [
+    "FortiGateToFTDTool",
+    "tests"
+  ],
+  "extraPaths": [
+    "FortiGateToFTDTool"
+  ]
+}

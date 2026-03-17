@@ -39,35 +39,9 @@ IMPORTANT NOTES:
     - The 'type' is always 'networkobject' for address group members
 """
 
-import re
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
-def sanitize_name(name: str) -> str:
-    """
-    Sanitize object names for FTD compatibility.
-    
-    FTD only allows alphanumeric characters and underscores in object names.
-    This function replaces any other character with an underscore.
-    
-    Args:
-        name: Original object name (may contain spaces, dashes, etc.)
-        
-    Returns:
-        Sanitized name with only alphanumeric characters and underscores
-    """
-    if name is None:
-        return ""
-    # Convert to string in case it's not
-    name = str(name)
-    # Replace any non-alphanumeric character (except underscore) with underscore
-    sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', name)
-    # Remove consecutive underscores
-    sanitized = re.sub(r'_+', '_', sanitized)
-    # Remove leading/trailing underscores
-    sanitized = sanitized.strip('_')
-    return sanitized
-
-
+from common import sanitize_name, build_group_lookup, flatten_group_members
 
 
 class AddressGroupConverter:
@@ -82,7 +56,7 @@ class AddressGroupConverter:
     5. Handling edge cases (empty groups, single vs multiple members)
     """
     
-    def __init__(self, fortigate_config: Dict[str, Any], address_object_names: set = None): # pyright: ignore[reportArgumentType]
+    def __init__(self, fortigate_config: Dict[str, Any], address_object_names: Optional[set] = None):
         """
         Initialize the converter with FortiGate configuration data.
         
@@ -103,90 +77,9 @@ class AddressGroupConverter:
         self.ftd_network_groups = []
         
         # Build a lookup of group name -> member list for flattening nested groups
-        self.group_members = {}
-        self._build_group_lookup()
-    
-    def _build_group_lookup(self):
-        """
-        Build a lookup dictionary of group names to their members.
-        This is used to flatten nested groups.
-        """
-        address_groups = self.fg_config.get('firewall_addrgrp', [])
-        
-        for group_dict in address_groups:
-            group_name = list(group_dict.keys())[0]
-            properties = group_dict[group_name]
-            
-            # Get members and normalize to list
-            members_raw = properties.get('member', [])
-            if isinstance(members_raw, str):
-                members_list = [members_raw]
-            elif isinstance(members_raw, list):
-                members_list = members_raw
-            else:
-                members_list = []
-            
-            # Store with sanitized name
-            self.group_members[sanitize_name(group_name)] = [sanitize_name(m) for m in members_list]
-    
-    def _is_group(self, name: str) -> bool:
-        """
-        Check if a name refers to a group (not an individual object).
-        
-        Args:
-            name: The sanitized object/group name to check
-            
-        Returns:
-            True if the name is a group, False if it's an individual object
-        """
-        return name in self.group_members
-    
-    def _flatten_members(self, members: List[str], visited: set = None) -> List[str]: # pyright: ignore[reportArgumentType]
-        """
-        Recursively flatten a list of members, expanding any nested groups.
-        
-        Args:
-            members: List of member names (may include group names)
-            visited: Set of already-visited group names (prevents infinite loops)
-            
-        Returns:
-            List of individual object names (no groups)
-        """
-        if visited is None:
-            visited = set()
-        
-        flattened = []
-        
-        for member in members:
-            if self._is_group(member):
-                # This member is a group - expand it
-                if member in visited:
-                    # Circular reference - skip to prevent infinite loop
-                    print(f"    Warning: Circular reference detected for group '{member}', skipping")
-                    continue
-                
-                # Mark as visited
-                visited.add(member)
-                
-                # Get the group's members and recursively flatten
-                nested_members = self.group_members.get(member, [])
-                expanded = self._flatten_members(nested_members, visited)
-                
-                print(f"    Flattening nested group '{member}' -> {len(expanded)} objects")
-                flattened.extend(expanded)
-            else:
-                # This is an individual object - add it
-                flattened.append(member)
-        
-        # Remove duplicates while preserving order
-        seen = set()
-        unique_flattened = []
-        for item in flattened:
-            if item not in seen:
-                seen.add(item)
-                unique_flattened.append(item)
-        
-        return unique_flattened
+        self.group_members = build_group_lookup(
+            self.fg_config.get('firewall_addrgrp', [])
+        )
     
     def convert(self) -> List[Dict]:
         """
@@ -252,7 +145,7 @@ class AddressGroupConverter:
             # ================================================================
             # FTD does NOT allow groups inside groups, so we need to expand
             # any nested groups into their individual objects
-            flattened_members = self._flatten_members(members_list)
+            flattened_members = flatten_group_members(members_list, self.group_members)
             
             # ================================================================
             # STEP 2E: Convert members to FTD object format
@@ -301,40 +194,6 @@ class AddressGroupConverter:
         return network_groups
 
 
-# =============================================================================
-# ADDITIONAL HELPER METHODS (if needed in the future)
-# =============================================================================
-
-    def _validate_group(self, group_name: str, properties: Dict) -> bool:
-        """
-        Validate that a group has all required fields.
-        This is an optional validation method that could be called before conversion.
-        
-        Args:
-            group_name: Name of the group being validated
-            properties: Dictionary of group properties
-            
-        Returns:
-            True if valid, False otherwise
-        """
-        # Check if the group has members
-        if 'member' not in properties:
-            print(f"  Warning: Group '{group_name}' has no members")
-            return False
-        
-        members = properties['member']
-        
-        # Check if members is empty
-        if isinstance(members, list) and len(members) == 0:
-            print(f"  Warning: Group '{group_name}' has empty member list")
-            return False
-        
-        if isinstance(members, str) and members.strip() == '':
-            print(f"  Warning: Group '{group_name}' has empty member string")
-            return False
-        
-        return True
-    
     def get_group_count(self) -> int:
         """
         Get the number of address groups that were converted.

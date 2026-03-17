@@ -9,9 +9,10 @@
 5. [Phase 1: Converting FortiGate Configuration](#phase-1-converting-fortigate-configuration)
 6. [Phase 2: Importing to FTD](#phase-2-importing-to-ftd)
 7. [Phase 3: Cleanup (Optional)](#phase-3-cleanup-optional)
-8. [Troubleshooting](#troubleshooting)
-9. [Best Practices](#best-practices)
-10. [Appendix](#appendix)
+8. [Performance and Concurrency](#performance-and-concurrency)
+9. [Troubleshooting](#troubleshooting)
+10. [Best Practices](#best-practices)
+11. [Appendix](#appendix)
 
 ---
 
@@ -220,12 +221,18 @@ python -c "import yaml, requests, urllib3; print('All libraries installed!')"
     python ftd_api_importer.py --host IP -u admin --only-security-zones
 
 □ Import objects and rules:
-    python ftd_api_importer.py --host IP -u admin
+  # Use --workers to control concurrent address/service object creation (default 6)
+  python ftd_api_importer.py --host IP -u admin --workers 6
 
 □ Deploy configuration in FDM
 □ Verify objects in FDM web interface
 □ Test traffic flows
 ```
+
+**Multithreaded imports:**
+- Applies to address objects and service objects in both full import mode and selective/single-file runs.
+- Flag: `--workers N` (default 6). Tune down if the FTD API rate-limits or up modestly if latency is high.
+- Behavior: bounded ThreadPool with jittered backoff on 429/5xx/timeouts; still idempotent (skips existing).
 
 ### If Something Goes Wrong
 
@@ -609,6 +616,8 @@ python ftd_api_importer.py --host 192.168.1.1 -u admin --deploy
 | `--deploy`        | Deploy changes after import                                  |
 | `--skip-verify`   | Skip SSL certificate verification (default: true)            |
 | `--debug`         | Enable debug output showing API payloads                     |
+| `--workers`       | Max concurrent threads for address/service imports (default: 6) |
+| `--json-report`   | Write run summary to a JSON file                             |
 | `--only-*`        | Import only specific object types                            |
 | `--file`          | Import specific JSON file                                    |
 | `--type`          | Object type for `--file`                                     |
@@ -686,6 +695,101 @@ python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-bridge-groups
 python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-subinterfaces
 python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-etherchannels
 python ftd_api_cleanup.py --host 192.168.1.1 -u admin --reset-physical-interfaces
+```
+
+---
+
+## Performance and Concurrency
+
+### What Is Multithreaded vs Sequential
+
+Not all operations run in parallel. The table below summarizes which paths use a thread pool and which run one-at-a-time.
+
+#### Importer (`ftd_api_importer.py`)
+
+| Operation | Execution | Notes |
+|-----------|-----------|-------|
+| Address objects | **Multithreaded** | Bounded thread pool via `--workers` |
+| Service objects | **Multithreaded** | Bounded thread pool via `--workers` |
+| Address groups | Sequential | 0.2 s sleep between items |
+| Service groups | Sequential | |
+| Physical interfaces | Sequential | PUT updates to existing interfaces |
+| EtherChannels | Sequential | |
+| Bridge groups | Sequential | |
+| Subinterfaces | Sequential | |
+| Security zones | Sequential | |
+| Static routes | Sequential | 0.2 s sleep between items |
+| Access rules | Sequential | Order-dependent |
+
+#### Cleanup (`ftd_api_cleanup.py`)
+
+| Operation | Execution | Notes |
+|-----------|-----------|-------|
+| Custom object deletion | **Multithreaded** | Bounded thread pool via `--workers` |
+| Static route deletion | **Multithreaded** | Bounded thread pool via `--workers` |
+| Subinterface deletion | Sequential | 0.2 s sleep between items |
+| EtherChannel deletion | Sequential | |
+| Bridge group deletion | Sequential | |
+| Physical interface reset | Sequential | Resets to defaults, cannot delete |
+
+### The `--workers` Flag
+
+Both the importer and cleanup accept `--workers N` to control the size of the thread pool.
+
+| Setting | Value |
+|---------|-------|
+| Default | **6** |
+| Minimum | 1 (enforced at runtime) |
+
+**Guidance:**
+
+- **Start with the default (6).** This is a safe baseline for most FTD appliances.
+- **Lower to 2-3** if you see frequent 429 (Too Many Requests) or 503 (Service Unavailable) responses. The appliance is telling you to slow down.
+- **Raise to 8-10** only if round-trip latency to the FTD is high (e.g., remote management over VPN) and the appliance is not rate-limiting.
+- Going above 10 is rarely beneficial; the FDM API serializes writes internally.
+
+**Examples:**
+
+```bash
+# Default (6 workers)
+python ftd_api_importer.py --host 10.0.0.1 -u admin
+
+# Conservative (high rate-limit environment)
+python ftd_api_importer.py --host 10.0.0.1 -u admin --workers 2
+
+# Aggressive (high-latency link, powerful appliance)
+python ftd_api_importer.py --host 10.0.0.1 -u admin --workers 10
+
+# Cleanup with fewer workers
+python ftd_api_cleanup.py --host 10.0.0.1 -u admin --delete-all --workers 3
+```
+
+### Retry and Backoff Behavior
+
+All multithreaded operations use automatic retry with exponential backoff and jitter (via `concurrency_utils.py`).
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| Max attempts | 4 | Total tries per API call (1 initial + 3 retries) |
+| Base backoff | 0.3 s | Initial sleep after first failure |
+| Max jitter | 0.25 s | Random delay added to each backoff to avoid thundering herd |
+| Backoff growth | 2x | Doubles after each retry: 0.3 s → 0.6 s → 1.2 s |
+
+**Retryable (transient) errors** are detected by matching the error message against these tokens (case-insensitive):
+`429`, `too many`, `rate limit`, `timeout`, `temporarily`, `503`, `504`
+
+Non-transient errors (e.g., 422 validation failures) fail immediately without retry.
+
+### JSON Report Output
+
+Both the importer and cleanup support `--json-report <path>` to write a machine-readable summary after a run. This is useful for CI/CD pipelines or scripted workflows.
+
+```bash
+# Importer report
+python ftd_api_importer.py --host 10.0.0.1 -u admin --json-report import_results.json
+
+# Cleanup report
+python ftd_api_cleanup.py --host 10.0.0.1 -u admin --delete-all --json-report cleanup_results.json
 ```
 
 ---
@@ -813,6 +917,45 @@ API Error 422: Validation failed
 1. Enable debug mode: `--debug`
 2. Check the error message for specific field issues
 3. Verify JSON file format matches FTD API requirements
+
+### API Rate-Limit and Transient Errors
+
+**Problem: Frequent 429 Too Many Requests**
+```
+[FAIL] address object "Server1": 429 Too Many Requests
+```
+
+**Solutions:**
+1. Reduce worker count: `--workers 2` or `--workers 3`
+2. The tool retries transient errors automatically (up to 4 attempts with exponential backoff), but sustained 429s mean you are exceeding the appliance's capacity
+3. For very large imports (500+ objects), consider importing in batches using `--file`
+
+---
+
+**Problem: 503 Service Unavailable or 504 Gateway Timeout**
+```
+[FAIL] service object "HTTPS_TCP": 503 Service Temporarily Unavailable
+```
+
+**Solutions:**
+1. The appliance may be under heavy load — wait a few minutes and retry
+2. Reduce worker count: `--workers 2`
+3. Check FDM System → Task Status for pending deployments or other background operations
+4. If persistent, verify the appliance is healthy (CPU/memory usage)
+
+---
+
+**Problem: Timeout errors during large imports**
+```
+[FAIL] address object "LargeNet": timeout
+```
+
+**Solutions:**
+1. These are automatically retried (up to 4 attempts)
+2. If frequent, the management network may have latency or packet loss — check connectivity
+3. Reduce parallelism with `--workers 2` to lower concurrent load on the appliance
+
+---
 
 ### Deployment Issues
 
@@ -1045,6 +1188,12 @@ python ftd_api_importer.py --host IP -u admin --file custom.json --type address-
 # Import and deploy
 python ftd_api_importer.py --host IP -u admin --deploy
 
+# Custom worker count
+python ftd_api_importer.py --host IP -u admin --workers 3
+
+# Generate JSON report
+python ftd_api_importer.py --host IP -u admin --json-report import_results.json
+
 # Debug mode
 python ftd_api_importer.py --host IP -u admin --debug
 
@@ -1075,6 +1224,12 @@ python ftd_api_cleanup.py --host IP -u admin --delete-all
 # Delete and deploy
 python ftd_api_cleanup.py --host IP -u admin --delete-all --deploy
 
+# Custom worker count
+python ftd_api_cleanup.py --host IP -u admin --delete-all --workers 3
+
+# Generate JSON report
+python ftd_api_cleanup.py --host IP -u admin --delete-all --json-report cleanup_results.json
+
 # Help
 python ftd_api_cleanup.py --help
 ```
@@ -1096,6 +1251,6 @@ python ftd_api_cleanup.py --help
 
 ---
 
-**Document Version:** 2.0  
-**Last Updated:** January 2026  
+**Document Version:** 2.1
+**Last Updated:** March 2026
 **Compatible With:** FTD 7.4.x with FDM, Python 3.9+

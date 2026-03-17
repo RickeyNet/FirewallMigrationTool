@@ -59,32 +59,9 @@ IMPORTANT NOTES:
     - ruleId is assigned sequentially starting from 1
 """
 
-import re
-from typing import Dict, List, Any, Set, Tuple
+from typing import Dict, List, Any, Optional, Set, Tuple
 
-
-def sanitize_name(name: str) -> str:
-    """
-    Sanitize object names for FTD compatibility.
-    
-    FTD only allows alphanumeric characters and underscores in object names.
-    This function replaces any other character with an underscore.
-    
-    Args:
-        name: Original object name (may contain spaces, dashes, etc.)
-        
-    Returns:
-        Sanitized name safe for FTD
-    """
-    # Convert to string in case it's not
-    name = str(name)
-    # Replace any non-alphanumeric character (except underscore) with underscore
-    sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', name)
-    # Remove consecutive underscores
-    sanitized = re.sub(r'_+', '_', sanitized)
-    # Remove leading/trailing underscores
-    sanitized = sanitized.strip('_')
-    return sanitized
+from common import sanitize_name
 
 
 class PolicyConverter:
@@ -100,15 +77,15 @@ class PolicyConverter:
     6. Converting to FTD's accessrule format
     """
     
-    def __init__(self, fortigate_config: Dict[str, Any], 
-                 split_services: Set[str] = None, # pyright: ignore[reportArgumentType]
-                 service_name_mapping: Dict[str, List[Tuple[str, str]]] = None, # pyright: ignore[reportArgumentType]
-                 skipped_services: Set[str] = None, # pyright: ignore[reportArgumentType]
-                 address_name_mapping: Dict[str, List[str]] = None, # pyright: ignore[reportArgumentType]
-                 address_group_members: Dict[str, List[str]] = None, # pyright: ignore[reportArgumentType]
-                 address_groups: Set[str] = None, # pyright: ignore[reportArgumentType]
-                 service_groups: Set[str] = None, # pyright: ignore[reportArgumentType]
-                 interface_name_mapping: Dict[str, str] = None): # pyright: ignore[reportArgumentType]
+    def __init__(self, fortigate_config: Dict[str, Any],
+                 split_services: Optional[Set[str]] = None,
+                 service_name_mapping: Optional[Dict[str, List[Tuple[str, str]]]] = None,
+                 skipped_services: Optional[Set[str]] = None,
+                 address_name_mapping: Optional[Dict[str, List[str]]] = None,
+                 address_group_members: Optional[Dict[str, List[str]]] = None,
+                 address_groups: Optional[Set[str]] = None,
+                 service_groups: Optional[Set[str]] = None,
+                 interface_name_mapping: Optional[Dict[str, str]] = None):
         """
         Initialize the converter with FortiGate configuration data.
         
@@ -551,14 +528,14 @@ class PolicyConverter:
         
         return port_objects
     
-    def set_split_services(self, split_services: Set[str] = None, # pyright: ignore[reportArgumentType]
-                           service_name_mapping: Dict[str, List[Tuple[str, str]]] = None, # pyright: ignore[reportArgumentType]
-                           skipped_services: Set[str] = None, # pyright: ignore[reportArgumentType]
-                           address_name_mapping: Dict[str, str] = None, # pyright: ignore[reportArgumentType]
-                           address_group_members: Dict[str, List[str]] = None, # pyright: ignore[reportArgumentType]
-                           address_groups: Set[str] = None, # pyright: ignore[reportArgumentType]
-                           service_groups: Set[str] = None, # pyright: ignore[reportArgumentType]
-                           interface_name_mapping: Dict[str, str] = None): # pyright: ignore[reportArgumentType]
+    def set_split_services(self, split_services: Optional[Set[str]] = None,
+                           service_name_mapping: Optional[Dict[str, List[Tuple[str, str]]]] = None,
+                           skipped_services: Optional[Set[str]] = None,
+                           address_name_mapping: Optional[Dict[str, str]] = None,
+                           address_group_members: Optional[Dict[str, List[str]]] = None,
+                           address_groups: Optional[Set[str]] = None,
+                           service_groups: Optional[Set[str]] = None,
+                           interface_name_mapping: Optional[Dict[str, str]] = None):
         """
         Update the service and address mappings.
         

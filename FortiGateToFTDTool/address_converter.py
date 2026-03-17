@@ -29,35 +29,9 @@ FTD JSON OUTPUT FORMAT:
         "value": "10.0.0.0/24"
     }
 """
-import re
 from typing import Dict, List, Any
 
-def sanitize_name(name: str) -> str:
-    """
-    Sanitize object names for FTD compatibility.
-    
-    FTD does not allow spaces in object names. This function replaces
-    spaces with underscores to ensure compatibility.
-    
-    Args:
-        name: Original object name (may contain spaces)
-        
-    Returns:
-        Sanitized name with spaces replaced by underscores
-    """
-    if name is None:
-        return ""
-    # Convert to string in case it's not
-    name = str(name)
-    # Replace any non-alphanumeric character (except underscore) with underscore
-    sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', name)
-    # Remove consecutive underscores
-    sanitized = re.sub(r'_+', '_', sanitized)
-    # Remove leading/trailing underscores
-    sanitized = sanitized.strip('_')
-    return sanitized
-
-
+from common import sanitize_name
 
 
 class AddressConverter:
@@ -182,7 +156,8 @@ class AddressConverter:
                 continue
             
             # Check 4: Skip if value is malformed (no valid IP format)
-            if not self._is_valid_address_value(address_value):
+            # FQDN values are domain names, not IPs — skip IP validation for them
+            if address_type != "FQDN" and not self._is_valid_address_value(address_value):
                 print(f"  Skipped: {object_name} (invalid value: {address_value})")
                 continue
             
@@ -216,6 +191,7 @@ class AddressConverter:
         # ====================================================================
         # STEP 3: Return all converted objects
         # ====================================================================
+        self.ftd_network_objects = network_objects
         return network_objects
     
     def _determine_address_type(self, properties: Dict) -> str:
@@ -282,7 +258,14 @@ class AddressConverter:
                 return "NETWORK"
         
         # ====================================================================
-        # CHECK 3: Default fallback
+        # CHECK 3: Is this an FQDN address?
+        # ====================================================================
+        # FortiGate marks FQDN addresses with type: fqdn
+        elif properties.get('type') == 'fqdn':
+            return "FQDN"
+
+        # ====================================================================
+        # CHECK 4: Default fallback
         # ====================================================================
         # If we can't determine the type, default to HOST
         else:
@@ -368,7 +351,13 @@ class AddressConverter:
                 return str(subnet_list[0]) if subnet_list else ''
         
         # ====================================================================
-        # CASE 3: Fallback for unexpected formats
+        # CASE 3: FQDN Type
+        # ====================================================================
+        elif properties.get('type') == 'fqdn':
+            return str(properties.get('fqdn', ''))
+
+        # ====================================================================
+        # CASE 4: Fallback for unexpected formats
         # ====================================================================
         else:
             # This shouldn't happen with valid FortiGate config

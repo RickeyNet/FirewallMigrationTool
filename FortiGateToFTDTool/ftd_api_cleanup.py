@@ -40,21 +40,25 @@ import sys
 import time
 import getpass
 import urllib3
+import threading
 from typing import Dict, List, Optional, Tuple
+from concurrency_utils import run_with_retry, run_indexed_thread_pool
+from platform_profiles import is_ftd_1000, is_ftd_3100
+from ftd_api_base import FTDBaseClient
 
 # Disable SSL warnings for self-signed certificates
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
-class FTDBulkDelete:
+class FTDBulkDelete(FTDBaseClient):
     """
     Client for bulk deleting all objects from Cisco FTD via FDM API.
     """
-    
+
     def __init__(self, host: str, username: str, password: str, verify_ssl: bool = False, debug: bool = False):
         """
         Initialize the FTD API client.
-        
+
         Args:
             host: FTD management IP address or hostname
             username: FDM username
@@ -62,20 +66,9 @@ class FTDBulkDelete:
             verify_ssl: Whether to verify SSL certificates
             debug: Enable debug output
         """
-        self.host = host
-        self.username = username
-        self.password = password
-        self.verify_ssl = verify_ssl
-        self.debug = debug
-        
-        self.base_url = f"https://{host}/api/fdm/latest"
-        self.session = requests.Session()
-        self.session.verify = verify_ssl
-        
-        self.access_token = None
-        self.refresh_token = None
-        
-        # Track statistics
+        super().__init__(host, username, password, verify_ssl, debug)
+
+        # Track cumulative statistics across all deletion phases
         self.stats = {
             "total_found": 0,
             "system_objects": 0,
@@ -83,49 +76,30 @@ class FTDBulkDelete:
             "deleted": 0,
             "failed": 0
         }
-    
-    def authenticate(self) -> bool:
-        """Authenticate to FTD FDM API."""
-        print(f"\n{'='*60}")
-        print(f"Authenticating to FTD at {self.host}")
-        print(f"{'='*60}")
-        
-        auth_url = f"{self.base_url}/fdm/token"
-        
-        payload = {
-            "grant_type": "password",
-            "username": self.username,
-            "password": self.password
-        }
-        
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-        }
-        
+
+    def compute_outcome(self) -> tuple:
+        """Determine overall run outcome from cumulative stats.
+
+        Returns:
+            (exit_code, outcome_label) where:
+                0, "SUCCESS"         – every item succeeded
+                2, "PARTIAL_FAILURE" – at least one item failed but some succeeded
+                3, "ALL_FAILED"      – every attempted item failed
+        """
+        if self.stats["failed"] == 0:
+            return 0, "SUCCESS"
+        if self.stats["deleted"] > 0:
+            return 2, "PARTIAL_FAILURE"
+        return 3, "ALL_FAILED"
+
+    @staticmethod
+    def write_json_report(path: str, payload: Dict) -> bool:
+        """Write a machine-readable cleanup report to disk."""
         try:
-            response = self.session.post(auth_url, json=payload, headers=headers, timeout=30)
-            
-            if response.status_code == 200:
-                tokens = response.json()
-                self.access_token = tokens.get("access_token")
-                self.refresh_token = tokens.get("refresh_token")
-                
-                self.session.headers.update({
-                    "Authorization": f"Bearer {self.access_token}",
-                    "Content-Type": "application/json",
-                    "Accept": "application/json"
-                })
-                
-                print("Authentication successful!")
-                return True
-            else:
-                print(f"[ERROR] Authentication failed: {response.status_code}")
-                print(f"  Response: {response.text}")
-                return False
-                
-        except requests.exceptions.RequestException as e:
-            print(f"[ERROR] Connection error: {e}")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+            return True
+        except (OSError, TypeError, ValueError):
             return False
     
     def get_all_objects(self, endpoint: str) -> List[Dict]:
@@ -150,6 +124,14 @@ class FTDBulkDelete:
                 params = {"offset": offset, "limit": limit}
                 response = self.session.get(url, params=params, timeout=30)
                 
+                if response.status_code == 401:
+                    if self.refresh_access_token():
+                        # Retry this page with the new token.
+                        response = self.session.get(url, params=params, timeout=30)
+                    if response.status_code == 401:
+                        print(f"    Warning: HTTP 401 (token refresh failed)")
+                        break
+
                 if response.status_code == 200:
                     data = response.json()
                     items = data.get("items", [])
@@ -192,50 +174,8 @@ class FTDBulkDelete:
         except requests.exceptions.RequestException as e:
             print(f"  Error: {e}")
             return []
-        
-    def get_default_virtual_router_id(self) -> Tuple[bool, Optional[str]]:
-        """
-        Get the ID of the default virtual router (typically 'Global').
 
-        Notes:
-            - Static routes are scoped under a Virtual Router in the FDM API.
-            - This method caches the resolved VR ID to avoid repeated API calls.
-
-        Returns:
-            (success, vr_id_or_error_message)
-        """
-        if hasattr(self, "_default_vr_id") and self._default_vr_id:
-            return True, self._default_vr_id
-
-        endpoint = f"{self.base_url}/devices/default/routing/virtualrouters"
-
-        try:
-            response = self.session.get(endpoint, timeout=30)
-            if response.status_code != 200:
-                return False, f"API error: {response.status_code}"
-
-            data = response.json()
-            items = data.get("items", [])
-
-            # Prefer the well-known defaults first
-            for vr in items:
-                vr_name = str(vr.get("name", "")).strip().lower()
-                if vr_name in {"global", "default", "global-vr"}:
-                    self._default_vr_id = vr.get("id")
-                    return True, self._default_vr_id
-
-            # Fallback: pick the first VR if present
-            if items:
-                self._default_vr_id = items[0].get("id")
-                return True, self._default_vr_id
-
-            return False, "No virtual routers found"
-
-        except requests.exceptions.RequestException as e:
-            return False, str(e)
-
-
-    def delete_all_static_routes(self, dry_run: bool = False) -> bool:
+    def delete_all_static_routes(self, dry_run: bool = False, max_workers: int = 1, max_attempts: int = 4, base_backoff: float = 0.3, max_jitter: float = 0.25) -> bool:
         """
         Delete all static route entries from the default Virtual Router.
 
@@ -255,7 +195,7 @@ class FTDBulkDelete:
 
         success, vr_id_or_error = self.get_default_virtual_router_id()
         if not success:
-            print(f"  [ERROR] Failed to resolve virtual router: {vr_id_or_error}")
+            print(f"  [FAIL] Failed to resolve virtual router: {vr_id_or_error}")
             return False
 
         vr_id = vr_id_or_error
@@ -278,38 +218,69 @@ class FTDBulkDelete:
         if len(routes) > 10:
             print(f"    . and {len(routes) - 10} more")
 
-        print(f"\n  {'[DRY RUN] Would delete' if dry_run else 'Deleting'} {len(routes)} static routes.")
+        if dry_run:
+            print(f"\n  [DRY RUN] Would delete {len(routes)} static routes.")
+            for i, r in enumerate(routes, 1):
+                name = r.get("name", "UNNAMED")
+                print(f"  [{i}/{len(routes)}] Would delete: {name}")
+            print("\n  Summary: 0 deleted, 0 failed")
+            return True
 
-        success_count = 0
-        fail_count = 0
+        print(f"\n  Deleting {len(routes)} static routes with up to {max_workers} workers.")
 
-        for i, r in enumerate(routes, 1):
+        max_workers = max(1, max_workers)
+        print_lock = threading.Lock()
+        failure_flag = [False]
+        failed_objects = []
+        counters = {"deleted": 0, "failed": 0}
+
+        def worker(idx: int, r: Dict) -> None:
             name = r.get("name", "UNNAMED")
             obj_id = r.get("id")
 
             if not obj_id:
-                print(f"  [{i}/{len(routes)}] Skipping: {name} [ERROR] missing id")
-                fail_count += 1
-                continue
+                with print_lock:
+                    print(f"  [{idx+1}/{len(routes)}] Skipping: {name} [FAIL] missing id", flush=True)
+                    counters["failed"] += 1
+                failure_flag[0] = True
+                return
 
-            if dry_run:
-                print(f"  [{i}/{len(routes)}] Would delete: {name}")
-                success_count += 1
-                continue
-
-            print(f"  [{i}/{len(routes)}] Deleting: {name}.", end=" ")
-            ok, err = self.delete_object(endpoint, obj_id)
+            ok, err = run_with_retry(
+                lambda: self.delete_object(endpoint, obj_id),
+                max_attempts=max_attempts,
+                base_backoff=base_backoff,
+                max_jitter=max_jitter,
+            )
             if ok:
-                print("[Deleted]")
-                success_count += 1
-            else:
-                print(f"[ERROR] {err}")
-                fail_count += 1
+                with print_lock:
+                    print(f"  [{idx+1}/{len(routes)}] Deleting: {name}... [OK]", flush=True)
+                    counters["deleted"] += 1
+                return
 
-            time.sleep(0.2)
+            with print_lock:
+                print(f"  [{idx+1}/{len(routes)}] Deleting: {name}... [FAIL] {err}", flush=True)
+                counters["failed"] += 1
+                failed_objects.append((name, err))
+            failure_flag[0] = True
+            return
 
-        print(f"\n  Summary: {success_count} deleted, {fail_count} failed")
-        return fail_count == 0
+        run_indexed_thread_pool(max_workers=max_workers, items=routes, worker=worker)
+
+        self.stats["total_found"] += len(routes)
+        self.stats["custom_objects"] += len(routes)
+        self.stats["deleted"] += counters["deleted"]
+        self.stats["failed"] += counters["failed"]
+
+        print(f"\n  Summary: {counters['deleted']} deleted, {counters['failed']} failed")
+
+        if failed_objects:
+            print("\n  Failed routes:")
+            for name, err in failed_objects[:10]:
+                print(f"    - {name}: {err}")
+            if len(failed_objects) > 10:
+                print(f"    ... and {len(failed_objects) - 10} more")
+
+        return not failure_flag[0]
 
     
     def delete_object(self, endpoint: str, object_id: str) -> Tuple[bool, str]:
@@ -320,36 +291,53 @@ class FTDBulkDelete:
         """
         url = f"{self.base_url}{endpoint}/{object_id}"
         
-        try:
-            response = self.session.delete(url, timeout=30)
-            
-            if response.status_code in [200, 204]:
-                return True, ""
-            elif response.status_code == 404:
-                return True, "already deleted"  # Already gone
-            elif response.status_code == 422:
-                # Unprocessable - get the actual error
-                try:
-                    error_data = response.json()
-                    error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
-                    return False, error_msg
-                except:
-                    return False, f"HTTP 422: {response.text[:100]}"
-            elif response.status_code == 400:
-                # Bad request - often means object is in use
-                try:
-                    error_data = response.json()
-                    error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
-                    return False, error_msg
-                except:
-                    return False, f"HTTP 400: {response.text[:100]}"
-            else:
-                return False, f"HTTP {response.status_code}"
+        for attempt in range(2):  # one retry after a token refresh
+            try:
+                response = self.session.delete(url, timeout=30)
                 
-        except requests.exceptions.RequestException as e:
-            return False, str(e)
+                if response.status_code == 401:
+                    if attempt == 0 and self.refresh_access_token():
+                        continue  # retry with the refreshed token
+                    return False, "HTTP 401"
+
+                if response.status_code in [200, 204]:
+                    return True, ""
+                elif response.status_code == 404:
+                    return True, "already deleted"  # Already gone
+                elif response.status_code == 422:
+                    # Unprocessable - get the actual error
+                    try:
+                        error_data = response.json()
+                        error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
+                        return False, error_msg
+                    except (ValueError, KeyError, IndexError, TypeError):
+                        return False, f"HTTP 422: {response.text[:100]}"
+                elif response.status_code == 400:
+                    # Bad request - often means object is in use
+                    try:
+                        error_data = response.json()
+                        error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
+                        return False, error_msg
+                    except (ValueError, KeyError, IndexError, TypeError):
+                        return False, f"HTTP 400: {response.text[:100]}"
+                else:
+                    return False, f"HTTP {response.status_code}"
+                    
+            except requests.exceptions.RequestException as e:
+                return False, str(e)
+        
+        return False, "HTTP 401"
     
-    def delete_all_custom_objects(self, endpoint: str, object_type: str, dry_run: bool = False) -> bool:
+    def delete_all_custom_objects(
+        self,
+        endpoint: str,
+        object_type: str,
+        dry_run: bool = False,
+        max_workers: int = 1,
+        max_attempts: int = 4,
+        base_backoff: float = 0.3,
+        max_jitter: float = 0.25,
+    ) -> bool:
         """
         Delete ALL custom (non-system) objects of a type.
         
@@ -372,14 +360,14 @@ class FTDBulkDelete:
             print(f"  No {object_type.lower()} found in FTD")
             return True
         
-        self.stats["total_found"] = len(all_objects)
-        
+        self.stats["total_found"] += len(all_objects)
+
         # Filter out system-defined objects
         custom_objects = [obj for obj in all_objects if not obj.get('isSystemDefined', False)]
         system_objects = [obj for obj in all_objects if obj.get('isSystemDefined', False)]
-        
-        self.stats["custom_objects"] = len(custom_objects)
-        self.stats["system_objects"] = len(system_objects)
+
+        self.stats["custom_objects"] += len(custom_objects)
+        self.stats["system_objects"] += len(system_objects)
         
         print(f"\n  Found {len(all_objects)} total objects:")
         print(f"    - Custom objects: {len(custom_objects)} (will be deleted)")
@@ -400,58 +388,73 @@ class FTDBulkDelete:
             print(f"    ... and {len(custom_objects) - 10} more")
         
         # Delete custom objects
-        print(f"\n  {'[DRY RUN] Would delete' if dry_run else 'Deleting'} {len(custom_objects)} custom objects...")
-        
-        success_count = 0
-        fail_count = 0
-        failed_objects = []  # Track failed objects for retry info
-        
-        for i, obj in enumerate(custom_objects, 1):
+        if dry_run:
+            print(f"\n  [DRY RUN] Would delete {len(custom_objects)} custom objects...")
+            for i, obj in enumerate(custom_objects, 1):
+                name = obj.get('name', 'UNNAMED')
+                print(f"  [{i}/{len(custom_objects)}] Would delete: {name}")
+            print("\n  Summary:")
+            print(f"    Deleted: 0")
+            print(f"    Failed: 0")
+            return True
+
+        print(f"\n  Deleting {len(custom_objects)} custom objects with up to {max_workers} workers...")
+
+        max_workers = max(1, max_workers)
+        print_lock = threading.Lock()
+        failure_flag = [False]
+        failed_objects = []
+        counters = {"deleted": 0, "failed": 0}
+
+        def worker(idx: int, obj: Dict) -> None:
             name = obj.get('name', 'UNNAMED')
             obj_id = obj.get('id')
-            
+
             if not obj_id:
-                print(f"  [{i}/{len(custom_objects)}] Error: {name} - No ID")
-                fail_count += 1
-                continue
-            
-            if dry_run:
-                print(f"  [{i}/{len(custom_objects)}] Would delete: {name}")
-                success_count += 1
-            else:
-                print(f"  [{i}/{len(custom_objects)}] Deleting: {name}...", end=" ")
-                
-                success, error_msg = self.delete_object(endpoint, obj_id)
-                
-                if success:
-                    if error_msg == "already deleted":
-                        print("[OK] (already deleted)")
-                    else:
-                        print("[Thrown into the abyss]")
-                    success_count += 1
-                else:
-                    print(f"[ERROR] {error_msg}")
-                    fail_count += 1
-                    failed_objects.append((name, error_msg))
-                
-                time.sleep(0.2)  # Rate limiting
-        
-        self.stats["deleted"] = success_count
-        self.stats["failed"] = fail_count
-        
+                with print_lock:
+                    print(f"  [{idx+1}/{len(custom_objects)}] Deleting: {name}... [FAIL] missing id", flush=True)
+                    counters["failed"] += 1
+                failure_flag[0] = True
+                return
+
+            success, error_msg = run_with_retry(
+                lambda: self.delete_object(endpoint, obj_id),
+                max_attempts=max_attempts,
+                base_backoff=base_backoff,
+                max_jitter=max_jitter,
+            )
+
+            if success:
+                with print_lock:
+                    status = "[SKIP] already deleted" if error_msg == "already deleted" else "[OK]"
+                    print(f"  [{idx+1}/{len(custom_objects)}] Deleting: {name}... {status}", flush=True)
+                    counters["deleted"] += 1
+                return
+
+            with print_lock:
+                print(f"  [{idx+1}/{len(custom_objects)}] Deleting: {name}... [FAIL] {error_msg}", flush=True)
+                counters["failed"] += 1
+                failed_objects.append((name, error_msg))
+            failure_flag[0] = True
+            return
+
+        run_indexed_thread_pool(max_workers=max_workers, items=custom_objects, worker=worker)
+
+        self.stats["deleted"] += counters["deleted"]
+        self.stats["failed"] += counters["failed"]
+
         print(f"\n  Summary:")
-        print(f"    Deleted: {success_count}")
-        print(f"    Failed: {fail_count}")
-        
-        # Show failed objects summary if any
+        print(f"    Deleted: {counters['deleted']}")
+        print(f"    Failed: {counters['failed']}")
+
         if failed_objects:
             print(f"\n  Failed objects:")
             for name, error in failed_objects[:10]:
                 print(f"    - {name}: {error}")
             if len(failed_objects) > 10:
                 print(f"    ... and {len(failed_objects) - 10} more")
-        
-        return fail_count == 0
+
+        return not failure_flag[0]
     
     @staticmethod
     def _parse_port_number(hardware_name: str) -> Optional[int]:
@@ -547,19 +550,6 @@ class FTDBulkDelete:
         # Get the appliance model for platform-specific behavior
         model = str(getattr(self, 'appliance_model', 'generic')).lower().strip()
         
-        # Define platform families
-        # 1000-series: Support AUTO speed, do NOT support autoNeg field
-        # 3100-series: Do NOT support AUTO speed on copper, require explicit speed + autoNeg
-        ftd_1000_series = {"ftd-1010", "1010", "ftd1010", 
-                          "ftd-1120", "1120", "ftd1120",
-                          "ftd-1140", "1140", "ftd1140"}
-        ftd_3100_series = {"ftd-3105", "3105", "ftd3105",
-                          "ftd-3110", "3110", "ftd3110",
-                          "ftd-3120", "3120", "ftd3120",
-                          "ftd-3130", "3130", "ftd3130",
-                          "ftd-3140", "3140", "ftd3140",
-                          "ftd-4215", "4215", "ftd4215"}
-        
         # --- Determine if the port is SFP or copper ---
         # On known platforms we use the hardware port number because speedType
         # is unreliable after EtherChannel/bridge-group membership changes.
@@ -569,7 +559,7 @@ class FTDBulkDelete:
         # FTD-3140 port layout: Ethernet1/1-1/8 = copper, Ethernet1/9-1/24 = SFP
         is_sfp = current_speed in {'DETECT_SFP', 'SFP_DETECT'}  # default fallback
         
-        if model in ftd_3100_series:
+        if is_ftd_3100(model):
             # Parse port number from hardwareName (e.g. "Ethernet1/9" -> 9)
             port_num = self._parse_port_number(hardware_name)
             if port_num is not None:
@@ -583,7 +573,7 @@ class FTDBulkDelete:
             if 'fecMode' in intf:
                 reset_payload['fecMode'] = 'AUTO'
             # Only set autoNeg for platforms that support it
-            if model not in ftd_1000_series:
+            if not is_ftd_1000(model):
                 reset_payload['autoNegotiation'] = True
                 reset_payload['autoNeg'] = True
             else:
@@ -591,14 +581,14 @@ class FTDBulkDelete:
                 reset_payload.pop('autoNeg', None)
                 reset_payload.pop('autoNegotiation', None)
                 
-        elif model in ftd_3100_series:
+        elif is_ftd_3100(model):
             # 3100-series copper: Cannot use AUTO speed, must use THOUSAND
             reset_payload['speedType'] = 'THOUSAND'
             reset_payload['duplexType'] = 'FULL'
             reset_payload['autoNegotiation'] = True
             reset_payload['autoNeg'] = True
             
-        elif model in ftd_1000_series:
+        elif is_ftd_1000(model):
             # 1000-series copper: Support AUTO speed, do NOT support autoNeg
             reset_payload['speedType'] = 'AUTO'
             reset_payload['duplexType'] = 'AUTO'
@@ -651,7 +641,7 @@ class FTDBulkDelete:
         except requests.exceptions.RequestException as e:
             return False, str(e)
     
-    def reset_all_physical_interfaces(self, dry_run: bool = False) -> bool:
+    def reset_all_physical_interfaces(self, dry_run: bool = False, delay: float = 0.2) -> bool:
         """
         Reset ALL physical interfaces to default state.
         
@@ -736,18 +726,23 @@ class FTDBulkDelete:
                 success, error_msg = self.reset_physical_interface(intf, dry_run)
                 
                 if success:
-                    print("[Destroyed]")
+                    print("[OK]")
                     success_count += 1
                 else:
-                    print(f"[ERROR]   -> {error_msg}")
+                    print(f"[FAIL] {error_msg}")
                     fail_count += 1
                 
-                time.sleep(0.2)
+                time.sleep(delay)
         
+        self.stats["total_found"] += len(configured_interfaces)
+        self.stats["custom_objects"] += len(configured_interfaces)
+        self.stats["deleted"] += success_count
+        self.stats["failed"] += fail_count
+
         print(f"\n  Summary:")
         print(f"    Reset: {success_count}")
         print(f"    Failed: {fail_count}")
-        
+
         return fail_count == 0
     
     def get_all_subinterfaces(self) -> List[Dict]:
@@ -845,37 +840,37 @@ class FTDBulkDelete:
         else:
             endpoint = f"/devices/default/interfaces/{parent_id}/subinterfaces"
 
-        # Defensively disable HA monitoring if it is enabled.
-        # Subinterfaces are typically monitorInterface=False, but a user
-        # may have manually enabled monitoring.  Attempting the DELETE
-        # while monitoring is active will be rejected by the API on
-        # HA-enabled appliances.
-        self._disable_ha_monitor(endpoint, obj_id, f"subintf-{obj_id[:8]}")
-
         return self.delete_object(endpoint, obj_id)
     
-    def delete_all_subinterfaces(self, dry_run: bool = False) -> bool:
+    def delete_all_subinterfaces(
+        self,
+        dry_run: bool = False,
+        max_workers: int = 1,
+        max_attempts: int = 4,
+        base_backoff: float = 0.3,
+        max_jitter: float = 0.25,
+    ) -> bool:
         """
         Delete all subinterfaces.
-        
+
         Subinterfaces must be deleted BEFORE their parent interfaces
         (physical or etherchannel).
-        
+
         Endpoint: DELETE /devices/default/interfaces/{parentId}/subinterfaces/{objId}
         """
         print(f"\n{'='*60}")
         print("Processing Subinterfaces")
         print(f"{'='*60}")
-        
+
         # Get all subinterfaces from all parent interfaces
         all_subinterfaces = self.get_all_subinterfaces()
-        
+
         if not all_subinterfaces:
             print("  No subinterfaces found")
             return True
-        
+
         print(f"\n  Found {len(all_subinterfaces)} subinterfaces total")
-        
+
         # Show what will be deleted
         print(f"\n  Subinterfaces to delete:")
         for intf in all_subinterfaces[:10]:
@@ -884,48 +879,64 @@ class FTDBulkDelete:
             vlan = intf.get('subIntfId', intf.get('vlanId', '?'))
             parent = intf.get('_parent_name', 'unknown')
             print(f"    - {name} ({hardware} VLAN {vlan}) [parent: {parent}]")
-        
+
         if len(all_subinterfaces) > 10:
             print(f"    ... and {len(all_subinterfaces) - 10} more")
-        
-        # Delete subinterfaces
-        print(f"\n  {'[DRY RUN] Would delete' if dry_run else 'Deleting'} {len(all_subinterfaces)} subinterfaces...")
-        
-        success_count = 0
-        fail_count = 0
-        failed_objects = []
-        
-        for i, intf in enumerate(all_subinterfaces, 1):
-            name = intf.get('name', 'UNNAMED')
-            
-            if dry_run:
+
+        if dry_run:
+            print(f"\n  [DRY RUN] Would delete {len(all_subinterfaces)} subinterfaces.")
+            for i, intf in enumerate(all_subinterfaces, 1):
+                name = intf.get('name', 'UNNAMED')
                 print(f"  [{i}/{len(all_subinterfaces)}] Would delete: {name}")
-                success_count += 1
-            else:
-                print(f"  [{i}/{len(all_subinterfaces)}] Deleting: {name}...", end=" ")
-                
-                success, error_msg = self.delete_subinterface(intf, dry_run)
-                
-                if success:
-                    print("[Thrown into the abyss]")
-                    success_count += 1
-                else:
-                    print(f"[ERROR] {error_msg}")
-                    fail_count += 1
-                    failed_objects.append((name, error_msg))
-                
-                time.sleep(0.2)
-        
-        print(f"\n  Summary: {success_count} deleted, {fail_count} failed")
-        
+            print("\n  Summary: 0 deleted, 0 failed")
+            return True
+
+        print(f"\n  Deleting {len(all_subinterfaces)} subinterfaces with up to {max_workers} workers.")
+
+        max_workers = max(1, max_workers)
+        print_lock = threading.Lock()
+        failure_flag = [False]
+        failed_objects = []
+        counters = {"deleted": 0, "failed": 0}
+
+        def worker(idx: int, intf: Dict) -> None:
+            name = intf.get('name', 'UNNAMED')
+
+            ok, err = run_with_retry(
+                lambda: self.delete_subinterface(intf),
+                max_attempts=max_attempts,
+                base_backoff=base_backoff,
+                max_jitter=max_jitter,
+            )
+            if ok:
+                with print_lock:
+                    print(f"  [{idx+1}/{len(all_subinterfaces)}] Deleting: {name}... [OK]", flush=True)
+                    counters["deleted"] += 1
+                return
+
+            with print_lock:
+                print(f"  [{idx+1}/{len(all_subinterfaces)}] Deleting: {name}... [FAIL] {err}", flush=True)
+                counters["failed"] += 1
+                failed_objects.append((name, err))
+            failure_flag[0] = True
+
+        run_indexed_thread_pool(max_workers=max_workers, items=all_subinterfaces, worker=worker)
+
+        self.stats["total_found"] += len(all_subinterfaces)
+        self.stats["custom_objects"] += len(all_subinterfaces)
+        self.stats["deleted"] += counters["deleted"]
+        self.stats["failed"] += counters["failed"]
+
+        print(f"\n  Summary: {counters['deleted']} deleted, {counters['failed']} failed")
+
         if failed_objects:
             print(f"\n  Failed subinterfaces:")
             for name, error in failed_objects[:10]:
                 print(f"    - {name}: {error}")
             if len(failed_objects) > 10:
                 print(f"    ... and {len(failed_objects) - 10} more")
-        
-        return fail_count == 0
+
+        return not failure_flag[0]
 
     def _disable_ha_monitor(self, endpoint: str, obj_id: str, obj_name: str) -> Tuple[bool, str]:
         """
@@ -993,7 +1004,7 @@ class FTDBulkDelete:
         except requests.exceptions.RequestException as exc:
             return False, f"Request error (disable HA monitor): {exc}"
 
-    def delete_all_etherchannels(self, dry_run: bool = False) -> bool:
+    def delete_all_etherchannels(self, dry_run: bool = False, delay: float = 0.3) -> bool:
         """
         Delete all EtherChannel interfaces.
         
@@ -1047,33 +1058,38 @@ class FTDBulkDelete:
                     "/devices/default/etherchannelinterfaces", obj_id, name  # pyright: ignore[reportArgumentType]
                 )
                 if not ha_ok:
-                    print(f"[ERROR] Could not disable HA monitor: {ha_err}")
+                    print(f"[FAIL] Could not disable HA monitor: {ha_err}")
                     fail_count += 1
-                    time.sleep(0.3)
+                    time.sleep(delay)
                     continue
 
                 # --- Now delete the EtherChannel ------------------------------
                 success, error_msg = self.delete_object("/devices/default/etherchannelinterfaces", obj_id)  # pyright: ignore[reportArgumentType]
 
                 if success:
-                    print("[Thrown in the Garbage]")
+                    print("[OK]")
                     success_count += 1
                 else:
-                    print(f"[ERROR] {error_msg}")
+                    print(f"[FAIL] {error_msg}")
                     fail_count += 1
 
-                time.sleep(0.3)
+                time.sleep(delay)
         
+        self.stats["total_found"] += len(all_etherchannels)
+        self.stats["custom_objects"] += len(all_etherchannels)
+        self.stats["deleted"] += success_count
+        self.stats["failed"] += fail_count
+
         print(f"\n  Summary: {success_count} deleted, {fail_count} failed")
-        
+
         if fail_count > 0:
             print("\n  TIP: If etherchannels failed to delete, try:")
             print("    1. Delete subinterfaces first: --delete-subinterfaces")
             print("    2. Then delete etherchannels: --delete-etherchannels")
-        
+
         return fail_count == 0
-    
-    def delete_all_bridge_groups(self, dry_run: bool = False) -> bool:
+
+    def delete_all_bridge_groups(self, dry_run: bool = False, delay: float = 0.3) -> bool:
         """
         Delete all bridge group interfaces.
         
@@ -1126,26 +1142,31 @@ class FTDBulkDelete:
                     "/devices/default/bridgegroupinterfaces", obj_id, name  # pyright: ignore[reportArgumentType]
                 )
                 if not ha_ok:
-                    print(f"[ERROR] Could not disable HA monitor: {ha_err}")
+                    print(f"[FAIL] Could not disable HA monitor: {ha_err}")
                     fail_count += 1
-                    time.sleep(0.3)
+                    time.sleep(delay)
                     continue
 
                 # --- Now delete the bridge group ------------------------------
                 success, error_msg = self.delete_object("/devices/default/bridgegroupinterfaces", obj_id)  # pyright: ignore[reportArgumentType]
 
                 if success:
-                    print("[Lost in space]")
+                    print("[OK]")
                     success_count += 1
                 else:
-                    print(f"[ERROR] {error_msg}")
+                    print(f"[FAIL] {error_msg}")
                     fail_count += 1
 
-                time.sleep(0.3)
+                time.sleep(delay)
         
+        self.stats["total_found"] += len(all_bridge_groups)
+        self.stats["custom_objects"] += len(all_bridge_groups)
+        self.stats["deleted"] += success_count
+        self.stats["failed"] += fail_count
+
         print(f"\n  Summary: {success_count} deleted, {fail_count} failed")
         return fail_count == 0
-    
+
     def deploy_changes(self) -> bool:
         """Deploy pending changes."""
         print(f"\n{'='*60}")
@@ -1158,20 +1179,24 @@ class FTDBulkDelete:
             response = self.session.post(endpoint, json={}, timeout=30)
             
             if response.status_code in [200, 201, 202]:
-                print("[Lift off!] Deployment initiated")
+                print("[OK] Deployment initiated")
                 print("  (Deployment may take several minutes)")
                 return True
             else:
-                print(f"[ERROR] Deployment failed: {response.status_code}")
+                print(f"[FAIL] Deployment failed: {response.status_code}")
                 return False
                 
         except requests.exceptions.RequestException as e:
-            print(f"[ERROR] Deployment error: {e}")
+            print(f"[FAIL] Deployment error: {e}")
             return False
 
 
-def main():
-    """Main function."""
+def main(argv=None):
+    """Main function.
+
+    Args:
+        argv: Command-line arguments (defaults to sys.argv[1:] when None).
+    """
     parser = argparse.ArgumentParser(
         description='Bulk delete ALL custom objects from Cisco FTD via FDM API',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1215,6 +1240,24 @@ Examples:
     parser.add_argument('--deploy', action='store_true', help='Deploy after deletion')
     parser.add_argument('--debug', action='store_true', help='Enable debug output')
     parser.add_argument('--yes', action='store_true', help='Skip confirmation')
+    def _positive_int(value: str) -> int:
+        ivalue = int(value)
+        if ivalue < 1 or ivalue > 32:
+            raise argparse.ArgumentTypeError(f"workers must be between 1 and 32, got {ivalue}")
+        return ivalue
+    parser.add_argument('--workers', type=_positive_int, default=6,
+                        help='Max concurrent workers for object/static route deletions (1-32, default: 6)')
+    parser.add_argument('--max-attempts', type=int, default=4,
+                        help='Max retry attempts for transient API errors (default: 4)')
+    parser.add_argument('--base-backoff', type=float, default=0.3,
+                        help='Initial backoff delay in seconds between retries (default: 0.3)')
+    parser.add_argument('--max-jitter', type=float, default=0.25,
+                        help='Max random jitter in seconds added to backoff (default: 0.25)')
+    parser.add_argument('--delay', type=float, default=0.2,
+                        help='Delay in seconds between sequential API calls (default: 0.2)')
+    parser.add_argument('--json-report', default='', help='Write cleanup summary to a JSON report file')
+    parser.add_argument('--validate-only', action='store_true',
+                        help='Authenticate and probe all API endpoints without deleting anything')
     parser.add_argument("--metadata-file", default="", help="Path to *_metadata.json generated by fortigate_converter.py (used for model-specific behavior).",)
     parser.add_argument("--appliance-model", default="generic", dest="appliance_model",
                        help="Target FTD appliance model (e.g., ftd-3120). Auto-detected from metadata if not specified.")
@@ -1234,17 +1277,18 @@ Examples:
     parser.add_argument('--delete-all', action='store_true', help='Delete ALL custom objects (everything)')
     parser.add_argument('--delete-all-interfaces', action='store_true', help='Delete/reset ALL interface configs')
     
-    args = parser.parse_args()
-    
-    # Check if at least one delete option is selected
-    if not any([args.delete_address_objects, args.delete_address_groups, 
+    args = parser.parse_args(argv)
+
+    # Check if at least one delete option or --validate-only is selected
+    if not args.validate_only and not any([
+                args.delete_address_objects, args.delete_address_groups,
                 args.delete_service_objects, args.delete_service_groups,
                 args.delete_security_zones,
                 args.delete_routes, args.delete_rules, args.delete_all,
                 args.delete_subinterfaces, args.delete_etherchannels,
                 args.delete_bridge_groups, args.reset_physical_interfaces,
                 args.delete_all_interfaces]):
-        parser.error("Must specify at least one --delete-* option")
+        parser.error("Must specify at least one --delete-* option or --validate-only")
     
     # Prompt for password
     if not args.password:
@@ -1295,91 +1339,185 @@ Examples:
     )
     
     # Set appliance model on client for platform-specific behavior
-    client.appliance_model = args.appliance_model # pyright: ignore[reportAttributeAccessIssue]
-    if client.appliance_model and client.appliance_model != "generic": # pyright: ignore[reportAttributeAccessIssue]
-        print(f"[INFO] Target firewall model: {client.appliance_model}") # pyright: ignore[reportAttributeAccessIssue]
+    client.appliance_model = args.appliance_model
+    if client.appliance_model and client.appliance_model != "generic":
+        print(f"[INFO] Target firewall model: {client.appliance_model}")
     
     # Authenticate
     if not client.authenticate():
         return 1
-    
+
+    # Validate-only mode: probe endpoints and exit
+    if args.validate_only:
+        ok = client.validate_endpoints()
+        return 0 if ok else 1
+
     mode = "DRY RUN" if args.dry_run else "DELETE"
     print(f"\n{'='*60}")
     print(f"BULK DELETE MODE: {mode}")
     print(f"{'='*60}")
-    
+
+    # Track per-phase timings for performance comparisons
+    phase_timings = []
+
+    def record_phase(label: str, func, *func_args, **func_kwargs):
+        """Run a phase, time it, and capture success for summary output."""
+        start = time.perf_counter()
+        result = func(*func_args, **func_kwargs)
+        duration = time.perf_counter() - start
+        success = True if result is None else bool(result)
+        phase_timings.append({"label": label, "seconds": duration, "success": success})
+        return result
+
     # Delete in reverse dependency order
     if args.delete_all or args.delete_rules:
-        client.delete_all_custom_objects(
+        record_phase("Access Rules", client.delete_all_custom_objects,
             "/policy/accesspolicies/default/accessrules",
             "Access Rules",
-            args.dry_run
+            args.dry_run,
+            args.workers,
+            args.max_attempts,
+            args.base_backoff,
+            args.max_jitter,
         )
-    
+
     if args.delete_all or args.delete_routes:
-        client.delete_all_static_routes(args.dry_run)
+        record_phase("Static Routes", client.delete_all_static_routes, args.dry_run, args.workers, args.max_attempts, args.base_backoff, args.max_jitter)
 
     # Security zones depend on interfaces, delete zones before interfaces
     if args.delete_all or args.delete_security_zones:
-        client.delete_all_custom_objects(
+        record_phase("Security Zones", client.delete_all_custom_objects,
             "/object/securityzones",
             "Security Zones",
-            args.dry_run
+            args.dry_run,
+            args.workers,
+            args.max_attempts,
+            args.base_backoff,
+            args.max_jitter,
         )
-    
+
     # Delete interfaces BEFORE objects (interfaces may reference objects)
     # Order: subinterfaces -> etherchannels -> bridge groups -> physical reset
     if args.delete_all or args.delete_all_interfaces or args.delete_subinterfaces:
-        client.delete_all_subinterfaces(args.dry_run)
-    
+        record_phase("Subinterfaces", client.delete_all_subinterfaces, args.dry_run, args.workers, args.max_attempts, args.base_backoff, args.max_jitter)
+
     if args.delete_all or args.delete_all_interfaces or args.delete_etherchannels:
-        client.delete_all_etherchannels(args.dry_run)
-    
+        record_phase("EtherChannels", client.delete_all_etherchannels, args.dry_run, delay=args.delay)
+
     if args.delete_all or args.delete_all_interfaces or args.delete_bridge_groups:
-        client.delete_all_bridge_groups(args.dry_run)
-    
+        record_phase("Bridge Groups", client.delete_all_bridge_groups, args.dry_run, delay=args.delay)
+
     if args.delete_all or args.delete_all_interfaces or args.reset_physical_interfaces:
-        client.reset_all_physical_interfaces(args.dry_run)
-    
+        record_phase("Physical Interfaces", client.reset_all_physical_interfaces, args.dry_run, delay=args.delay)
+
     if args.delete_all or args.delete_service_groups:
-        client.delete_all_custom_objects(
+        record_phase("Service Groups", client.delete_all_custom_objects,
             "/object/portgroups",
             "Service Groups",
-            args.dry_run
+            args.dry_run,
+            args.workers,
+            args.max_attempts,
+            args.base_backoff,
+            args.max_jitter,
         )
-    
+
     if args.delete_all or args.delete_service_objects:
         # Delete TCP ports
-        client.delete_all_custom_objects(
+        record_phase("TCP Port Objects", client.delete_all_custom_objects,
             "/object/tcpports",
             "TCP Port Objects",
-            args.dry_run
+            args.dry_run,
+            args.workers,
+            args.max_attempts,
+            args.base_backoff,
+            args.max_jitter,
         )
         # Delete UDP ports
-        client.delete_all_custom_objects(
+        record_phase("UDP Port Objects", client.delete_all_custom_objects,
             "/object/udpports",
             "UDP Port Objects",
-            args.dry_run
+            args.dry_run,
+            args.workers,
+            args.max_attempts,
+            args.base_backoff,
+            args.max_jitter,
         )
-    
+
     if args.delete_all or args.delete_address_groups:
-        client.delete_all_custom_objects(
+        record_phase("Address Groups", client.delete_all_custom_objects,
             "/object/networkgroups",
             "Address Groups",
-            args.dry_run
+            args.dry_run,
+            args.workers,
+            args.max_attempts,
+            args.base_backoff,
+            args.max_jitter,
         )
-    
+
     if args.delete_all or args.delete_address_objects:
-        client.delete_all_custom_objects(
+        record_phase("Address Objects", client.delete_all_custom_objects,
             "/object/networks",
             "Address Objects",
-            args.dry_run
+            args.dry_run,
+            args.workers,
+            args.max_attempts,
+            args.base_backoff,
+            args.max_jitter,
         )
-    
+
+    if phase_timings:
+        print(f"\n{'='*60}")
+        print("TIMING SUMMARY (seconds)")
+        print(f"{'='*60}")
+        total_seconds = 0.0
+        for entry in phase_timings:
+            total_seconds += entry["seconds"]
+            status = "OK" if entry["success"] else "FAIL"
+            print(f"{entry['label']:<35}{entry['seconds']:.2f}s [{status}]")
+        print("-"*60)
+        print(f"{'Total':<35}{total_seconds:.2f}s")
+    else:
+        total_seconds = 0.0
+
     # Deploy if requested
     if args.deploy and not args.dry_run:
         client.deploy_changes()
-    
+
+    exit_code, outcome = client.compute_outcome()
+
+    if args.json_report:
+        report_payload = {
+            "host": args.host,
+            "mode": mode,
+            "workers": args.workers,
+            "deploy_requested": args.deploy,
+            "target_model": client.appliance_model,
+            "stats": client.stats,
+            "phase_timings": phase_timings,
+            "total_seconds": total_seconds,
+            "selected_actions": {
+                "delete_address_objects": args.delete_address_objects,
+                "delete_address_groups": args.delete_address_groups,
+                "delete_service_objects": args.delete_service_objects,
+                "delete_service_groups": args.delete_service_groups,
+                "delete_security_zones": args.delete_security_zones,
+                "delete_routes": args.delete_routes,
+                "delete_rules": args.delete_rules,
+                "delete_subinterfaces": args.delete_subinterfaces,
+                "delete_etherchannels": args.delete_etherchannels,
+                "delete_bridge_groups": args.delete_bridge_groups,
+                "reset_physical_interfaces": args.reset_physical_interfaces,
+                "delete_all_interfaces": args.delete_all_interfaces,
+                "delete_all": args.delete_all,
+            },
+            "exit_code": exit_code,
+            "outcome": outcome,
+        }
+        if FTDBulkDelete.write_json_report(args.json_report, report_payload):
+            print(f"[OK] JSON report written: {args.json_report}")
+        else:
+            print(f"[FAIL] Could not write JSON report: {args.json_report}")
+
     print(f"\n{'='*60}")
     if args.dry_run:
         print("DRY RUN COMPLETE - No changes made")
@@ -1388,9 +1526,10 @@ Examples:
         print("DELETION COMPLETE")
         if not args.deploy:
             print("Changes pending - deploy manually or use --deploy")
+    print(f"Outcome: {outcome} (exit code {exit_code})")
     print(f"{'='*60}")
-    
-    return 0
+
+    return exit_code
 
 
 if __name__ == '__main__':
