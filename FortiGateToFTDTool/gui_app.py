@@ -76,6 +76,23 @@ class _QueueWriter(io.TextIOBase):
 # ---------------------------------------------------------------------------
 # Main application
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Dark theme palette
+# ---------------------------------------------------------------------------
+_BG       = "#141414"   # root / frame background
+_INPUT    = "#252525"   # entry / combobox / spinbox fields
+_FG       = "#e0e0e0"   # primary text
+_FG_DIM   = "#777777"   # secondary / disabled text
+_PURPLE   = "#9333ea"   # vivid purple — accents, active elements
+_PURPLE_D = "#4c1d95"   # dark purple — buttons resting, selected tab
+_PURPLE_H = "#7c3aed"   # mid purple — hover
+_BORDER   = "#3d3d3d"   # subtle grey border
+_BTN_BG   = "#2d1a5e"   # button resting (very dark purple-grey)
+_TAB_BG   = "#222222"   # inactive tab background
+_OUT_BG   = "#0d0d0d"   # output console background
+_OUT_FG   = "#d4d4d4"   # output console text
+
+
 class App(tk.Tk):
     """Main application window."""
 
@@ -88,7 +105,181 @@ class App(tk.Tk):
         self._running = False
         self._output_queue: queue.Queue = queue.Queue()
 
+        self._apply_dark_theme()
         self._build_ui()
+
+    # ------------------------------------------------------------------
+    # Dark theme
+    # ------------------------------------------------------------------
+    def _apply_dark_theme(self):
+        """Configure ttk.Style for a dark black/purple/grey theme."""
+        self.configure(bg=_BG)
+
+        # Pure-tk widget defaults (messageboxes, dialogs, etc.)
+        self.option_add("*background", _BG)
+        self.option_add("*foreground", _FG)
+        self.option_add("*activeBackground", _PURPLE_D)
+        self.option_add("*activeForeground", _FG)
+        self.option_add("*selectBackground", _PURPLE_D)
+        self.option_add("*selectForeground", _FG)
+        self.option_add("*relief", "flat")
+        # Combobox popup listbox
+        self.option_add("*TCombobox*Listbox.background", _INPUT)
+        self.option_add("*TCombobox*Listbox.foreground", _FG)
+        self.option_add("*TCombobox*Listbox.selectBackground", _PURPLE_D)
+        self.option_add("*TCombobox*Listbox.selectForeground", _FG)
+
+        style = ttk.Style(self)
+        style.theme_use("clam")
+
+        # --- Frames ---
+        style.configure("TFrame", background=_BG)
+
+        # --- LabelFrame (panels) ---
+        style.configure(
+            "TLabelframe",
+            background=_BG,
+            bordercolor=_PURPLE_D,
+            relief="groove",
+        )
+        style.configure(
+            "TLabelframe.Label",
+            background=_BG,
+            foreground=_PURPLE,
+            font=("Segoe UI", 9, "bold"),
+        )
+
+        # --- Labels ---
+        style.configure("TLabel", background=_BG, foreground=_FG)
+        style.configure(
+            "Status.TLabel",
+            background=_TAB_BG,
+            foreground=_FG_DIM,
+            relief="flat",
+        )
+
+        # --- Entry ---
+        style.configure(
+            "TEntry",
+            fieldbackground=_INPUT,
+            foreground=_FG,
+            insertcolor=_FG,
+            bordercolor=_BORDER,
+            lightcolor=_BORDER,
+            darkcolor=_BORDER,
+        )
+        style.map(
+            "TEntry",
+            bordercolor=[("focus", _PURPLE)],
+            lightcolor=[("focus", _PURPLE)],
+        )
+
+        # --- Button ---
+        style.configure(
+            "TButton",
+            background=_BTN_BG,
+            foreground=_FG,
+            bordercolor=_PURPLE_D,
+            focuscolor=_PURPLE,
+            relief="flat",
+            padding=(10, 5),
+        )
+        style.map(
+            "TButton",
+            background=[
+                ("active", _PURPLE_H),
+                ("pressed", _PURPLE_D),
+                ("disabled", _TAB_BG),
+            ],
+            foreground=[("disabled", _FG_DIM)],
+            bordercolor=[("active", _PURPLE), ("focus", _PURPLE)],
+        )
+
+        # --- Checkbutton ---
+        style.configure(
+            "TCheckbutton",
+            background=_BG,
+            foreground=_FG,
+            indicatorbackground=_INPUT,
+            indicatorforeground=_PURPLE,
+        )
+        style.map(
+            "TCheckbutton",
+            background=[("active", _BG)],
+            indicatorbackground=[("selected", _PURPLE_D), ("active", _INPUT)],
+            indicatorforeground=[("selected", _PURPLE), ("active", _FG_DIM)],
+            foreground=[("active", _FG)],
+        )
+
+        # --- Combobox ---
+        style.configure(
+            "TCombobox",
+            fieldbackground=_INPUT,
+            foreground=_FG,
+            background=_TAB_BG,
+            bordercolor=_BORDER,
+            arrowcolor=_FG_DIM,
+            insertcolor=_FG,
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", _INPUT), ("disabled", _BG)],
+            foreground=[("disabled", _FG_DIM)],
+            bordercolor=[("focus", _PURPLE)],
+            arrowcolor=[("active", _PURPLE)],
+        )
+
+        # --- Spinbox ---
+        style.configure(
+            "TSpinbox",
+            fieldbackground=_INPUT,
+            foreground=_FG,
+            background=_TAB_BG,
+            bordercolor=_BORDER,
+            arrowcolor=_FG_DIM,
+            insertcolor=_FG,
+        )
+        style.map(
+            "TSpinbox",
+            bordercolor=[("focus", _PURPLE)],
+            arrowcolor=[("active", _PURPLE)],
+        )
+
+        # --- Notebook (tabs) ---
+        style.configure(
+            "TNotebook",
+            background=_BG,
+            bordercolor=_BORDER,
+            tabmargins=[2, 5, 2, 0],
+        )
+        style.configure(
+            "TNotebook.Tab",
+            background=_TAB_BG,
+            foreground=_FG_DIM,
+            bordercolor=_BORDER,
+            padding=[12, 5],
+        )
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", _PURPLE_D), ("active", _PURPLE_H)],
+            foreground=[("selected", _FG), ("active", _FG)],
+            expand=[("selected", [1, 1, 1, 0])],
+        )
+
+        # --- Scrollbar ---
+        style.configure(
+            "TScrollbar",
+            background=_TAB_BG,
+            troughcolor=_BG,
+            bordercolor=_BORDER,
+            arrowcolor=_FG_DIM,
+            relief="flat",
+        )
+        style.map(
+            "TScrollbar",
+            background=[("active", _PURPLE_D), ("pressed", _PURPLE)],
+            arrowcolor=[("active", _FG)],
+        )
 
     # ------------------------------------------------------------------
     # UI construction
@@ -104,8 +295,8 @@ class App(tk.Tk):
         # Status bar
         self.status_var = tk.StringVar(value="Ready")
         ttk.Label(
-            self, textvariable=self.status_var,
-            relief=tk.SUNKEN, anchor=tk.W, padding=(6, 2),
+            self, textvariable=self.status_var, style="Status.TLabel",
+            anchor=tk.W, padding=(6, 2),
         ).pack(side=tk.BOTTOM, fill=tk.X)
 
     # ==================== CONVERT TAB ====================
@@ -385,8 +576,11 @@ class App(tk.Tk):
 
         text = tk.Text(
             frame, wrap=tk.WORD, font=("Consolas", 10),
-            bg="#1e1e1e", fg="#d4d4d4", insertbackground="#d4d4d4",
-            state=tk.DISABLED, relief=tk.SUNKEN, bd=2,
+            bg=_OUT_BG, fg=_OUT_FG,
+            insertbackground=_OUT_FG,
+            selectbackground=_PURPLE_D, selectforeground=_OUT_FG,
+            state=tk.DISABLED, relief=tk.FLAT, bd=1,
+            highlightthickness=1, highlightbackground=_BORDER, highlightcolor=_PURPLE,
         )
         scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=text.yview)
         text.configure(yscrollcommand=scrollbar.set)

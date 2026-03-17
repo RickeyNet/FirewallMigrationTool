@@ -9,6 +9,8 @@ discovery so both tools stay in sync.
 """
 
 import requests
+import threading
+import time
 import urllib3
 from typing import Optional, Tuple
 
@@ -64,6 +66,12 @@ class FTDBaseClient:
         self.refresh_token: Optional[str] = None
         self.appliance_model: str = "generic"
 
+        # Guards concurrent token-refresh attempts across worker threads.
+        self._auth_lock = threading.Lock()
+        # Epoch time of the last successful token refresh so threads that
+        # wake up after another thread already refreshed don't refresh again.
+        self._last_refresh_time: float = 0.0
+
     # ------------------------------------------------------------------
     # Authentication
     # ------------------------------------------------------------------
@@ -118,6 +126,72 @@ class FTDBaseClient:
 
         except requests.exceptions.RequestException as e:
             print(f"[FAIL] Connection error: {e}")
+            return False
+
+    # ------------------------------------------------------------------
+    # Token refresh
+    # ------------------------------------------------------------------
+    def refresh_access_token(self) -> bool:
+        """Silently refresh the access token using the stored refresh token.
+
+        Called automatically when any request returns HTTP 401.  Uses a lock
+        so that concurrent worker threads don't flood the auth endpoint; if
+        another thread refreshed the token within the last few seconds the
+        caller simply returns True and retries its request with the already-
+        updated session header.
+
+        Falls back to a full password re-authentication if the refresh-token
+        grant fails.
+
+        Returns:
+            True if a new access token was obtained, False otherwise.
+        """
+        with self._auth_lock:
+            # If another thread refreshed very recently, trust its result.
+            if time.time() - self._last_refresh_time < 10.0:
+                return True
+
+            auth_url = f"{self.base_url}/fdm/token"
+
+            # 1. Try the refresh-token grant first (cheaper, no password needed).
+            if self.refresh_token:
+                try:
+                    resp = self.session.post(
+                        auth_url,
+                        json={"grant_type": "refresh_token", "refresh_token": self.refresh_token},
+                        timeout=30,
+                    )
+                    if resp.status_code == 200:
+                        tokens = resp.json()
+                        self.access_token = tokens.get("access_token")
+                        self.refresh_token = tokens.get("refresh_token")
+                        self.session.headers.update({"Authorization": f"Bearer {self.access_token}"})
+                        self._last_refresh_time = time.time()
+                        print("  [AUTH] Token refreshed via refresh_token grant.")
+                        return True
+                except requests.exceptions.RequestException:
+                    pass
+
+            # 2. Fall back to full password re-authentication.
+            try:
+                resp = self.session.post(
+                    auth_url,
+                    json={"grant_type": "password", "username": self.username, "password": self.password},
+                    headers={"Content-Type": "application/json", "Accept": "application/json"},
+                    timeout=30,
+                )
+                if resp.status_code == 200:
+                    tokens = resp.json()
+                    self.access_token = tokens.get("access_token")
+                    self.refresh_token = tokens.get("refresh_token")
+                    self.session.headers.update({"Authorization": f"Bearer {self.access_token}"})
+                    self._last_refresh_time = time.time()
+                    print("  [AUTH] Token refreshed via password re-authentication.")
+                    return True
+                print(f"  [AUTH] Token refresh failed: HTTP {resp.status_code}")
+            except requests.exceptions.RequestException as e:
+                print(f"  [AUTH] Token refresh error: {e}")
+
             return False
 
     # ------------------------------------------------------------------

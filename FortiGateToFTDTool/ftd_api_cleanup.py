@@ -124,6 +124,14 @@ class FTDBulkDelete(FTDBaseClient):
                 params = {"offset": offset, "limit": limit}
                 response = self.session.get(url, params=params, timeout=30)
                 
+                if response.status_code == 401:
+                    if self.refresh_access_token():
+                        # Retry this page with the new token.
+                        response = self.session.get(url, params=params, timeout=30)
+                    if response.status_code == 401:
+                        print(f"    Warning: HTTP 401 (token refresh failed)")
+                        break
+
                 if response.status_code == 200:
                     data = response.json()
                     items = data.get("items", [])
@@ -283,34 +291,42 @@ class FTDBulkDelete(FTDBaseClient):
         """
         url = f"{self.base_url}{endpoint}/{object_id}"
         
-        try:
-            response = self.session.delete(url, timeout=30)
-            
-            if response.status_code in [200, 204]:
-                return True, ""
-            elif response.status_code == 404:
-                return True, "already deleted"  # Already gone
-            elif response.status_code == 422:
-                # Unprocessable - get the actual error
-                try:
-                    error_data = response.json()
-                    error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
-                    return False, error_msg
-                except (ValueError, KeyError, IndexError, TypeError):
-                    return False, f"HTTP 422: {response.text[:100]}"
-            elif response.status_code == 400:
-                # Bad request - often means object is in use
-                try:
-                    error_data = response.json()
-                    error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
-                    return False, error_msg
-                except (ValueError, KeyError, IndexError, TypeError):
-                    return False, f"HTTP 400: {response.text[:100]}"
-            else:
-                return False, f"HTTP {response.status_code}"
+        for attempt in range(2):  # one retry after a token refresh
+            try:
+                response = self.session.delete(url, timeout=30)
                 
-        except requests.exceptions.RequestException as e:
-            return False, str(e)
+                if response.status_code == 401:
+                    if attempt == 0 and self.refresh_access_token():
+                        continue  # retry with the refreshed token
+                    return False, "HTTP 401"
+
+                if response.status_code in [200, 204]:
+                    return True, ""
+                elif response.status_code == 404:
+                    return True, "already deleted"  # Already gone
+                elif response.status_code == 422:
+                    # Unprocessable - get the actual error
+                    try:
+                        error_data = response.json()
+                        error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
+                        return False, error_msg
+                    except (ValueError, KeyError, IndexError, TypeError):
+                        return False, f"HTTP 422: {response.text[:100]}"
+                elif response.status_code == 400:
+                    # Bad request - often means object is in use
+                    try:
+                        error_data = response.json()
+                        error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
+                        return False, error_msg
+                    except (ValueError, KeyError, IndexError, TypeError):
+                        return False, f"HTTP 400: {response.text[:100]}"
+                else:
+                    return False, f"HTTP {response.status_code}"
+                    
+            except requests.exceptions.RequestException as e:
+                return False, str(e)
+        
+        return False, "HTTP 401"
     
     def delete_all_custom_objects(
         self,
@@ -824,37 +840,37 @@ class FTDBulkDelete(FTDBaseClient):
         else:
             endpoint = f"/devices/default/interfaces/{parent_id}/subinterfaces"
 
-        # Defensively disable HA monitoring if it is enabled.
-        # Subinterfaces are typically monitorInterface=False, but a user
-        # may have manually enabled monitoring.  Attempting the DELETE
-        # while monitoring is active will be rejected by the API on
-        # HA-enabled appliances.
-        self._disable_ha_monitor(endpoint, obj_id, f"subintf-{obj_id[:8]}")
-
         return self.delete_object(endpoint, obj_id)
     
-    def delete_all_subinterfaces(self, dry_run: bool = False, delay: float = 0.2) -> bool:
+    def delete_all_subinterfaces(
+        self,
+        dry_run: bool = False,
+        max_workers: int = 1,
+        max_attempts: int = 4,
+        base_backoff: float = 0.3,
+        max_jitter: float = 0.25,
+    ) -> bool:
         """
         Delete all subinterfaces.
-        
+
         Subinterfaces must be deleted BEFORE their parent interfaces
         (physical or etherchannel).
-        
+
         Endpoint: DELETE /devices/default/interfaces/{parentId}/subinterfaces/{objId}
         """
         print(f"\n{'='*60}")
         print("Processing Subinterfaces")
         print(f"{'='*60}")
-        
+
         # Get all subinterfaces from all parent interfaces
         all_subinterfaces = self.get_all_subinterfaces()
-        
+
         if not all_subinterfaces:
             print("  No subinterfaces found")
             return True
-        
+
         print(f"\n  Found {len(all_subinterfaces)} subinterfaces total")
-        
+
         # Show what will be deleted
         print(f"\n  Subinterfaces to delete:")
         for intf in all_subinterfaces[:10]:
@@ -863,44 +879,55 @@ class FTDBulkDelete(FTDBaseClient):
             vlan = intf.get('subIntfId', intf.get('vlanId', '?'))
             parent = intf.get('_parent_name', 'unknown')
             print(f"    - {name} ({hardware} VLAN {vlan}) [parent: {parent}]")
-        
+
         if len(all_subinterfaces) > 10:
             print(f"    ... and {len(all_subinterfaces) - 10} more")
-        
-        # Delete subinterfaces
-        print(f"\n  {'[DRY RUN] Would delete' if dry_run else 'Deleting'} {len(all_subinterfaces)} subinterfaces...")
-        
-        success_count = 0
-        fail_count = 0
-        failed_objects = []
-        
-        for i, intf in enumerate(all_subinterfaces, 1):
-            name = intf.get('name', 'UNNAMED')
-            
-            if dry_run:
+
+        if dry_run:
+            print(f"\n  [DRY RUN] Would delete {len(all_subinterfaces)} subinterfaces.")
+            for i, intf in enumerate(all_subinterfaces, 1):
+                name = intf.get('name', 'UNNAMED')
                 print(f"  [{i}/{len(all_subinterfaces)}] Would delete: {name}")
-                success_count += 1
-            else:
-                print(f"  [{i}/{len(all_subinterfaces)}] Deleting: {name}...", end=" ")
-                
-                success, error_msg = self.delete_subinterface(intf, dry_run)
-                
-                if success:
-                    print("[OK]")
-                    success_count += 1
-                else:
-                    print(f"[FAIL] {error_msg}")
-                    fail_count += 1
-                    failed_objects.append((name, error_msg))
-                
-                time.sleep(delay)
-        
+            print("\n  Summary: 0 deleted, 0 failed")
+            return True
+
+        print(f"\n  Deleting {len(all_subinterfaces)} subinterfaces with up to {max_workers} workers.")
+
+        max_workers = max(1, max_workers)
+        print_lock = threading.Lock()
+        failure_flag = [False]
+        failed_objects = []
+        counters = {"deleted": 0, "failed": 0}
+
+        def worker(idx: int, intf: Dict) -> None:
+            name = intf.get('name', 'UNNAMED')
+
+            ok, err = run_with_retry(
+                lambda: self.delete_subinterface(intf),
+                max_attempts=max_attempts,
+                base_backoff=base_backoff,
+                max_jitter=max_jitter,
+            )
+            if ok:
+                with print_lock:
+                    print(f"  [{idx+1}/{len(all_subinterfaces)}] Deleting: {name}... [OK]", flush=True)
+                    counters["deleted"] += 1
+                return
+
+            with print_lock:
+                print(f"  [{idx+1}/{len(all_subinterfaces)}] Deleting: {name}... [FAIL] {err}", flush=True)
+                counters["failed"] += 1
+                failed_objects.append((name, err))
+            failure_flag[0] = True
+
+        run_indexed_thread_pool(max_workers=max_workers, items=all_subinterfaces, worker=worker)
+
         self.stats["total_found"] += len(all_subinterfaces)
         self.stats["custom_objects"] += len(all_subinterfaces)
-        self.stats["deleted"] += success_count
-        self.stats["failed"] += fail_count
+        self.stats["deleted"] += counters["deleted"]
+        self.stats["failed"] += counters["failed"]
 
-        print(f"\n  Summary: {success_count} deleted, {fail_count} failed")
+        print(f"\n  Summary: {counters['deleted']} deleted, {counters['failed']} failed")
 
         if failed_objects:
             print(f"\n  Failed subinterfaces:")
@@ -909,7 +936,7 @@ class FTDBulkDelete(FTDBaseClient):
             if len(failed_objects) > 10:
                 print(f"    ... and {len(failed_objects) - 10} more")
 
-        return fail_count == 0
+        return not failure_flag[0]
 
     def _disable_ha_monitor(self, endpoint: str, obj_id: str, obj_name: str) -> Tuple[bool, str]:
         """
@@ -1372,7 +1399,7 @@ Examples:
     # Delete interfaces BEFORE objects (interfaces may reference objects)
     # Order: subinterfaces -> etherchannels -> bridge groups -> physical reset
     if args.delete_all or args.delete_all_interfaces or args.delete_subinterfaces:
-        record_phase("Subinterfaces", client.delete_all_subinterfaces, args.dry_run, delay=args.delay)
+        record_phase("Subinterfaces", client.delete_all_subinterfaces, args.dry_run, args.workers, args.max_attempts, args.base_backoff, args.max_jitter)
 
     if args.delete_all or args.delete_all_interfaces or args.delete_etherchannels:
         record_phase("EtherChannels", client.delete_all_etherchannels, args.dry_run, delay=args.delay)
