@@ -1164,8 +1164,12 @@ class FTDBulkDelete(FTDBaseClient):
             return False
 
 
-def main():
-    """Main function."""
+def main(argv=None):
+    """Main function.
+
+    Args:
+        argv: Command-line arguments (defaults to sys.argv[1:] when None).
+    """
     parser = argparse.ArgumentParser(
         description='Bulk delete ALL custom objects from Cisco FTD via FDM API',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1246,8 +1250,8 @@ Examples:
     parser.add_argument('--delete-all', action='store_true', help='Delete ALL custom objects (everything)')
     parser.add_argument('--delete-all-interfaces', action='store_true', help='Delete/reset ALL interface configs')
     
-    args = parser.parse_args()
-    
+    args = parser.parse_args(argv)
+
     # Check if at least one delete option or --validate-only is selected
     if not args.validate_only and not any([
                 args.delete_address_objects, args.delete_address_groups,

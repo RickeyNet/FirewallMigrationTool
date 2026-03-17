@@ -92,7 +92,7 @@ except ImportError as e:
     print("  7. interface_converter.py")
     print("  8. fortigate_converter.py (this file)")
     print("\n" + "="*60)
-    sys.exit(1)
+    raise
 
 def preprocess_yaml_file(input_file: str) -> str:
     """
@@ -195,10 +195,13 @@ def write_json_file(path: str, data: object, pretty: bool = False) -> None:
         else:
             json.dump(data, f, separators=(",", ":"))
 
-def main():
+def main(argv=None):
     """
     Main function that orchestrates the entire conversion process.
-    
+
+    Args:
+        argv: Command-line arguments (defaults to sys.argv[1:] when None).
+
     WORKFLOW:
     1. Parse command-line arguments (input file, output file, formatting)
     2. Load and parse the FortiGate YAML configuration file
@@ -211,7 +214,7 @@ def main():
     9. Convert static routes
     10. Save each object type to its own JSON file
     11. Display a summary of what was converted
-    
+
     Returns:
         0 on success, 1 on error
     """
@@ -281,7 +284,7 @@ Supported FTD Models:
                        help='List supported FTD firewall models and exit')
     
     # Parse the arguments that the user provided
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     
     # Handle --list-models
     if args.list_models:

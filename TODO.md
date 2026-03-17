@@ -118,13 +118,12 @@ This checklist tracks technical debt, performance hardening, and usability impro
     Removed `_build_group_lookup()`, `_is_group()`, and `_flatten_members()` from both
     `address_group_converter.py` and `service_group_converter.py`.
 
-- [ ] Extract duplicated API create/error pattern in importer
-  - Location: `ftd_api_importer.py`
-  - Issue: `create_network_object`, `create_network_group`, `create_port_object`, `create_port_group`,
-    `create_access_rule`, `create_static_route` all repeat the same ~30-line pattern:
-    POST -> check 200/201 -> check 422 duplicate -> record stat -> handle error.
-  - Fix: Extract a generic `_create_api_object(endpoint, payload, stat_prefix)` method.
-  - Benefit: ~150 lines removed, consistent error handling, easier to add new object types.
+- [x] Extract duplicated API create/error pattern in importer
+  - Done: Added `_create_api_object(endpoint, payload, stat_prefix, track_stats)` to `FTDAPIClient`.
+    Refactored `create_network_object`, `create_network_group`, `create_port_object`,
+    `create_port_group`, `create_access_rule`, and `create_static_route` to delegate to it.
+    Uses existing `_extract_error_message()` for consistent 422 error parsing.
+  - Benefit: ~150 lines removed, single POST/duplicate/error pattern, easier to add new object types.
 
 - [x] Remove large commented-out block in converter
   - Done: Deleted 35-line commented-out "Method 1 vs Method 2" block from `fortigate_converter.py`.

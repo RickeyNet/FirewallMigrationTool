@@ -165,6 +165,60 @@ class FTDAPIClient(FTDBaseClient):
             text = (response.text or "").strip()
             return text if text else default
 
+    def _create_api_object(
+        self,
+        endpoint: str,
+        payload: Dict,
+        stat_prefix: str,
+        track_stats: bool = True,
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Generic POST-create with duplicate detection and stat recording.
+
+        This is the shared implementation behind create_network_object,
+        create_network_group, create_port_object, create_port_group,
+        create_access_rule, and create_static_route.
+
+        Args:
+            endpoint: Full API URL to POST to.
+            payload: JSON-serializable body.
+            stat_prefix: Stat key prefix (e.g. "address_objects"). Counters
+                         "{prefix}_created", "{prefix}_skipped", and
+                         "{prefix}_failed" are incremented as appropriate.
+            track_stats: When False, skip stat recording (callers that use
+                         run_with_retry handle stats externally).
+
+        Returns:
+            Tuple of (success: bool, object_id or message).
+        """
+        try:
+            response = self.session.post(endpoint, json=payload, timeout=30)
+
+            if response.status_code in (200, 201):
+                created_obj = response.json()
+                if track_stats:
+                    self.record_stat(f"{stat_prefix}_created")
+                return True, created_obj.get("id")
+
+            if response.status_code == 422:
+                error_msg = self._extract_error_message(response)
+                if "already exists" in error_msg.lower() or "duplicate" in error_msg.lower():
+                    if track_stats:
+                        self.record_stat(f"{stat_prefix}_skipped")
+                    return True, f"SKIPPED: {error_msg}"
+                if track_stats:
+                    self.record_stat(f"{stat_prefix}_failed")
+                return False, error_msg
+
+            if track_stats:
+                self.record_stat(f"{stat_prefix}_failed")
+            return False, response.text
+
+        except requests.exceptions.RequestException as e:
+            if track_stats:
+                self.record_stat(f"{stat_prefix}_failed")
+            return False, str(e)
+
     def _disable_cts_settings_for_member_prep(self, payload: Dict[str, Any]) -> int:
         """
         Disable CTS/TrustSec-like settings in an interface payload before PUT.
@@ -459,185 +513,70 @@ class FTDAPIClient(FTDBaseClient):
     def create_network_object(self, obj: Dict, track_stats: bool = True) -> Tuple[bool, Optional[str]]:
         """
         Create a network object (address object) in FTD.
-        
+
         Args:
             obj: Dictionary containing network object data
-            
+            track_stats: Record stats internally (False when caller handles stats)
+
         Returns:
             Tuple of (success: bool, object_id: str or error message)
         """
-        endpoint = f"{self.base_url}/object/networks"
-        
-        try:
-            response = self.session.post(endpoint, json=obj, timeout=30)
-            
-            if response.status_code in [200, 201]:
-                created_obj = response.json()
-                if track_stats:
-                    self.record_stat("address_objects_created")
-                return True, created_obj.get("id")
-            elif response.status_code == 422:
-                # 422 Unprocessable Entity - usually means object already exists
-                error_data = response.json()
-                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
-                
-                # Check if it's a duplicate/already exists error
-                if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
-                    if track_stats:
-                        self.record_stat("address_objects_skipped")
-                    return True, f"SKIPPED: {error_msg}"  # Return True to indicate it's not a failure
-                else:
-                    if track_stats:
-                        self.record_stat("address_objects_failed")
-                    return False, error_msg
-            else:
-                if track_stats:
-                    self.record_stat("address_objects_failed")
-                error_msg = response.text
-                return False, error_msg
-                
-        except requests.exceptions.RequestException as e:
-            if track_stats:
-                self.record_stat("address_objects_failed")
-            return False, str(e)
+        return self._create_api_object(
+            f"{self.base_url}/object/networks", obj, "address_objects", track_stats,
+        )
     
     def create_network_group(self, group: Dict, track_stats: bool = True) -> Tuple[bool, Optional[str]]:
         """
         Create a network object group (address group) in FTD.
-        
+
         Args:
             group: Dictionary containing network group data
-            
+            track_stats: Record stats internally (False when caller handles stats)
+
         Returns:
             Tuple of (success: bool, object_id: str or error message)
         """
-        endpoint = f"{self.base_url}/object/networkgroups"
-        
-        try:
-            response = self.session.post(endpoint, json=group, timeout=30)
-            
-            if response.status_code in [200, 201]:
-                created_obj = response.json()
-                if track_stats:
-                    self.record_stat("address_groups_created")
-                return True, created_obj.get("id")
-            elif response.status_code == 422:
-                error_data = response.json()
-                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
-                
-                if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
-                    if track_stats:
-                        self.record_stat("address_groups_skipped")
-                    return True, f"SKIPPED: {error_msg}"
-                else:
-                    if track_stats:
-                        self.record_stat("address_groups_failed")
-                    return False, error_msg
-            else:
-                if track_stats:
-                    self.record_stat("address_groups_failed")
-                error_msg = response.text
-                return False, error_msg
-                
-        except requests.exceptions.RequestException as e:
-            if track_stats:
-                self.record_stat("address_groups_failed")
-            return False, str(e)
+        return self._create_api_object(
+            f"{self.base_url}/object/networkgroups", group, "address_groups", track_stats,
+        )
     
     def create_port_object(self, obj: Dict, track_stats: bool = True) -> Tuple[bool, Optional[str]]:
         """
         Create a port object (service object) in FTD.
-        
+
         Args:
             obj: Dictionary containing port object data
-            
+            track_stats: Record stats internally (False when caller handles stats)
+
         Returns:
             Tuple of (success: bool, object_id: str or error message)
         """
-        # Determine the correct endpoint based on protocol type
         obj_type = obj.get("type", "tcpportobject")
-        
         if obj_type == "tcpportobject":
             endpoint = f"{self.base_url}/object/tcpports"
         elif obj_type == "udpportobject":
             endpoint = f"{self.base_url}/object/udpports"
         else:
-            self.record_stat("port_objects_failed")
-            return False, f"Unknown port type: {obj_type}"
-        
-        try:
-            response = self.session.post(endpoint, json=obj, timeout=30)
-            
-            if response.status_code in [200, 201]:
-                created_obj = response.json()
-                if track_stats:
-                    self.record_stat("port_objects_created")
-                return True, created_obj.get("id")
-            elif response.status_code == 422:
-                error_data = response.json()
-                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
-                
-                if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
-                    if track_stats:
-                        self.record_stat("port_objects_skipped")
-                    return True, f"SKIPPED: {error_msg}"
-                else:
-                    if track_stats:
-                        self.record_stat("port_objects_failed")
-                    return False, error_msg
-            else:
-                if track_stats:
-                    self.record_stat("port_objects_failed")
-                error_msg = response.text
-                return False, error_msg
-                
-        except requests.exceptions.RequestException as e:
             if track_stats:
                 self.record_stat("port_objects_failed")
-            return False, str(e)
+            return False, f"Unknown port type: {obj_type}"
+
+        return self._create_api_object(endpoint, obj, "port_objects", track_stats)
     
     def create_port_group(self, group: Dict, track_stats: bool = True) -> Tuple[bool, Optional[str]]:
         """
         Create a port object group (service group) in FTD.
-        
+
         Args:
             group: Dictionary containing port group data
-            
+            track_stats: Record stats internally (False when caller handles stats)
+
         Returns:
             Tuple of (success: bool, object_id: str or error message)
         """
-        endpoint = f"{self.base_url}/object/portgroups"
-        
-        try:
-            response = self.session.post(endpoint, json=group, timeout=30)
-            
-            if response.status_code in [200, 201]:
-                created_obj = response.json()
-                if track_stats:
-                    self.record_stat("port_groups_created")
-                return True, created_obj.get("id")
-            elif response.status_code == 422:
-                error_data = response.json()
-                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
-                
-                if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
-                    if track_stats:
-                        self.record_stat("port_groups_skipped")
-                    return True, f"SKIPPED: {error_msg}"
-                else:
-                    if track_stats:
-                        self.record_stat("port_groups_failed")
-                    return False, error_msg
-            else:
-                if track_stats:
-                    self.record_stat("port_groups_failed")
-                error_msg = response.text
-                return False, error_msg
-                
-        except requests.exceptions.RequestException as e:
-            if track_stats:
-                self.record_stat("port_groups_failed")
-            return False, str(e)
+        return self._create_api_object(
+            f"{self.base_url}/object/portgroups", group, "port_groups", track_stats,
+        )
         
     def resolve_route_references(self, route: Dict) -> Tuple[bool, Union[Dict[str, Any], str]]:
         """
@@ -742,10 +681,10 @@ class FTDAPIClient(FTDBaseClient):
     def create_static_route(self, route: Dict) -> Tuple[bool, Optional[str]]:
         """
         Create a static route in FTD.
-        
+
         Args:
             route: Dictionary containing static route data (with minimal object references)
-            
+
         Returns:
             Tuple of (success: bool, object_id: str or error message)
         """
@@ -753,77 +692,28 @@ class FTDAPIClient(FTDBaseClient):
         if not success:
             self.record_stat("routes_failed")
             return False, f"Failed to get virtual router ID: {vr_id}"
-        # Resolve all object references to include IDs and versions
+
         success, resolved_route = self.resolve_route_references(route)
         if not success:
             self.record_stat("routes_failed")
             return False, f"Failed to resolve references: {resolved_route}"
 
         endpoint = f"{self.base_url}/devices/default/routing/virtualrouters/{vr_id}/staticrouteentries"
-
-        try:
-            response = self.session.post(endpoint, json=resolved_route, timeout=30)
-
-            if response.status_code in [200, 201]:
-                created_obj = response.json()
-                self.record_stat("routes_created")
-                return True, created_obj.get("id")
-            elif response.status_code == 422:
-                error_data = response.json()
-                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
-
-                if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
-                    self.record_stat("routes_skipped")
-                    return True, f"SKIPPED: {error_msg}"
-                else:
-                    self.record_stat("routes_failed")
-                    return False, error_msg
-            else:
-                self.record_stat("routes_failed")
-                error_msg = response.text
-                return False, error_msg
-
-        except requests.exceptions.RequestException as e:
-            self.record_stat("routes_failed")
-            return False, str(e)
+        return self._create_api_object(endpoint, resolved_route, "routes")
     
     def create_access_rule(self, rule: Dict) -> Tuple[bool, Optional[str]]:
         """
         Create an access rule (firewall policy) in FTD.
-        
+
         Args:
             rule: Dictionary containing access rule data
-            
+
         Returns:
             Tuple of (success: bool, object_id: str or error message)
         """
-        endpoint = f"{self.base_url}/policy/accesspolicies/default/accessrules"
-        
-        try:
-            response = self.session.post(endpoint, json=rule, timeout=30)
-
-            if response.status_code in [200, 201]:
-                created_obj = response.json()
-                self.record_stat("rules_created")
-                return True, created_obj.get("id")
-            elif response.status_code == 422:
-                error_data = response.json()
-                error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
-
-                if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
-                    self.record_stat("rules_skipped")
-                    return True, f"SKIPPED: {error_msg}"
-                else:
-                    self.record_stat("rules_failed")
-                    return False, error_msg
-            else:
-                self.record_stat("rules_failed")
-                error_msg = response.text
-                return False, error_msg
-
-        except requests.exceptions.RequestException as e:
-            self.record_stat("rules_failed")
-            return False, str(e)
+        return self._create_api_object(
+            f"{self.base_url}/policy/accesspolicies/default/accessrules", rule, "rules",
+        )
     
     def get_interface_by_name(self, name: str, iface_type: Optional[str] = None) -> Tuple[bool, Union[Dict[str, Any], str]]:
         """
@@ -2851,9 +2741,12 @@ def import_access_rules(client: FTDAPIClient, filename: str, delay: float = 0.2)
     return all_success
 
 
-def main():
+def main(argv=None):
     """
     Main function that orchestrates the import process.
+
+    Args:
+        argv: Command-line arguments (defaults to sys.argv[1:] when None).
     """
     parser = argparse.ArgumentParser(
         description='Import FortiGate converted configurations to Cisco FTD via FDM API',
@@ -2946,8 +2839,8 @@ Examples:
                                'physical-interfaces', 'etherchannels', 'bridge-groups', 'subinterfaces'],
                        help='Type of objects in the file (required with --file)')
     
-    args = parser.parse_args()
-    
+    args = parser.parse_args(argv)
+
     # Validate --file requires --type
     if args.file and not args.type:
         parser.error("--file requires --type to be specified")
