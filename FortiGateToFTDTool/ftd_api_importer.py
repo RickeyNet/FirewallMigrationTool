@@ -2862,11 +2862,36 @@ Examples:
 
     def record_phase(label: str, func, *func_args, **func_kwargs):
         """Run a phase, time it, and capture success for summary output."""
+        # Snapshot stats before the phase to compute per-phase counts
+        stats_before = dict(client.stats)
         start = time.perf_counter()
         result = func(*func_args, **func_kwargs)
         duration = time.perf_counter() - start
-        success = True if result is None else bool(result)
-        phase_timings.append({"label": label, "seconds": duration, "success": success})
+
+        # Compute per-phase created/updated/skipped vs failed
+        phase_ok = sum(
+            client.stats[k] - stats_before[k]
+            for k in client.stats
+            if k.endswith(("_created", "_updated", "_skipped"))
+        )
+        phase_failed = sum(
+            client.stats[k] - stats_before[k]
+            for k in client.stats
+            if k.endswith("_failed")
+        )
+
+        if phase_failed == 0:
+            status = "OK"
+        elif phase_ok > 0:
+            status = "PARTIAL"
+        else:
+            status = "FAIL"
+
+        phase_timings.append({
+            "label": label, "seconds": duration,
+            "success": phase_failed == 0, "status": status,
+            "ok_count": phase_ok, "failed_count": phase_failed,
+        })
         return result
     
     # Load metadata: explicit file takes priority, then auto-discover from --base
@@ -3065,8 +3090,11 @@ Examples:
         total_seconds = 0.0
         for entry in phase_timings:
             total_seconds += entry["seconds"]
-            status = "OK" if entry["success"] else "FAIL"
-            print(f"{entry['label']:<35}{entry['seconds']:.2f}s [{status}]")
+            status = entry.get("status", "OK" if entry["success"] else "FAIL")
+            detail = ""
+            if status == "PARTIAL":
+                detail = f"  ({entry['ok_count']} ok, {entry['failed_count']} failed)"
+            print(f"{entry['label']:<35}{entry['seconds']:.2f}s [{status}]{detail}")
         print("-"*60)
         print(f"{'Total':<35}{total_seconds:.2f}s")
     else:

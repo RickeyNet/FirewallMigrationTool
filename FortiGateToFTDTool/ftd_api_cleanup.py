@@ -840,6 +840,12 @@ class FTDBulkDelete(FTDBaseClient):
         else:
             endpoint = f"/devices/default/interfaces/{parent_id}/subinterfaces"
 
+        # Disable HA monitoring before deletion (API rejects DELETE otherwise)
+        name = subintf.get('name', 'UNNAMED')
+        ha_ok, ha_err = self._disable_ha_monitor(endpoint, obj_id, name)
+        if not ha_ok:
+            return False, f"Could not disable HA monitor: {ha_err}"
+
         return self.delete_object(endpoint, obj_id)
     
     def delete_all_subinterfaces(
@@ -1362,11 +1368,26 @@ Examples:
 
     def record_phase(label: str, func, *func_args, **func_kwargs):
         """Run a phase, time it, and capture success for summary output."""
+        stats_before = dict(client.stats)
         start = time.perf_counter()
         result = func(*func_args, **func_kwargs)
         duration = time.perf_counter() - start
-        success = True if result is None else bool(result)
-        phase_timings.append({"label": label, "seconds": duration, "success": success})
+
+        phase_deleted = client.stats["deleted"] - stats_before["deleted"]
+        phase_failed = client.stats["failed"] - stats_before["failed"]
+
+        if phase_failed == 0:
+            status = "OK"
+        elif phase_deleted > 0:
+            status = "PARTIAL"
+        else:
+            status = "FAIL"
+
+        phase_timings.append({
+            "label": label, "seconds": duration,
+            "success": phase_failed == 0, "status": status,
+            "ok_count": phase_deleted, "failed_count": phase_failed,
+        })
         return result
 
     # Delete in reverse dependency order
@@ -1472,8 +1493,11 @@ Examples:
         total_seconds = 0.0
         for entry in phase_timings:
             total_seconds += entry["seconds"]
-            status = "OK" if entry["success"] else "FAIL"
-            print(f"{entry['label']:<35}{entry['seconds']:.2f}s [{status}]")
+            status = entry.get("status", "OK" if entry["success"] else "FAIL")
+            detail = ""
+            if status == "PARTIAL":
+                detail = f"  ({entry['ok_count']} ok, {entry['failed_count']} failed)"
+            print(f"{entry['label']:<35}{entry['seconds']:.2f}s [{status}]{detail}")
         print("-"*60)
         print(f"{'Total':<35}{total_seconds:.2f}s")
     else:
