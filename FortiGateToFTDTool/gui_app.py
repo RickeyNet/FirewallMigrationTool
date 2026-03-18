@@ -79,18 +79,18 @@ class _QueueWriter(io.TextIOBase):
 # ---------------------------------------------------------------------------
 # Dark theme palette
 # ---------------------------------------------------------------------------
-_BG       = "#141414"   # root / frame background
-_INPUT    = "#252525"   # entry / combobox / spinbox fields
+_BG       = "#292929"   # root / frame background
+_INPUT    = "#2C2C2C"   # entry / combobox / spinbox fields
 _FG       = "#e0e0e0"   # primary text
 _FG_DIM   = "#777777"   # secondary / disabled text
-_PURPLE   = "#9333ea"   # vivid purple — accents, active elements
-_PURPLE_D = "#4c1d95"   # dark purple — buttons resting, selected tab
-_PURPLE_H = "#7c3aed"   # mid purple — hover
+_PURPLE   = "#48ea33"   # vivid purple — accents, active elements
+_PURPLE_D = "#bb7102"   # dark purple — buttons resting, selected tab
+_PURPLE_H = "#063aca"   # mid purple — hover
 _BORDER   = "#3d3d3d"   # subtle grey border
-_BTN_BG   = "#2d1a5e"   # button resting (very dark purple-grey)
+_BTN_BG   = "#1F6D5C"   # button resting (very dark purple-grey)
 _TAB_BG   = "#222222"   # inactive tab background
 _OUT_BG   = "#0d0d0d"   # output console background
-_OUT_FG   = "#d4d4d4"   # output console text
+_OUT_FG   = "#31A005"   # output console text
 
 
 class App(tk.Tk):
@@ -348,13 +348,13 @@ class App(tk.Tk):
         ttk.Entry(opts, textvariable=self.conv_ha_var, width=20).grid(
             row=4, column=1, sticky=tk.W, padx=4,
         )
-        ttk.Label(opts, text="e.g. Ethernet1/5").grid(row=4, column=2, sticky=tk.W)
+        ttk.Label(opts, text="e.g. Ethernet1/5").grid(row=5, column=1, sticky=tk.W)
 
         # Row 5: Pretty-print
         self.conv_pretty_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             opts, text="Pretty-print JSON output", variable=self.conv_pretty_var,
-        ).grid(row=5, column=1, sticky=tk.W, padx=4, pady=3)
+        ).grid(row=6, column=1, sticky=tk.W, padx=4, pady=3)
 
         opts.columnconfigure(1, weight=1)
 
