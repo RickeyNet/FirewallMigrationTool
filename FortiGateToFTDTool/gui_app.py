@@ -102,6 +102,15 @@ class App(tk.Tk):
         self.geometry("960x720")
         self.minsize(800, 600)
 
+        # Window icon
+        if getattr(sys, "frozen", False):
+            # When frozen, the icon is embedded in the exe by PyInstaller
+            self.iconbitmap(sys.executable)
+        else:
+            icon_path = os.path.join(APP_DIR, "app_icon.ico")
+            if os.path.isfile(icon_path):
+                self.iconbitmap(icon_path)
+
         self._running = False
         self._output_queue: queue.Queue = queue.Queue()
 

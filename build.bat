@@ -34,6 +34,8 @@ echo.
 
 pyinstaller --onefile --windowed ^
     --name "FortiGate-to-FTD-Converter" ^
+    --icon "app_icon.ico" ^
+    --paths "." ^
     --hidden-import yaml ^
     --hidden-import requests ^
     --hidden-import urllib3 ^

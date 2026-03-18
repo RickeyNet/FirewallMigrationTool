@@ -19,3 +19,14 @@ fortigate_config.yaml
 *_security_zones.json
 *_metadata.json
 *_summary.json
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec
+
+# Built executable
+*.exe
+
+# Test artifacts
+test_extract.png
