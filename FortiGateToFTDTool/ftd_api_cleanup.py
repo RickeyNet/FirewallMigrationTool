@@ -840,14 +840,12 @@ class FTDBulkDelete(FTDBaseClient):
         else:
             endpoint = f"/devices/default/interfaces/{parent_id}/subinterfaces"
 
-        # Disable HA monitoring before deletion (API rejects DELETE otherwise)
+        # Try to disable HA monitoring first, but attempt delete regardless
         name = subintf.get('name', 'UNNAMED')
-        ha_ok, ha_err = self._disable_ha_monitor(endpoint, obj_id, name)
-        if not ha_ok:
-            return False, f"Could not disable HA monitor: {ha_err}"
+        self._disable_ha_monitor(endpoint, obj_id, name)
 
         return self.delete_object(endpoint, obj_id)
-    
+
     def delete_all_subinterfaces(
         self,
         dry_run: bool = False,
@@ -897,9 +895,9 @@ class FTDBulkDelete(FTDBaseClient):
             print("\n  Summary: 0 deleted, 0 failed")
             return True
 
+        max_workers = 1  # Force sequential — FTD API returns 423 with concurrent subinterface deletes
         print(f"\n  Deleting {len(all_subinterfaces)} subinterfaces with up to {max_workers} workers.")
 
-        max_workers = max(1, max_workers)
         print_lock = threading.Lock()
         failure_flag = [False]
         failed_objects = []
@@ -987,6 +985,10 @@ class FTDBulkDelete(FTDBaseClient):
 
             # --- Step 3: PUT with monitorInterface = false --------------------
             obj_data["monitorInterface"] = False
+            # Also disable propagateSecurityGroupTag if present — it can
+            # cause the API to reject the PUT with HTTP 423.
+            if "propagateSecurityGroupTag" in obj_data:
+                obj_data["propagateSecurityGroupTag"] = False
 
             put_resp = self.session.put(url, json=obj_data, timeout=30)
             if put_resp.status_code in (200, 201, 204):

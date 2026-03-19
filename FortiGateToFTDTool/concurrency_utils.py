@@ -11,6 +11,7 @@ T = TypeVar("T")
 
 # Common API transient error fragments that should trigger a retry.
 TRANSIENT_ERROR_TOKENS = (
+    "423",
     "429",
     "too many",
     "rate limit",

@@ -91,6 +91,10 @@ class FTDAPIClient(FTDBaseClient):
         self._caches_populated = False
 
 
+        # Track individual failed items for the failure summary report
+        self.failed_items: List[Dict[str, str]] = []
+        self._failed_items_lock = threading.Lock()
+
         # Track statistics
         self.stats = {
             "address_objects_created": 0,
@@ -132,6 +136,15 @@ class FTDAPIClient(FTDBaseClient):
         """Thread-safe increment for statistics counters."""
         with self._stats_lock:
             self.stats[key] += 1
+
+    def record_failure(self, object_type: str, name: str, error: str) -> None:
+        """Thread-safe recording of a failed import item."""
+        with self._failed_items_lock:
+            self.failed_items.append({
+                "object_type": object_type,
+                "name": name,
+                "error": str(error)
+            })
 
     def compute_outcome(self) -> tuple:
         """Determine overall run outcome from stats.
@@ -1128,11 +1141,23 @@ class FTDAPIClient(FTDBaseClient):
 
         
         # Remove switchport-specific fields if present (they're not valid in routed mode)
-        switchport_fields = ['switchPortMode', 'switchPortConfig', 'nativeVlan', 
+        switchport_fields = ['switchPortMode', 'switchPortConfig', 'nativeVlan',
                             'allowedVlans', 'voiceVlan', 'spanningTreePortfast']
         for field in switchport_fields:
             update_payload.pop(field, None)
-        
+
+        # Always disable propagateSecurityGroupTag on all interfaces
+        update_payload['propagateSecurityGroupTag'] = False
+
+        # HA monitoring: enable only on standalone physical interfaces,
+        # disable on etherchannel member preps (subinterfaces handled separately)
+        if intf.get('name') == '':
+            # EtherChannel member prep — only the etherchannel itself should be monitored
+            update_payload['monitorInterface'] = False
+        else:
+            # Standalone physical interface — enable HA monitoring
+            update_payload['monitorInterface'] = True
+
         endpoint = f"{self.base_url}/devices/default/interfaces/{intf_id}"
         
         try:
@@ -1352,10 +1377,14 @@ class FTDAPIClient(FTDBaseClient):
                     "type": "interfaceipv4"
                 }
         
+        # Always disable propagateSecurityGroupTag and HA monitoring on subinterfaces
+        subintf_payload['propagateSecurityGroupTag'] = False
+        subintf_payload['monitorInterface'] = False
+
         # Print debug info
         if self.debug:
             print(f"\n      [DEBUG] Subinterface payload: {subintf_payload}")
-        
+
         # DIFFERENT ENDPOINTS for physical vs etherchannel parents
         if parent_is_etherchannel:
             # EtherChannel parent: /devices/default/etherchannelinterfaces/{parentId}/subinterfaces
@@ -1509,10 +1538,15 @@ class FTDAPIClient(FTDBaseClient):
         # Remove old incorrect field names if present
         intf.pop('speed', None)
         intf.pop('duplex', None)
-        
+
+        # Always disable propagateSecurityGroupTag
+        intf['propagateSecurityGroupTag'] = False
+        # Enable HA monitoring on the etherchannel itself
+        intf['monitorInterface'] = True
+
         try:
             response = self.session.post(endpoint, json=intf, timeout=30)
-            
+
             if response.status_code in [200, 201]:
                 created_obj = response.json()
                 self.stats["etherchannels_created"] += 1
@@ -1876,6 +1910,31 @@ class FTDAPIClient(FTDBaseClient):
         print(f"\nOutcome: {outcome} (exit code {exit_code})")
         print(f"{'='*60}")
 
+    def print_failure_summary(self):
+        """Print a detailed summary of every item that failed to import."""
+        if not self.failed_items:
+            return
+
+        print(f"\n{'='*60}")
+        print(f"FAILED IMPORTS SUMMARY ({len(self.failed_items)} items)")
+        print(f"{'='*60}")
+
+        # Group failures by object type
+        by_type: Dict[str, List[Dict[str, str]]] = {}
+        for item in self.failed_items:
+            obj_type = item["object_type"]
+            if obj_type not in by_type:
+                by_type[obj_type] = []
+            by_type[obj_type].append(item)
+
+        for obj_type, items in by_type.items():
+            print(f"\n  {obj_type} ({len(items)} failed):")
+            for item in items:
+                print(f"    - {item['name']}")
+                print(f"      Error: {item['error']}")
+
+        print(f"\n{'='*60}")
+
 
 def load_json_file(filename: str) -> Optional[List[Dict]]:
     """
@@ -2106,6 +2165,7 @@ def import_address_objects(client: FTDAPIClient, filename: str, max_workers: int
             return
 
         client.record_stat("address_objects_failed")
+        client.record_failure("Address Object", name, result)
         line = f"  [{idx+1}/{total}] Creating: {name}... FAIL {result}"
         with print_lock:
             print(line, flush=True)
@@ -2154,10 +2214,11 @@ def import_address_groups(client: FTDAPIClient, filename: str, delay: float = 0.
             print("[OK]")
         else:
             print(f"[FAIL {result}]")
+            client.record_failure("Address Group", name, result)
             all_success = False
-        
+
         time.sleep(delay)
-    
+
     return all_success
 
 
@@ -2253,6 +2314,7 @@ def import_service_objects(client: FTDAPIClient, filename: str, max_workers: int
             return
 
         client.record_stat("port_objects_failed")
+        client.record_failure("Port Object", name, result)
         line = f"  [{idx+1}/{total}] Creating: {name} ({obj_type})... FAIL {result}"
         with print_lock:
             print(line, flush=True)
@@ -2301,10 +2363,11 @@ def import_service_groups(client: FTDAPIClient, filename: str, delay: float = 0.
             print("[OK]")
         else:
             print(f"[FAIL {result}]")
+            client.record_failure("Port Group", name, result)
             all_success = False
-        
+
         time.sleep(delay)
-    
+
     return all_success
 
 
@@ -2402,6 +2465,7 @@ def import_physical_interfaces(client: FTDAPIClient, filename: str, delay: float
             print(f"[FAIL] {result}")
             if client.debug:
                 print(f"       Error details: {result}")
+            client.record_failure("Physical Interface", display_name, result)
             failed_count += 1
             all_success = False
 
@@ -2453,10 +2517,11 @@ def import_etherchannels(client: FTDAPIClient, filename: str, delay: float = 0.2
                 print("[OK]")
         else:
             print(f"[FAIL] {result}")
+            client.record_failure("EtherChannel", name, result)
             all_success = False
-        
+
         time.sleep(delay)
-    
+
     return all_success
 
 
@@ -2500,10 +2565,11 @@ def import_bridge_groups(client: FTDAPIClient, filename: str, delay: float = 0.2
                 print("[OK]")
         else:
             print(f"[FAIL] {result}")
+            client.record_failure("Bridge Group", name, result)
             all_success = False
-        
+
         time.sleep(delay)
-    
+
     return all_success
 
 
@@ -2603,9 +2669,10 @@ def import_subinterfaces(client: FTDAPIClient, filename: str, parent_type_filter
                 created_count += 1
         else:
             print(f"[FAIL] {result}")
+            client.record_failure("Subinterface", name, result)
             failed_count += 1
             all_success = False
-        
+
         time.sleep(delay)
     
     # Print summary
@@ -2649,10 +2716,11 @@ def import_security_zones(client: FTDAPIClient, filename: str, delay: float = 0.
                 print("[OK]")
         else:
             print(f"[FAIL {result}]")
+            client.record_failure("Security Zone", name, result)
             all_success = False
-        
+
         time.sleep(delay)
-    
+
     return all_success
 
 def import_static_routes(client: FTDAPIClient, filename: str, delay: float = 0.2) -> bool:
@@ -2694,10 +2762,11 @@ def import_static_routes(client: FTDAPIClient, filename: str, delay: float = 0.2
             print("[OK]")
         else:
             print(f"[FAIL {result}]")
+            client.record_failure("Static Route", name, result)
             all_success = False
-        
+
         time.sleep(delay)
-    
+
     return all_success
 
 def import_access_rules(client: FTDAPIClient, filename: str, delay: float = 0.2) -> bool:
@@ -2734,10 +2803,11 @@ def import_access_rules(client: FTDAPIClient, filename: str, delay: float = 0.2)
             print("[OK]")
         else:
             print(f"[FAIL {result}]")
+            client.record_failure("Access Rule", name, result)
             all_success = False
-        
+
         time.sleep(delay)
-    
+
     return all_success
 
 
@@ -3102,7 +3172,20 @@ Examples:
     
     # Print statistics
     client.print_statistics()
-    
+
+    # Print and save failed items summary
+    client.print_failure_summary()
+    if client.failed_items:
+        failed_report_path = f"{args.base}_failed_imports.json"
+        failed_payload = {
+            "total_failed": len(client.failed_items),
+            "failed_items": client.failed_items
+        }
+        if write_json_report(failed_report_path, failed_payload):
+            print(f"[OK] Failed imports report written: {failed_report_path}")
+        else:
+            print(f"[FAIL] Could not write failed imports report: {failed_report_path}")
+
     # Deploy changes if requested
     if args.deploy:
         client.deploy_changes()

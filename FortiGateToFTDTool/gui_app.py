@@ -12,9 +12,12 @@ Build:  see build.bat in the project root.
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import threading
+import ctypes
 import sys
 import os
+import glob
 import io
+import json
 import queue
 import traceback
 
@@ -92,13 +95,15 @@ _TAB_BG   = "#222222"   # inactive tab background
 _OUT_BG   = "#0d0d0d"   # output console background
 _OUT_FG   = "#31A005"   # output console text
 
+APP_VERSION = "1.0.0"
+
 
 class App(tk.Tk):
     """Main application window."""
 
     def __init__(self):
         super().__init__()
-        self.title("FortiGate to Cisco FTD Converter")
+        self.title(f"FortiGate to Cisco FTD Converter v{APP_VERSION}")
         self.geometry("960x720")
         self.minsize(800, 600)
 
@@ -112,6 +117,7 @@ class App(tk.Tk):
                 self.iconbitmap(icon_path)
 
         self._running = False
+        self._worker_thread: threading.Thread | None = None
         self._output_queue: queue.Queue = queue.Queue()
 
         self._apply_dark_theme()
@@ -300,6 +306,7 @@ class App(tk.Tk):
         self._build_convert_tab(notebook)
         self._build_import_tab(notebook)
         self._build_cleanup_tab(notebook)
+        self._build_viewer_tab(notebook)
 
         # Status bar
         self.status_var = tk.StringVar(value="Ready")
@@ -357,7 +364,7 @@ class App(tk.Tk):
         ttk.Entry(opts, textvariable=self.conv_ha_var, width=20).grid(
             row=4, column=1, sticky=tk.W, padx=4,
         )
-        ttk.Label(opts, text="e.g. Ethernet1/5").grid(row=5, column=1, sticky=tk.W)
+        ttk.Label(opts, text="e.g. Ethernet1/5  (leave blank = no HA port)").grid(row=5, column=1, sticky=tk.W)
 
         # Row 5: Pretty-print
         self.conv_pretty_var = tk.BooleanVar(value=True)
@@ -374,6 +381,11 @@ class App(tk.Tk):
             btn_frame, text="Run Conversion", command=self._run_convert,
         )
         self.conv_run_btn.pack(side=tk.LEFT)
+        self.conv_cancel_btn = ttk.Button(
+            btn_frame, text="Cancel", command=self._cancel_operation,
+            state=tk.DISABLED,
+        )
+        self.conv_cancel_btn.pack(side=tk.LEFT, padx=8)
         ttk.Button(
             btn_frame, text="Clear Output",
             command=lambda: self._clear_output(self.conv_output),
@@ -477,6 +489,11 @@ class App(tk.Tk):
             btn_frame, text="Start Import", command=self._run_import,
         )
         self.imp_run_btn.pack(side=tk.LEFT)
+        self.imp_cancel_btn = ttk.Button(
+            btn_frame, text="Cancel", command=self._cancel_operation,
+            state=tk.DISABLED,
+        )
+        self.imp_cancel_btn.pack(side=tk.LEFT, padx=8)
         ttk.Button(
             btn_frame, text="Clear Output",
             command=lambda: self._clear_output(self.imp_output),
@@ -568,12 +585,146 @@ class App(tk.Tk):
             btn_frame, text="Start Cleanup", command=self._run_cleanup,
         )
         self.cln_run_btn.pack(side=tk.LEFT)
+        self.cln_cancel_btn = ttk.Button(
+            btn_frame, text="Cancel", command=self._cancel_operation,
+            state=tk.DISABLED,
+        )
+        self.cln_cancel_btn.pack(side=tk.LEFT, padx=8)
         ttk.Button(
             btn_frame, text="Clear Output",
             command=lambda: self._clear_output(self.cln_output),
         ).pack(side=tk.LEFT, padx=8)
 
         self.cln_output = self._make_output_area(tab)
+
+    # ==================== CONFIG VIEWER TAB ====================
+    def _build_viewer_tab(self, notebook):
+        tab = ttk.Frame(notebook)
+        notebook.add(tab, text="  Config Viewer  ")
+
+        # Top bar: directory selector
+        top = ttk.LabelFrame(tab, text="Config Files", padding=10)
+        top.pack(fill=tk.X, padx=8, pady=(8, 4))
+
+        ttk.Label(top, text="Config Directory:").grid(row=0, column=0, sticky=tk.W, pady=3)
+        self.viewer_dir_var = tk.StringVar(value=DEFAULT_DIR)
+        ttk.Entry(top, textvariable=self.viewer_dir_var, width=50).grid(
+            row=0, column=1, sticky=tk.EW, padx=4,
+        )
+        ttk.Button(top, text="Browse...", command=self._browse_viewer_dir).grid(
+            row=0, column=2, padx=4,
+        )
+
+        ttk.Label(top, text="JSON Base Name:").grid(row=1, column=0, sticky=tk.W, pady=3)
+        self.viewer_base_var = tk.StringVar(value="ftd_config")
+        ttk.Entry(top, textvariable=self.viewer_base_var, width=30).grid(
+            row=1, column=1, sticky=tk.W, padx=4,
+        )
+
+        ttk.Button(top, text="Load Files", command=self._load_viewer_files).grid(
+            row=1, column=2, padx=4,
+        )
+
+        top.columnconfigure(1, weight=1)
+
+        # Middle: file selector listbox + JSON viewer (side by side)
+        body = ttk.Frame(tab)
+        body.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+
+        # Left pane: file list
+        list_frame = ttk.Frame(body)
+        list_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 4))
+
+        ttk.Label(list_frame, text="Config Files:").pack(anchor=tk.W)
+        self.viewer_listbox = tk.Listbox(
+            list_frame, width=30, font=("Consolas", 10),
+            bg=_OUT_BG, fg=_OUT_FG,
+            selectbackground=_PURPLE_D, selectforeground=_OUT_FG,
+            highlightthickness=1, highlightbackground=_BORDER, highlightcolor=_PURPLE,
+            relief=tk.FLAT, bd=1,
+        )
+        list_scroll = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.viewer_listbox.yview)
+        self.viewer_listbox.configure(yscrollcommand=list_scroll.set)
+        list_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.viewer_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.viewer_listbox.bind("<<ListboxSelect>>", self._on_viewer_select)
+
+        # Right pane: JSON content
+        content_frame = ttk.Frame(body)
+        content_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        ttk.Label(content_frame, text="File Contents:").pack(anchor=tk.W)
+        self.viewer_text = tk.Text(
+            content_frame, wrap=tk.NONE, font=("Consolas", 10),
+            bg=_OUT_BG, fg=_OUT_FG,
+            insertbackground=_OUT_FG,
+            selectbackground=_PURPLE_D, selectforeground=_OUT_FG,
+            state=tk.DISABLED, relief=tk.FLAT, bd=1,
+            highlightthickness=1, highlightbackground=_BORDER, highlightcolor=_PURPLE,
+        )
+        yscroll = ttk.Scrollbar(content_frame, orient=tk.VERTICAL, command=self.viewer_text.yview)
+        xscroll = ttk.Scrollbar(content_frame, orient=tk.HORIZONTAL, command=self.viewer_text.xview)
+        self.viewer_text.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+        yscroll.pack(side=tk.RIGHT, fill=tk.Y)
+        xscroll.pack(side=tk.BOTTOM, fill=tk.X)
+        self.viewer_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Storage for discovered file paths
+        self._viewer_files: list[str] = []
+
+    def _browse_viewer_dir(self):
+        d = filedialog.askdirectory(title="Select Config Files Directory")
+        if d:
+            self.viewer_dir_var.set(d)
+
+    def _load_viewer_files(self):
+        """Scan the config directory for JSON files matching the base name."""
+        config_dir = self.viewer_dir_var.get().strip()
+        base = self.viewer_base_var.get().strip() or "ftd_config"
+
+        if not config_dir or not os.path.isdir(config_dir):
+            messagebox.showerror("Invalid Directory", "Please select a valid config directory.")
+            return
+
+        pattern = os.path.join(config_dir, f"{base}_*.json")
+        files = sorted(glob.glob(pattern))
+
+        self.viewer_listbox.delete(0, tk.END)
+        self._viewer_files = files
+
+        if not files:
+            messagebox.showinfo("No Files", f"No files matching '{base}_*.json' found in:\n{config_dir}")
+            return
+
+        for f in files:
+            self.viewer_listbox.insert(tk.END, os.path.basename(f))
+
+    def _on_viewer_select(self, event):
+        """Display the selected JSON file in the viewer."""
+        sel = self.viewer_listbox.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        if idx >= len(self._viewer_files):
+            return
+
+        filepath = self._viewer_files[idx]
+        try:
+            with open(filepath, "r", encoding="utf-8") as fh:
+                raw = fh.read()
+            # Pretty-print if valid JSON
+            try:
+                data = json.loads(raw)
+                display = json.dumps(data, indent=2)
+            except (json.JSONDecodeError, ValueError):
+                display = raw
+        except OSError as exc:
+            display = f"Error reading file: {exc}"
+
+        self.viewer_text.configure(state=tk.NORMAL)
+        self.viewer_text.delete("1.0", tk.END)
+        self.viewer_text.insert("1.0", display)
+        self.viewer_text.configure(state=tk.DISABLED)
 
     # ------------------------------------------------------------------
     # Shared widgets / helpers
@@ -630,9 +781,12 @@ class App(tk.Tk):
             self.imp_dir_var.set(d)
 
     def _set_buttons_state(self, state):
-        """Enable or disable all run buttons."""
+        """Enable or disable all run buttons (and toggle cancel buttons inversely)."""
+        cancel_state = tk.DISABLED if state == tk.NORMAL else tk.NORMAL
         for btn in (self.conv_run_btn, self.imp_run_btn, self.cln_run_btn):
             btn.configure(state=state)
+        for btn in (self.conv_cancel_btn, self.imp_cancel_btn, self.cln_cancel_btn):
+            btn.configure(state=cancel_state)
 
     # ------------------------------------------------------------------
     # In-process execution engine
@@ -681,7 +835,8 @@ class App(tk.Tk):
                 sys.stderr = old_stderr
                 self._output_queue.put((text_widget, None))  # sentinel
 
-        threading.Thread(target=_worker, daemon=True).start()
+        self._worker_thread = threading.Thread(target=_worker, daemon=True)
+        self._worker_thread.start()
         self._poll_output()
 
     def _poll_output(self):
@@ -699,6 +854,21 @@ class App(tk.Tk):
         except queue.Empty:
             pass
         self.after(50, self._poll_output)
+
+    def _cancel_operation(self):
+        """Cancel the currently running operation by raising SystemExit in the worker thread."""
+        if not self._running or self._worker_thread is None:
+            return
+        tid = self._worker_thread.ident
+        if tid is None:
+            return
+        # Raise SystemExit asynchronously in the worker thread
+        res = ctypes.pythonapi.PyThreadState_SetAsyncExc(
+            ctypes.c_ulong(tid), ctypes.py_object(SystemExit),
+        )
+        if res == 0:
+            return  # thread already finished
+        self.status_var.set("Cancelling...")
 
     # ------------------------------------------------------------------
     # Run commands
@@ -720,8 +890,8 @@ class App(tk.Tk):
             argv.extend(["-m", model])
 
         ha_port = self.conv_ha_var.get().strip()
-        if ha_port:
-            argv.extend(["--ha-port", ha_port])
+        # Always pass --ha-port: user value or "none" to skip model default
+        argv.extend(["--ha-port", ha_port if ha_port else "none"])
 
         if self.conv_pretty_var.get():
             argv.append("--pretty")

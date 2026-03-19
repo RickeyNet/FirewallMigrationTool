@@ -57,9 +57,13 @@ class _FakeImporterClient:
             "port_objects_skipped": 0,
         }
         self._attempts = {}
+        self.failed_items = []
 
     def record_stat(self, key: str) -> None:
         self.stats[key] += 1
+
+    def record_failure(self, object_type: str, name: str, error: str) -> None:
+        self.failed_items.append({"object_type": object_type, "name": name, "error": str(error)})
 
     def create_network_object(self, obj, track_stats=False):
         name = obj.get("name", "")

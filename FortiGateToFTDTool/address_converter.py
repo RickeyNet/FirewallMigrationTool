@@ -60,6 +60,9 @@ class AddressConverter:
         # This will store the converted FTD network objects
         # Starts empty and gets populated by the convert() method
         self.ftd_network_objects = []
+
+        # Track items that failed/were skipped during conversion
+        self.failed_items = []
     
     def convert(self) -> List[Dict]:
         """
@@ -127,12 +130,14 @@ class AddressConverter:
             # Check 1: Skip if name is "none" (case-insensitive)
             if object_name.lower() == 'none':
                 print(f"  Skipped: {object_name} (name is 'none')")
+                self.failed_items.append({"name": object_name, "reason": "name is 'none'", "config": properties})
                 continue
             
             # Check 2: Skip if name is just an IP address (contains only digits, dots, colons)
             # Valid names should have letters or underscores
             if self._is_ip_address(object_name):
                 print(f"  Skipped: {object_name} (name is just an IP address)")
+                self.failed_items.append({"name": object_name, "reason": "name is just an IP address", "config": properties})
                 continue
             
             # ================================================================
@@ -156,12 +161,14 @@ class AddressConverter:
             # Check 3: Skip if value is empty or just whitespace
             if not address_value or address_value.strip() == '':
                 print(f"  Skipped: {object_name} (empty value)")
+                self.failed_items.append({"name": object_name, "reason": "empty value", "config": properties})
                 continue
             
             # Check 4: Skip if value is malformed (no valid IP format)
             # FQDN values are domain names, not IPs — skip IP validation for them
             if address_type != "FQDN" and not self._is_valid_address_value(address_value):
                 print(f"  Skipped: {object_name} (invalid value: {address_value})")
+                self.failed_items.append({"name": object_name, "reason": f"invalid value: {address_value}", "config": properties})
                 continue
             
             # ================================================================

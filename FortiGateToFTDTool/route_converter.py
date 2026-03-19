@@ -162,6 +162,9 @@ class RouteConverter:
         self.skipped_count = 0
         self.unmatched_count = 0  # Track routes with no matching address object
 
+        # Track items that failed/were skipped during conversion
+        self.failed_items = []
+
     def _build_network_object_lookup(self):
         """Build lookup from network object name to full object."""
         for obj in self.network_objects:
@@ -548,23 +551,29 @@ class RouteConverter:
                 self._destination_cache[cache_key] = ref
                 return ref.copy()
 
-        # 2) Match by network base address only
+        # 2) Match by network base address only (verify CIDR matches)
         obj_name = self.ip_to_network_object_name.get(network_addr)
         if obj_name:
             obj = self.name_to_network_object.get(obj_name)
             if obj:
-                ref = obj.copy()
-                self._destination_cache[cache_key] = ref
-                return ref.copy()
+                obj_value = str(obj.get('value', '')).strip()
+                # Only use if CIDR matches or the object is a plain host (no slash)
+                if obj_value == network_cidr or '/' not in obj_value:
+                    ref = obj.copy()
+                    self._destination_cache[cache_key] = ref
+                    return ref.copy()
 
         # 3) Last resort: match by raw ip_addr (some object values might be host style)
         obj_name = self.ip_to_network_object_name.get(ip_addr)
         if obj_name:
             obj = self.name_to_network_object.get(obj_name)
             if obj:
-                ref = obj.copy()
-                self._destination_cache[cache_key] = ref
-                return ref.copy()
+                obj_value = str(obj.get('value', '')).strip()
+                # Only use if CIDR matches or the object is a plain host (no slash)
+                if obj_value == network_cidr or '/' not in obj_value:
+                    ref = obj.copy()
+                    self._destination_cache[cache_key] = ref
+                    return ref.copy()
 
         if self.debug:
             print(f"    [DEBUG] Destination lookup miss for: dst={ip_addr} mask={netmask} -> {network_cidr}")
@@ -743,6 +752,7 @@ class RouteConverter:
             if properties.get('blackhole') == 'enable':
                 self.blackhole_count += 1
                 print(f"  Skipped: Route [{route_id}] - Blackhole route")
+                self.failed_items.append({"name": f"Route_{route_id}", "reason": "Blackhole route", "config": properties})
                 continue
             
             # ================================================================
@@ -752,6 +762,7 @@ class RouteConverter:
             if not dst or len(dst) < 2:
                 print(f"  Skipped: Route [{route_id}] - No destination specified")
                 self.skipped_count += 1
+                self.failed_items.append({"name": f"Route_{route_id}", "reason": "No destination specified", "config": properties})
                 continue
             
             # Convert destination to CIDR format
@@ -764,6 +775,7 @@ class RouteConverter:
             if not dst_network_obj:
                 print(f"  Skipped: Route [{route_id}] - Could not resolve destination network object")
                 self.skipped_count += 1
+                self.failed_items.append({"name": f"Route_{route_id}", "reason": "Could not resolve destination network object", "config": properties})
                 continue
             
             # ================================================================
@@ -803,12 +815,14 @@ class RouteConverter:
             if not gateway_ip:
                 print(f"  Skipped: Route [{route_id}] - No gateway specified")
                 self.skipped_count += 1
+                self.failed_items.append({"name": f"Route_{route_id}", "reason": "No gateway specified", "config": properties})
                 continue
             
             gateway_obj = self._get_network_object_for_gateway(gateway_ip)
             if not gateway_obj:
                 print(f"  Skipped: Route [{route_id}] - Could not resolve gateway network object")
                 self.skipped_count += 1
+                self.failed_items.append({"name": f"Route_{route_id}", "reason": "Could not resolve gateway network object", "config": properties})
                 continue
 
             

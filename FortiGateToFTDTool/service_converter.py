@@ -128,6 +128,9 @@ class ServiceConverter:
         # Set of service names that were skipped (ICMP, etc.)
         # Used by ServiceGroupConverter to filter these out of groups
         self.skipped_services = set()
+
+        # Track items that failed/were skipped during conversion
+        self.failed_items = []
     
     def _parse_port_list(self, port_value: Any) -> List[str]:
         """
@@ -245,6 +248,7 @@ class ServiceConverter:
                 print(f"  Skipped: {service_name} (Protocol: {protocol} - not a port-based service)")
                 self.icmp_skipped_count += 1
                 self.skipped_services.add(sanitized_name)
+                self.failed_items.append({"name": service_name, "reason": f"Protocol: {protocol} - not a port-based service", "config": properties})
                 continue
             
             # Also check for ICMP-specific fields (some FortiGate configs use these)
@@ -252,6 +256,7 @@ class ServiceConverter:
                 print(f"  Skipped: {service_name} (ICMP service - not supported in FTD port objects)")
                 self.icmp_skipped_count += 1
                 self.skipped_services.add(sanitized_name)
+                self.failed_items.append({"name": service_name, "reason": "ICMP service - not supported in FTD port objects", "config": properties})
                 continue
             
             # Check if protocol-number field indicates ICMP (protocol 1) or ICMPv6 (protocol 58)
@@ -260,6 +265,7 @@ class ServiceConverter:
                 print(f"  Skipped: {service_name} (ICMP protocol number {protocol_number})")
                 self.icmp_skipped_count += 1
                 self.skipped_services.add(sanitized_name)
+                self.failed_items.append({"name": service_name, "reason": f"ICMP protocol number {protocol_number}", "config": properties})
                 continue
             
             # ================================================================
@@ -278,6 +284,7 @@ class ServiceConverter:
                 print(f"  Skipped: {service_name} (No TCP or UDP ports defined)")
                 self.skipped_count += 1
                 self.skipped_services.add(sanitized_name)
+                self.failed_items.append({"name": service_name, "reason": "No TCP or UDP ports defined", "config": properties})
                 continue
             
             # Track if this service was split

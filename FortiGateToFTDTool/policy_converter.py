@@ -131,10 +131,13 @@ class PolicyConverter:
         
         # This will store the converted FTD access rules
         self.ftd_access_rules = []
-        
+
         # Track statistics
         self.permit_count = 0
         self.deny_count = 0
+
+        # Track items that failed/were skipped during conversion
+        self.failed_items = []
     
     def convert(self) -> List[Dict]:
         """
