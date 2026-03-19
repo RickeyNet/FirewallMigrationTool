@@ -24,21 +24,21 @@ FortiGate to Cisco FTD Configuration Converter is a three-phase migration tool t
 
 #### Supported FTD Models (13)
 
-| Model | Ports | HA Port |
-|-------|-------|---------|
-| FTD-1010 | 8 | None |
-| FTD-1120 | 12 | Ethernet1/2 |
-| FTD-1140 | 12 | Ethernet1/2 |
-| FTD-2110 | 12 | Ethernet1/2 |
-| FTD-2120 | 12 | Ethernet1/2 |
-| FTD-2130 | 16 | Ethernet1/2 |
-| FTD-2140 | 16 | Ethernet1/2 |
-| FTD-3105 | 8 | Ethernet1/2 |
-| FTD-3110 | 16 | Ethernet1/2 |
-| FTD-3120 | 16 | Ethernet1/2 |
-| FTD-3130 | 24 | Ethernet1/2 |
-| FTD-3140 | 24 | Ethernet1/2 |
-| FTD-4215 | 8 | Ethernet1/2 |
+| Model    | Ports | HA Port     |
+|----------|-------|-------------|
+| FTD-1010 | 8     | None        |
+| FTD-1120 | 12    | Ethernet1/2 |
+| FTD-1140 | 12    | Ethernet1/2 |
+| FTD-2110 | 12    | Ethernet1/2 |
+| FTD-2120 | 12    | Ethernet1/2 |
+| FTD-2130 | 16    | Ethernet1/2 |
+| FTD-2140 | 16    | Ethernet1/2 |
+| FTD-3105 | 8     | Ethernet1/2 |
+| FTD-3110 | 16    | Ethernet1/2 |
+| FTD-3120 | 16    | Ethernet1/2 |
+| FTD-3130 | 24    | Ethernet1/2 |
+| FTD-3140 | 24    | Ethernet1/2 |
+| FTD-4215 | 8     | Ethernet1/2 |
 
 Custom HA port override supported via `--ha-port`.
 
