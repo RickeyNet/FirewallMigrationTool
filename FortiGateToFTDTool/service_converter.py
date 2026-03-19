@@ -211,7 +211,10 @@ class ServiceConverter:
         
         # This list will accumulate all converted port objects
         port_objects = []
-        
+
+        # Track used names to deduplicate
+        used_names: dict[str, int] = {}
+
         # ====================================================================
         # STEP 2: Process each FortiGate service object
         # ====================================================================
@@ -222,7 +225,14 @@ class ServiceConverter:
             service_name = list(service_dict.keys())[0]
             properties = service_dict[service_name]
             sanitized_name = sanitize_name(service_name)
-            
+
+            # Deduplicate: if this base name was already used, append _2, _3, etc.
+            if sanitized_name in used_names:
+                used_names[sanitized_name] += 1
+                sanitized_name = f"{sanitized_name}_{used_names[sanitized_name]}"
+            else:
+                used_names[sanitized_name] = 1
+
             # ================================================================
             # STEP 2B: Check the protocol type
             # ================================================================

@@ -93,7 +93,10 @@ class AddressConverter:
         
         # This list will accumulate all converted objects
         network_objects = []
-        
+
+        # Track used names to deduplicate (e.g., names that sanitize to the same string)
+        used_names: dict[str, int] = {}
+
         # ====================================================================
         # STEP 2: Process each FortiGate address object
         # ====================================================================
@@ -167,7 +170,14 @@ class AddressConverter:
             # This is the final format that FTD FDM API expects
             # Sanitize the object name to replace spaces with underscores
             sanitized_name = sanitize_name(object_name)
-            
+
+            # Deduplicate: if this name was already used, append _2, _3, etc.
+            if sanitized_name in used_names:
+                used_names[sanitized_name] += 1
+                sanitized_name = f"{sanitized_name}_{used_names[sanitized_name]}"
+            else:
+                used_names[sanitized_name] = 1
+
             ftd_object = {
                 "name": sanitized_name,                           # Object name from FortiGate
                 "description": properties.get('comment', ''),  # Optional description

@@ -720,6 +720,9 @@ class RouteConverter:
         
         # This list will accumulate all converted routes
         static_routes = []
+
+        # Track used route names to deduplicate (e.g., multiple routes with same comment)
+        used_route_names: Dict[str, int] = {}
         
         # ====================================================================
         # STEP 2: Process each FortiGate static route
@@ -823,6 +826,13 @@ class RouteConverter:
             else:
                 dst_obj_name = dst_network_obj.get('name', 'unknown')
                 route_name = f"Route_{route_id}_{sanitize_name(dst_obj_name)}"
+
+            # Deduplicate: if this name was already used, append _2, _3, etc.
+            if route_name in used_route_names:
+                used_route_names[route_name] += 1
+                route_name = f"{route_name}_{used_route_names[route_name]}"
+            else:
+                used_route_names[route_name] = 1
             
             # ================================================================
             # STEP 2I: Create the FTD static route entry structure
