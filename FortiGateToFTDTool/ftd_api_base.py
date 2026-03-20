@@ -103,7 +103,7 @@ class FTDBaseClient:
 
         try:
             response = self.session.post(
-                auth_url, json=payload, headers=headers, timeout=30
+                auth_url, json=payload, headers=headers, timeout=120
             )
 
             if response.status_code == 200:

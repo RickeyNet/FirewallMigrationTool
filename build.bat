@@ -94,7 +94,7 @@ echo       This may take a minute...
 echo.
 
 pyinstaller --onefile --windowed ^
-    --name "FortiGate-to-FTD-Converter" ^
+    --name "FortiGate-to-FTD-Converter-v%APP_VERSION%" ^
     --icon "app_icon.ico" ^
     --paths "." ^
     --version-file "version_info.txt" ^
@@ -132,15 +132,15 @@ del /q version_info.txt 2>nul
 
 echo.
 echo [3/3] Copying executable to project root...
-copy /Y "dist\FortiGate-to-FTD-Converter.exe" "%~dp0FortiGate-to-FTD-Converter.exe" >nul 2>&1
+copy /Y "dist\FortiGate-to-FTD-Converter-v%APP_VERSION%.exe" "%~dp0FortiGate-to-FTD-Converter-v%APP_VERSION%.exe" >nul 2>&1
 
 echo.
 echo ============================================================
 echo   BUILD COMPLETE  -  v%APP_VERSION%
 echo ============================================================
 echo.
-echo   Executable:  FortiGate-to-FTD-Converter.exe
-echo   Location:    %~dp0FortiGate-to-FTD-Converter.exe
+echo   Executable:  FortiGate-to-FTD-Converter-v%APP_VERSION%.exe
+echo   Location:    %~dp0FortiGate-to-FTD-Converter-v%APP_VERSION%.exe
 echo.
 echo   You can distribute this single .exe file to users.
 echo   No Python installation required on the target machine.

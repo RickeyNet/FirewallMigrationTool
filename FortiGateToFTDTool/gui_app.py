@@ -527,11 +527,18 @@ class App(tk.Tk):
             row=2, column=1, sticky=tk.W, padx=4,
         )
 
-        ttk.Label(opts, text="Workers:").grid(row=3, column=0, sticky=tk.W, pady=3)
+        ttk.Label(opts, text="Target Model:").grid(row=3, column=0, sticky=tk.W, pady=3)
+        self.cln_model_var = tk.StringVar(value="ftd-3120")
+        ttk.Combobox(
+            opts, textvariable=self.cln_model_var,
+            values=FTD_MODEL_LIST, state="readonly", width=18,
+        ).grid(row=3, column=1, sticky=tk.W, padx=4)
+
+        ttk.Label(opts, text="Workers:").grid(row=4, column=0, sticky=tk.W, pady=3)
         self.cln_workers_var = tk.StringVar(value="6")
         ttk.Spinbox(
             opts, from_=1, to=32, textvariable=self.cln_workers_var, width=6,
-        ).grid(row=3, column=1, sticky=tk.W, padx=4)
+        ).grid(row=4, column=1, sticky=tk.W, padx=4)
 
         opts.columnconfigure(1, weight=1)
 
@@ -948,6 +955,7 @@ class App(tk.Tk):
             "--host", host,
             "-u", self.cln_user_var.get().strip() or "admin",
             "-p", password,
+            "--appliance-model", self.cln_model_var.get(),
             "--workers", self.cln_workers_var.get(),
             "--yes",  # skip CLI interactive prompt (GUI has its own dialog)
         ]
