@@ -170,12 +170,16 @@ def build_conversion_metadata(args: argparse.Namespace) -> dict:
         Metadata dict with target model, output basename, HA port config,
         and schema version.
     """
+    ha_port_val = args.ha_port
+    if ha_port_val and ha_port_val.lower() == "none":
+        ha_port_val = None  # Explicitly no HA port
+    elif not ha_port_val:
+        ha_port_val = FTD_MODELS.get(args.target_model, {}).get('ha_port')
+
     return {
         "target_model": str(args.target_model).lower().strip(),
         "output_basename": str(args.output).strip(),
-        "ha_port": args.ha_port if args.ha_port else FTD_MODELS.get(
-            args.target_model, {}
-        ).get('ha_port'),
+        "ha_port": ha_port_val,
         "schema_version": 1
     }
 
@@ -276,6 +280,7 @@ Supported FTD Models:
                    default=None,
                    metavar='ETHERNET_PORT',
                    help="Custom HA port (e.g., 'Ethernet1/5'). Overrides model default. "
+                        "Use 'none' to disable HA port reservation entirely. "
                         "Format: 'Ethernet1/X' where X is a valid port number for your model.")
     
     # OPTIONAL: List supported models and exit
@@ -393,11 +398,14 @@ Supported FTD Models:
     print("\n" + "="*70)
     print("Converting Interfaces...")
     print("="*70)
-    # NEW: Pass custom HA port if specified
+    # Pass custom HA port if specified; "none" means no HA port at all
+    ha_port_arg = args.ha_port
+    if ha_port_arg and ha_port_arg.lower() == "none":
+        ha_port_arg = "none"  # Sentinel: explicitly no HA port
     interface_converter = InterfaceConverter(
-        fg_config, 
+        fg_config,
         target_model=args.target_model,
-        custom_ha_port=args.ha_port  # Pass the --ha-port argument
+        custom_ha_port=ha_port_arg,
     )
     interface_results = interface_converter.convert()
     
@@ -667,6 +675,21 @@ Supported FTD Models:
         # ====================================================================
         # Save summary statistics
         # ====================================================================
+        # Collect conversion failures from all converters
+        conversion_failures = {}
+        if interface_converter.failed_items:
+            conversion_failures["interfaces"] = interface_converter.failed_items
+        if address_converter.failed_items:
+            conversion_failures["address_objects"] = address_converter.failed_items
+        if service_converter.failed_items:
+            conversion_failures["service_objects"] = service_converter.failed_items
+        if route_converter.failed_items:
+            conversion_failures["static_routes"] = route_converter.failed_items
+        if policy_converter.failed_items:
+            conversion_failures["access_rules"] = policy_converter.failed_items
+
+        total_failures = sum(len(v) for v in conversion_failures.values())
+
         summary = {
             "conversion_summary": {
                 "interfaces": {
@@ -696,12 +719,16 @@ Supported FTD Models:
                     "converted": route_stats['converted'],
                     "blackhole_skipped": route_stats['blackhole_skipped'],
                     "other_skipped": route_stats['other_skipped']
-                }
-            }
+                },
+                "total_failures": total_failures
+            },
+            "conversion_failures": conversion_failures
         }
         write_json_file(summary_output, summary, pretty=True)
         print(f"[OK] Summary saved to: {summary_output}")
-        
+        if total_failures > 0:
+            print(f"[INFO] {total_failures} item(s) failed/skipped during conversion - see summary for details")
+
     except IOError as e:
         print(f"\n[ERROR] Could not write output files!")
         print(f"  Details: {e}")

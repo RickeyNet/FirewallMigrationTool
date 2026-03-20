@@ -130,7 +130,10 @@ class ServiceGroupConverter:
         
         # This list will accumulate all converted groups
         port_groups = []
-        
+
+        # Track used names to deduplicate
+        used_names: dict[str, int] = {}
+
         # ====================================================================
         # STEP 2: Process each FortiGate service group
         # ====================================================================
@@ -140,7 +143,14 @@ class ServiceGroupConverter:
             # ================================================================
             group_name = list(group_dict.keys())[0]
             sanitized_group_name = sanitize_name(group_name)
-            
+
+            # Deduplicate: if this name was already used, append _2, _3, etc.
+            if sanitized_group_name in used_names:
+                used_names[sanitized_group_name] += 1
+                sanitized_group_name = f"{sanitized_group_name}_{used_names[sanitized_group_name]}"
+            else:
+                used_names[sanitized_group_name] = 1
+
             # ================================================================
             # STEP 2B: Extract the group properties
             # ================================================================

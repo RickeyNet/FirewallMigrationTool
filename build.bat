@@ -2,6 +2,10 @@
 REM =========================================================================
 REM  Build FortiGate-to-FTD Converter as a standalone Windows .exe
 REM =========================================================================
+REM  Usage:
+REM    build.bat              - builds using the version in gui_app.py
+REM    build.bat 1.2.3        - sets the version to 1.2.3, then builds
+REM
 REM  Prerequisites:
 REM    - Python 3.8+ with pip
 REM    - Internet access (first run only, to install dependencies)
@@ -16,6 +20,28 @@ echo   FortiGate to FTD Converter - Build Script
 echo ============================================================
 echo.
 
+REM ---------- Resolve version ----------
+set "APP_VERSION="
+if not "%~1"=="" (
+    set "APP_VERSION=%~1"
+)
+
+REM If a version was supplied on the command line, patch gui_app.py
+if defined APP_VERSION (
+    echo [0/3] Setting version to %APP_VERSION% ...
+    powershell -Command "(Get-Content '%~dp0FortiGateToFTDTool\gui_app.py') -replace 'APP_VERSION = \"[^\"]*\"', 'APP_VERSION = \"%APP_VERSION%\"' | Set-Content '%~dp0FortiGateToFTDTool\gui_app.py'"
+    echo       Done.
+    echo.
+) else (
+    REM Read the version from gui_app.py
+    for /f "tokens=3 delims= " %%A in ('findstr /R "^APP_VERSION" "%~dp0FortiGateToFTDTool\gui_app.py"') do (
+        set "APP_VERSION=%%~A"
+    )
+)
+
+echo       Building version: %APP_VERSION%
+echo.
+
 REM Install dependencies if needed
 echo [1/3] Installing dependencies...
 pip install pyyaml requests urllib3 pyinstaller >nul 2>&1
@@ -28,12 +54,50 @@ echo.
 REM Change to the package directory where all modules live
 cd /d "%~dp0FortiGateToFTDTool"
 
+REM ---------- Generate version-info file for Windows exe metadata ----------
+(
+echo VSVersionInfo^(
+echo   ffi=FixedFileInfo^(
+echo     filevers=^(%APP_VERSION:.=, %, 0^),
+echo     prodvers=^(%APP_VERSION:.=, %, 0^),
+echo     mask=0x3f,
+echo     flags=0x0,
+echo     OS=0x40004,
+echo     fileType=0x1,
+echo     subtype=0x0,
+echo     date=^(0, 0^)
+echo   ^),
+echo   kids=[
+echo     StringFileInfo^(
+echo       [
+echo         StringTable^(
+echo           u'040904B0',
+echo           [
+echo             StringStruct^(u'CompanyName', u''^),
+echo             StringStruct^(u'FileDescription', u'FortiGate to Cisco FTD Converter'^),
+echo             StringStruct^(u'FileVersion', u'%APP_VERSION%'^),
+echo             StringStruct^(u'InternalName', u'FortiGate-to-FTD-Converter'^),
+echo             StringStruct^(u'OriginalFilename', u'FortiGate-to-FTD-Converter.exe'^),
+echo             StringStruct^(u'ProductName', u'FortiGate to Cisco FTD Converter'^),
+echo             StringStruct^(u'ProductVersion', u'%APP_VERSION%'^),
+echo           ]
+echo         ^)
+echo       ]
+echo     ^),
+echo     VarFileInfo^([VarStruct^(u'Translation', [1033, 1200]^)]^)
+echo   ]
+echo ^)
+) > version_info.txt
+
 echo [2/3] Building executable with PyInstaller...
 echo       This may take a minute...
 echo.
 
 pyinstaller --onefile --windowed ^
-    --name "FortiGate-to-FTD-Converter" ^
+    --name "FortiGate-to-FTD-Converter-v%APP_VERSION%" ^
+    --icon "app_icon.ico" ^
+    --paths "." ^
+    --version-file "version_info.txt" ^
     --hidden-import yaml ^
     --hidden-import requests ^
     --hidden-import urllib3 ^
@@ -58,21 +122,25 @@ if errorlevel 1 (
     echo.
     echo [ERROR] Build failed! Check the output above for details.
     echo.
+    del /q version_info.txt 2>nul
     pause
     exit /b 1
 )
 
+REM Clean up temp version file
+del /q version_info.txt 2>nul
+
 echo.
 echo [3/3] Copying executable to project root...
-copy /Y "dist\FortiGate-to-FTD-Converter.exe" "%~dp0FortiGate-to-FTD-Converter.exe" >nul 2>&1
+copy /Y "dist\FortiGate-to-FTD-Converter-v%APP_VERSION%.exe" "%~dp0FortiGate-to-FTD-Converter-v%APP_VERSION%.exe" >nul 2>&1
 
 echo.
 echo ============================================================
-echo   BUILD COMPLETE
+echo   BUILD COMPLETE  -  v%APP_VERSION%
 echo ============================================================
 echo.
-echo   Executable:  FortiGate-to-FTD-Converter.exe
-echo   Location:    %~dp0FortiGate-to-FTD-Converter.exe
+echo   Executable:  FortiGate-to-FTD-Converter-v%APP_VERSION%.exe
+echo   Location:    %~dp0FortiGate-to-FTD-Converter-v%APP_VERSION%.exe
 echo.
 echo   You can distribute this single .exe file to users.
 echo   No Python installation required on the target machine.

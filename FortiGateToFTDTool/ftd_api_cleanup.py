@@ -840,8 +840,12 @@ class FTDBulkDelete(FTDBaseClient):
         else:
             endpoint = f"/devices/default/interfaces/{parent_id}/subinterfaces"
 
+        # Try to disable HA monitoring first, but attempt delete regardless
+        name = subintf.get('name', 'UNNAMED')
+        self._disable_ha_monitor(endpoint, obj_id, name)
+
         return self.delete_object(endpoint, obj_id)
-    
+
     def delete_all_subinterfaces(
         self,
         dry_run: bool = False,
@@ -891,9 +895,9 @@ class FTDBulkDelete(FTDBaseClient):
             print("\n  Summary: 0 deleted, 0 failed")
             return True
 
+        max_workers = 1  # Force sequential — FTD API returns 423 with concurrent subinterface deletes
         print(f"\n  Deleting {len(all_subinterfaces)} subinterfaces with up to {max_workers} workers.")
 
-        max_workers = max(1, max_workers)
         print_lock = threading.Lock()
         failure_flag = [False]
         failed_objects = []
@@ -981,6 +985,10 @@ class FTDBulkDelete(FTDBaseClient):
 
             # --- Step 3: PUT with monitorInterface = false --------------------
             obj_data["monitorInterface"] = False
+            # Also disable propagateSecurityGroupTag if present — it can
+            # cause the API to reject the PUT with HTTP 423.
+            if "propagateSecurityGroupTag" in obj_data:
+                obj_data["propagateSecurityGroupTag"] = False
 
             put_resp = self.session.put(url, json=obj_data, timeout=30)
             if put_resp.status_code in (200, 201, 204):
@@ -1362,11 +1370,26 @@ Examples:
 
     def record_phase(label: str, func, *func_args, **func_kwargs):
         """Run a phase, time it, and capture success for summary output."""
+        stats_before = dict(client.stats)
         start = time.perf_counter()
         result = func(*func_args, **func_kwargs)
         duration = time.perf_counter() - start
-        success = True if result is None else bool(result)
-        phase_timings.append({"label": label, "seconds": duration, "success": success})
+
+        phase_deleted = client.stats["deleted"] - stats_before["deleted"]
+        phase_failed = client.stats["failed"] - stats_before["failed"]
+
+        if phase_failed == 0:
+            status = "OK"
+        elif phase_deleted > 0:
+            status = "PARTIAL"
+        else:
+            status = "FAIL"
+
+        phase_timings.append({
+            "label": label, "seconds": duration,
+            "success": phase_failed == 0, "status": status,
+            "ok_count": phase_deleted, "failed_count": phase_failed,
+        })
         return result
 
     # Delete in reverse dependency order
@@ -1472,8 +1495,11 @@ Examples:
         total_seconds = 0.0
         for entry in phase_timings:
             total_seconds += entry["seconds"]
-            status = "OK" if entry["success"] else "FAIL"
-            print(f"{entry['label']:<35}{entry['seconds']:.2f}s [{status}]")
+            status = entry.get("status", "OK" if entry["success"] else "FAIL")
+            detail = ""
+            if status == "PARTIAL":
+                detail = f"  ({entry['ok_count']} ok, {entry['failed_count']} failed)"
+            print(f"{entry['label']:<35}{entry['seconds']:.2f}s [{status}]{detail}")
         print("-"*60)
         print(f"{'Total':<35}{total_seconds:.2f}s")
     else:

@@ -131,10 +131,13 @@ class PolicyConverter:
         
         # This will store the converted FTD access rules
         self.ftd_access_rules = []
-        
+
         # Track statistics
         self.permit_count = 0
         self.deny_count = 0
+
+        # Track items that failed/were skipped during conversion
+        self.failed_items = []
     
     def convert(self) -> List[Dict]:
         """
@@ -165,7 +168,10 @@ class PolicyConverter:
         
         # This list will accumulate all converted access rules
         access_rules = []
-        
+
+        # Track used names to deduplicate
+        used_names: dict[str, int] = {}
+
         # ruleId counter - FTD assigns sequential IDs to rules
         rule_id_counter = 1
         
@@ -186,6 +192,14 @@ class PolicyConverter:
             # ================================================================
             policy_name_raw = properties.get('name', f'Policy_{policy_id}')
             policy_name = sanitize_name(policy_name_raw)
+
+            # Deduplicate: if this name was already used, append _2, _3, etc.
+            if policy_name in used_names:
+                used_names[policy_name] += 1
+                policy_name = f"{policy_name}_{used_names[policy_name]}"
+            else:
+                used_names[policy_name] = 1
+
             action = properties.get('action', 'deny')
             
             # ================================================================

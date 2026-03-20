@@ -128,6 +128,9 @@ class ServiceConverter:
         # Set of service names that were skipped (ICMP, etc.)
         # Used by ServiceGroupConverter to filter these out of groups
         self.skipped_services = set()
+
+        # Track items that failed/were skipped during conversion
+        self.failed_items = []
     
     def _parse_port_list(self, port_value: Any) -> List[str]:
         """
@@ -211,7 +214,10 @@ class ServiceConverter:
         
         # This list will accumulate all converted port objects
         port_objects = []
-        
+
+        # Track used names to deduplicate
+        used_names: dict[str, int] = {}
+
         # ====================================================================
         # STEP 2: Process each FortiGate service object
         # ====================================================================
@@ -222,7 +228,14 @@ class ServiceConverter:
             service_name = list(service_dict.keys())[0]
             properties = service_dict[service_name]
             sanitized_name = sanitize_name(service_name)
-            
+
+            # Deduplicate: if this base name was already used, append _2, _3, etc.
+            if sanitized_name in used_names:
+                used_names[sanitized_name] += 1
+                sanitized_name = f"{sanitized_name}_{used_names[sanitized_name]}"
+            else:
+                used_names[sanitized_name] = 1
+
             # ================================================================
             # STEP 2B: Check the protocol type
             # ================================================================
@@ -235,6 +248,7 @@ class ServiceConverter:
                 print(f"  Skipped: {service_name} (Protocol: {protocol} - not a port-based service)")
                 self.icmp_skipped_count += 1
                 self.skipped_services.add(sanitized_name)
+                self.failed_items.append({"name": service_name, "reason": f"Protocol: {protocol} - not a port-based service", "config": properties})
                 continue
             
             # Also check for ICMP-specific fields (some FortiGate configs use these)
@@ -242,6 +256,7 @@ class ServiceConverter:
                 print(f"  Skipped: {service_name} (ICMP service - not supported in FTD port objects)")
                 self.icmp_skipped_count += 1
                 self.skipped_services.add(sanitized_name)
+                self.failed_items.append({"name": service_name, "reason": "ICMP service - not supported in FTD port objects", "config": properties})
                 continue
             
             # Check if protocol-number field indicates ICMP (protocol 1) or ICMPv6 (protocol 58)
@@ -250,6 +265,7 @@ class ServiceConverter:
                 print(f"  Skipped: {service_name} (ICMP protocol number {protocol_number})")
                 self.icmp_skipped_count += 1
                 self.skipped_services.add(sanitized_name)
+                self.failed_items.append({"name": service_name, "reason": f"ICMP protocol number {protocol_number}", "config": properties})
                 continue
             
             # ================================================================
@@ -268,6 +284,7 @@ class ServiceConverter:
                 print(f"  Skipped: {service_name} (No TCP or UDP ports defined)")
                 self.skipped_count += 1
                 self.skipped_services.add(sanitized_name)
+                self.failed_items.append({"name": service_name, "reason": "No TCP or UDP ports defined", "config": properties})
                 continue
             
             # Track if this service was split

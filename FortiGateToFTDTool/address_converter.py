@@ -60,6 +60,9 @@ class AddressConverter:
         # This will store the converted FTD network objects
         # Starts empty and gets populated by the convert() method
         self.ftd_network_objects = []
+
+        # Track items that failed/were skipped during conversion
+        self.failed_items = []
     
     def convert(self) -> List[Dict]:
         """
@@ -93,7 +96,10 @@ class AddressConverter:
         
         # This list will accumulate all converted objects
         network_objects = []
-        
+
+        # Track used names to deduplicate (e.g., names that sanitize to the same string)
+        used_names: dict[str, int] = {}
+
         # ====================================================================
         # STEP 2: Process each FortiGate address object
         # ====================================================================
@@ -124,13 +130,11 @@ class AddressConverter:
             # Check 1: Skip if name is "none" (case-insensitive)
             if object_name.lower() == 'none':
                 print(f"  Skipped: {object_name} (name is 'none')")
+                self.failed_items.append({"name": object_name, "reason": "name is 'none'", "config": properties})
                 continue
             
-            # Check 2: Skip if name is just an IP address (contains only digits, dots, colons)
-            # Valid names should have letters or underscores
-            if self._is_ip_address(object_name):
-                print(f"  Skipped: {object_name} (name is just an IP address)")
-                continue
+            # Note: Objects named with just an IP address are allowed.
+            # The IP is kept as the object name.
             
             # ================================================================
             # STEP 2D: Determine the address type (HOST, NETWORK, RANGE)
@@ -153,12 +157,14 @@ class AddressConverter:
             # Check 3: Skip if value is empty or just whitespace
             if not address_value or address_value.strip() == '':
                 print(f"  Skipped: {object_name} (empty value)")
+                self.failed_items.append({"name": object_name, "reason": "empty value", "config": properties})
                 continue
             
             # Check 4: Skip if value is malformed (no valid IP format)
             # FQDN values are domain names, not IPs — skip IP validation for them
             if address_type != "FQDN" and not self._is_valid_address_value(address_value):
                 print(f"  Skipped: {object_name} (invalid value: {address_value})")
+                self.failed_items.append({"name": object_name, "reason": f"invalid value: {address_value}", "config": properties})
                 continue
             
             # ================================================================
@@ -167,7 +173,14 @@ class AddressConverter:
             # This is the final format that FTD FDM API expects
             # Sanitize the object name to replace spaces with underscores
             sanitized_name = sanitize_name(object_name)
-            
+
+            # Deduplicate: if this name was already used, append _2, _3, etc.
+            if sanitized_name in used_names:
+                used_names[sanitized_name] += 1
+                sanitized_name = f"{sanitized_name}_{used_names[sanitized_name]}"
+            else:
+                used_names[sanitized_name] = 1
+
             ftd_object = {
                 "name": sanitized_name,                           # Object name from FortiGate
                 "description": properties.get('comment', ''),  # Optional description
@@ -419,36 +432,6 @@ class AddressConverter:
             print(f"  Warning: Could not convert netmask '{netmask}' to CIDR (Error: {e})")
             print(f"    Defaulting to /32 (single host)")
             return 32
-    
-    def _is_ip_address(self, name: str) -> bool:
-        """
-        Check if a string looks like an IP address rather than a proper object name.
-        
-        Valid object names should contain letters, not just numbers and dots/colons.
-        Examples that should be rejected:
-        - "192.168.1.1"
-        - "10.0.0.0"
-        - "2001:db8::1"
-        
-        Args:
-            name: The object name to check
-            
-        Returns:
-            True if the name looks like an IP address, False otherwise
-        """
-        # Remove dots, colons, and digits
-        # If nothing is left, it was probably just an IP
-        remaining = name.replace('.', '').replace(':', '').replace('-', '')
-        
-        # If all digits, it's an IP address
-        if remaining.isdigit():
-            return True
-        
-        # If very short and mostly numbers, probably an IP
-        if len(remaining) == 0 or (len(remaining) < 3 and remaining.isdigit()):
-            return True
-        
-        return False
     
     def _is_valid_address_value(self, value: str) -> bool:
         """

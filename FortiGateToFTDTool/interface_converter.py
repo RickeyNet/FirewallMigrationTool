@@ -257,6 +257,9 @@ class InterfaceConverter:
             'security_zones_created': 0,
             'skipped': 0
         }
+
+        # Track items that failed/were skipped during conversion
+        self.failed_items = []
     
     def set_target_model(self, model: str):
         """
@@ -279,8 +282,11 @@ class InterfaceConverter:
         self.model_info = FTD_MODELS[model]
         self.total_ports = self.model_info['total_ports']
         
-        # NEW: Use custom HA port if specified, otherwise use model default
-        if self.custom_ha_port:
+        # Use custom HA port if specified, otherwise use model default
+        # "none" (case-insensitive) means explicitly no HA port
+        if self.custom_ha_port and self.custom_ha_port.lower() == "none":
+            self.ha_port = None
+        elif self.custom_ha_port:
             # Validate custom HA port format and availability
             self._validate_custom_ha_port(self.custom_ha_port) # pyright: ignore[reportAttributeAccessIssue]
             self.ha_port = self.custom_ha_port
@@ -604,14 +610,16 @@ class InterfaceConverter:
         remaining_ports = len(self.available_ftd_ports)
         if remaining_ports == 0 and len(physical_standalone) > 0:
             print(f"    [WARNING] No ports remaining for {len(physical_standalone)} standalone interfaces")
-            for fg_name, _ in physical_standalone:
+            for fg_name, props in physical_standalone:
                 print(f"      Skipped: {fg_name} (no ports available)")
                 self.stats['skipped'] += 1
+                self.failed_items.append({"name": fg_name, "reason": "no ports available", "config": props})
         else:
             for fg_name, properties in physical_standalone:
                 if len(self.available_ftd_ports) == 0:
                     print(f"    Skipped: {fg_name} (no ports available)")
                     self.stats['skipped'] += 1
+                    self.failed_items.append({"name": fg_name, "reason": "no ports available", "config": properties})
                 else:
                     self._convert_physical_interface(fg_name, properties)
         
@@ -783,16 +791,19 @@ class InterfaceConverter:
         if fg_name in ['ha', 'mgmt', 'modem', 'naf.root', 'l2t.root', 'ssl.root']:
             print(f"    Skipped: {fg_name} (system/virtual interface)")
             self.stats['skipped'] += 1
+            self.failed_items.append({"name": fg_name, "reason": "system/virtual interface", "config": properties})
             return
         
         # Skip interfaces that start with s, vw (special FortiGate ports)
         if fg_name.startswith('s') and len(fg_name) <= 2:
             print(f"    Skipped: {fg_name} (special port - no FTD equivalent)")
             self.stats['skipped'] += 1
+            self.failed_items.append({"name": fg_name, "reason": "special port - no FTD equivalent", "config": properties})
             return
         if fg_name.startswith('vw'):
             print(f"    Skipped: {fg_name} (virtual wire port)")
             self.stats['skipped'] += 1
+            self.failed_items.append({"name": fg_name, "reason": "virtual wire port", "config": properties})
             return
         
         # Get FTD hardware name
@@ -800,12 +811,14 @@ class InterfaceConverter:
         if not ftd_hardware:
             print(f"    Skipped: {fg_name} (no available FTD port)")
             self.stats['skipped'] += 1
+            self.failed_items.append({"name": fg_name, "reason": "no available FTD port", "config": properties})
             return
         
         # Check if this FTD port should be skipped
         if ftd_hardware in self.skip_ftd_ports:
             print(f"    Skipped: {fg_name} -> {ftd_hardware} (reserved port)")
             self.stats['skipped'] += 1
+            self.failed_items.append({"name": fg_name, "reason": f"reserved port ({ftd_hardware})", "config": properties})
             return
         
        # Get interface name (use alias if available, otherwise port name)
@@ -937,8 +950,9 @@ class InterfaceConverter:
         if not ftd_members:
             print(f"    Skipped: {fg_name} (no valid member interfaces)")
             self.stats['skipped'] += 1
+            self.failed_items.append({"name": fg_name, "reason": "no valid member interfaces", "config": properties})
             return
-        
+
         # Determine EtherChannel ID (extract from existing or assign new)
         # For simplicity, use 1 for first etherchannel, 2 for second, etc.
         etherchannel_id = len(self.etherchannels) + 1
@@ -1029,8 +1043,9 @@ class InterfaceConverter:
         if not ftd_members:
             print(f"    Skipped: {fg_name} (no valid member interfaces)")
             self.stats['skipped'] += 1
+            self.failed_items.append({"name": fg_name, "reason": "no valid member interfaces", "config": properties})
             return
-        
+
         # Bridge Group ID
         bridge_group_id = len(self.bridge_groups) + 1
         
@@ -1119,6 +1134,7 @@ class InterfaceConverter:
         if not parent_fg_name or not vlan_id:
             print(f"    Skipped: {fg_name} (missing parent interface or VLAN ID)")
             self.stats['skipped'] += 1
+            self.failed_items.append({"name": fg_name, "reason": "missing parent interface or VLAN ID", "config": properties})
             return
         
         # Build FTD name from both alias and fg_name for clarity
