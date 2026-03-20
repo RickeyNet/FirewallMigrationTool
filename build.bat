@@ -1,6 +1,6 @@
 @echo off
 REM =========================================================================
-REM  Build FortiGate-to-FTD Converter as a standalone Windows .exe
+REM  Build FortiGate Firewall Migration Tool as a standalone Windows .exe
 REM =========================================================================
 REM  Usage:
 REM    build.bat              - builds using the version in gui_app.py
@@ -11,12 +11,12 @@ REM    - Python 3.8+ with pip
 REM    - Internet access (first run only, to install dependencies)
 REM
 REM  Output:
-REM    FortiGateToFTDTool\dist\FortiGate-to-FTD-Converter.exe
+REM    dist\Firewall-Migration-Tool.exe
 REM =========================================================================
 
 echo.
 echo ============================================================
-echo   FortiGate to FTD Converter - Build Script
+echo   FortiGate Firewall Migration Tool - Build Script
 echo ============================================================
 echo.
 
@@ -29,12 +29,12 @@ if not "%~1"=="" (
 REM If a version was supplied on the command line, patch gui_app.py
 if defined APP_VERSION (
     echo [0/3] Setting version to %APP_VERSION% ...
-    powershell -Command "(Get-Content '%~dp0FortiGateToFTDTool\gui_app.py') -replace 'APP_VERSION = \"[^\"]*\"', 'APP_VERSION = \"%APP_VERSION%\"' | Set-Content '%~dp0FortiGateToFTDTool\gui_app.py'"
+    powershell -Command "(Get-Content '%~dp0gui_app.py') -replace 'APP_VERSION = \"[^\"]*\"', 'APP_VERSION = \"%APP_VERSION%\"' | Set-Content '%~dp0gui_app.py'"
     echo       Done.
     echo.
 ) else (
     REM Read the version from gui_app.py
-    for /f "tokens=3 delims= " %%A in ('findstr /R "^APP_VERSION" "%~dp0FortiGateToFTDTool\gui_app.py"') do (
+    for /f "tokens=3 delims= " %%A in ('findstr /R "^APP_VERSION" "%~dp0gui_app.py"') do (
         set "APP_VERSION=%%~A"
     )
 )
@@ -51,8 +51,8 @@ if errorlevel 1 (
 echo       Done.
 echo.
 
-REM Change to the package directory where all modules live
-cd /d "%~dp0FortiGateToFTDTool"
+REM Stay in repo root where gui_app.py lives
+cd /d "%~dp0"
 
 REM ---------- Generate version-info file for Windows exe metadata ----------
 (
@@ -74,11 +74,11 @@ echo         StringTable^(
 echo           u'040904B0',
 echo           [
 echo             StringStruct^(u'CompanyName', u''^),
-echo             StringStruct^(u'FileDescription', u'FortiGate to Cisco FTD Converter'^),
+echo             StringStruct^(u'FileDescription', u'Firewall Migration Tool'^),
 echo             StringStruct^(u'FileVersion', u'%APP_VERSION%'^),
-echo             StringStruct^(u'InternalName', u'FortiGate-to-FTD-Converter'^),
-echo             StringStruct^(u'OriginalFilename', u'FortiGate-to-FTD-Converter.exe'^),
-echo             StringStruct^(u'ProductName', u'FortiGate to Cisco FTD Converter'^),
+echo             StringStruct^(u'InternalName', u'Firewall-Migration-Tool'^),
+echo             StringStruct^(u'OriginalFilename', u'Firewall-Migration-Tool.exe'^),
+echo             StringStruct^(u'ProductName', u'Firewall Migration Tool'^),
 echo             StringStruct^(u'ProductVersion', u'%APP_VERSION%'^),
 echo           ]
 echo         ^)
@@ -94,13 +94,15 @@ echo       This may take a minute...
 echo.
 
 pyinstaller --onefile --windowed ^
-    --name "FortiGate-to-FTD-Converter-v%APP_VERSION%" ^
+    --name "Firewall-Migration-Tool-v%APP_VERSION%" ^
     --icon "app_icon.ico" ^
-    --paths "." ^
+    --paths "FortiGateToFTDTool" ^
+    --paths "FortiGateToPaloAltoTool" ^
     --version-file "version_info.txt" ^
     --hidden-import yaml ^
     --hidden-import requests ^
     --hidden-import urllib3 ^
+    --hidden-import xml.etree.ElementTree ^
     --hidden-import address_converter ^
     --hidden-import address_group_converter ^
     --hidden-import service_converter ^
@@ -115,6 +117,18 @@ pyinstaller --onefile --windowed ^
     --hidden-import fortigate_converter ^
     --hidden-import ftd_api_importer ^
     --hidden-import ftd_api_cleanup ^
+    --hidden-import pa_common ^
+    --hidden-import pa_converter ^
+    --hidden-import pa_address_converter ^
+    --hidden-import pa_address_group_converter ^
+    --hidden-import pa_service_converter ^
+    --hidden-import pa_service_group_converter ^
+    --hidden-import pa_policy_converter ^
+    --hidden-import pa_route_converter ^
+    --hidden-import pa_interface_converter ^
+    --hidden-import panos_api_base ^
+    --hidden-import panos_api_importer ^
+    --hidden-import panos_api_cleanup ^
     --clean ^
     gui_app.py
 
@@ -131,16 +145,12 @@ REM Clean up temp version file
 del /q version_info.txt 2>nul
 
 echo.
-echo [3/3] Copying executable to project root...
-copy /Y "dist\FortiGate-to-FTD-Converter-v%APP_VERSION%.exe" "%~dp0FortiGate-to-FTD-Converter-v%APP_VERSION%.exe" >nul 2>&1
-
-echo.
 echo ============================================================
 echo   BUILD COMPLETE  -  v%APP_VERSION%
 echo ============================================================
 echo.
-echo   Executable:  FortiGate-to-FTD-Converter-v%APP_VERSION%.exe
-echo   Location:    %~dp0FortiGate-to-FTD-Converter-v%APP_VERSION%.exe
+echo   Executable:  Firewall-Migration-Tool-v%APP_VERSION%.exe
+echo   Location:    %~dp0dist\Firewall-Migration-Tool-v%APP_VERSION%.exe
 echo.
 echo   You can distribute this single .exe file to users.
 echo   No Python installation required on the target machine.

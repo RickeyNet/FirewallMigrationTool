@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-FortiGate to Cisco FTD Configuration Converter - GUI Application
-=================================================================
+Firewall Migration Tool - GUI Application
+=====================================================
 Self-contained Tkinter GUI that wraps the converter, importer, and cleanup
-tools.  All three phases run **in-process** (no subprocess), so the entire
-application can be frozen into a single Windows .exe with PyInstaller.
+tools for both Cisco FTD and Palo Alto PAN-OS targets.
+
+All phases run **in-process** (no subprocess), so the entire application can
+be frozen into a single Windows .exe with PyInstaller.
 
 Build:  see build.bat in the project root.
 """
@@ -32,13 +34,29 @@ else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
     _PKG_DIR = APP_DIR
 
-if _PKG_DIR not in sys.path:
-    sys.path.insert(0, _PKG_DIR)
+# Add both tool directories to sys.path
+_FTD_DIR = os.path.join(APP_DIR, "FortiGateToFTDTool")
+_PA_DIR = os.path.join(APP_DIR, "FortiGateToPaloAltoTool")
 
-# Import the three main entry points so they run in-process
+for _d in (_FTD_DIR, _PA_DIR, _PKG_DIR):
+    if os.path.isdir(_d) and _d not in sys.path:
+        sys.path.insert(0, _d)
+
+# Import the three FTD entry points
 from fortigate_converter import main as convert_main   # noqa: E402
 from ftd_api_importer import main as import_main       # noqa: E402
 from ftd_api_cleanup import main as cleanup_main       # noqa: E402
+
+# Palo Alto modules — optional (only needed when PA platform is selected)
+_PA_IMPORT_ERROR = ""
+try:
+    from pa_converter import main as pa_convert_main          # noqa: E402
+    from panos_api_importer import main as pa_import_main     # noqa: E402
+    from panos_api_cleanup import main as pa_cleanup_main     # noqa: E402
+    _PA_AVAILABLE = True
+except ImportError as _e:
+    _PA_AVAILABLE = False
+    _PA_IMPORT_ERROR = str(_e)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -49,6 +67,14 @@ FTD_MODEL_LIST = [
     "ftd-3105", "ftd-3110", "ftd-3120", "ftd-3130", "ftd-3140",
     "ftd-4215",
 ]
+
+PA_MODEL_LIST = [
+    "pa-440", "pa-450", "pa-460",
+    "pa-3220", "pa-3250",
+    "pa-5220",
+]
+
+PLATFORM_LIST = ["Cisco FTD", "Palo Alto PAN-OS"]
 
 DEFAULT_DIR = APP_DIR
 
@@ -77,25 +103,22 @@ class _QueueWriter(io.TextIOBase):
 
 
 # ---------------------------------------------------------------------------
-# Main application
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
 # Dark theme palette
 # ---------------------------------------------------------------------------
 _BG       = "#292929"   # root / frame background
 _INPUT    = "#2C2C2C"   # entry / combobox / spinbox fields
 _FG       = "#e0e0e0"   # primary text
 _FG_DIM   = "#777777"   # secondary / disabled text
-_PURPLE   = "#48ea33"   # vivid purple — accents, active elements
-_PURPLE_D = "#5c5c5c"   # dark purple — buttons resting, selected tab
-_PURPLE_H = "#063aca"   # mid purple — hover
+_PURPLE   = "#48ea33"   # vivid green — accents, active elements
+_PURPLE_D = "#5c5c5c"   # dark grey — buttons resting, selected tab
+_PURPLE_H = "#063aca"   # mid blue — hover
 _BORDER   = "#3d3d3d"   # subtle grey border
-_BTN_BG   = "#1F6D5C"   # button resting (very dark purple-grey)
+_BTN_BG   = "#1F6D5C"   # button resting
 _TAB_BG   = "#222222"   # inactive tab background
 _OUT_BG   = "#0d0d0d"   # output console background
 _OUT_FG   = "#31A005"   # output console text
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 
 
 class App(tk.Tk):
@@ -103,13 +126,12 @@ class App(tk.Tk):
 
     def __init__(self):
         super().__init__()
-        self.title(f"FortiGate to Cisco FTD Converter v{APP_VERSION}")
+        self.title(f"Firewall Migration Tool v{APP_VERSION}")
         self.geometry("960x720")
         self.minsize(800, 600)
 
         # Window icon
         if getattr(sys, "frozen", False):
-            # When frozen, the icon is embedded in the exe by PyInstaller
             self.iconbitmap(sys.executable)
         else:
             icon_path = os.path.join(APP_DIR, "app_icon.ico")
@@ -119,6 +141,9 @@ class App(tk.Tk):
         self._running = False
         self._worker_thread: threading.Thread | None = None
         self._output_queue: queue.Queue = queue.Queue()
+
+        # Current platform selection
+        self._current_platform = "Cisco FTD"
 
         self._apply_dark_theme()
         self._build_ui()
@@ -300,6 +325,24 @@ class App(tk.Tk):
     # UI construction
     # ------------------------------------------------------------------
     def _build_ui(self):
+        # Platform selector bar
+        platform_frame = ttk.Frame(self)
+        platform_frame.pack(fill=tk.X, padx=6, pady=(6, 0))
+        ttk.Label(platform_frame, text="Target Platform:").pack(side=tk.LEFT, padx=(4, 6))
+        self.platform_var = tk.StringVar(value="Cisco FTD")
+        platform_combo = ttk.Combobox(
+            platform_frame, textvariable=self.platform_var,
+            values=PLATFORM_LIST, state="readonly", width=20,
+        )
+        platform_combo.pack(side=tk.LEFT)
+        platform_combo.bind("<<ComboboxSelected>>", self._on_platform_change)
+
+        if not _PA_AVAILABLE:
+            self._pa_warning = ttk.Label(
+                platform_frame, text="(PA modules not found)", foreground=_FG_DIM,
+            )
+            self._pa_warning.pack(side=tk.LEFT, padx=8)
+
         notebook = ttk.Notebook(self)
         notebook.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
 
@@ -314,6 +357,71 @@ class App(tk.Tk):
             self, textvariable=self.status_var, style="Status.TLabel",
             anchor=tk.W, padding=(6, 2),
         ).pack(side=tk.BOTTOM, fill=tk.X)
+
+    def _on_platform_change(self, event=None):
+        """Handle platform selector change — update model lists and labels."""
+        platform = self.platform_var.get()
+        self._current_platform = platform
+
+        if platform == "Palo Alto PAN-OS":
+            if not _PA_AVAILABLE:
+                detail = f"\n\nError: {_PA_IMPORT_ERROR}" if _PA_IMPORT_ERROR else ""
+                search_path = _PA_DIR or "(not found)"
+                messagebox.showwarning(
+                    "PA Modules Missing",
+                    "Palo Alto converter modules not found.\n\n"
+                    f"Searched: {search_path}\n"
+                    "Make sure the FortiGateToPaloAltoTool directory exists "
+                    f"with all required .py files.{detail}",
+                )
+                self.platform_var.set("Cisco FTD")
+                self._current_platform = "Cisco FTD"
+                return
+
+            # Update Convert tab
+            self.conv_model_combo.configure(values=PA_MODEL_LIST)
+            self.conv_model_var.set("pa-440")
+            self.conv_output_var.set("pa_config")
+            self.conv_ha_var.set("")
+            self.conv_ha_entry.configure(state=tk.DISABLED)
+            self.conv_ha_label.configure(foreground=_FG_DIM)
+            self.conv_ha_hint.configure(text="(not applicable for PAN-OS)")
+
+            # Update Import tab labels
+            self.imp_host_label.configure(text="PAN-OS Host / IP:")
+            self.imp_base_var.set("pa_config")
+            self.imp_workers_label.configure(foreground=_FG_DIM)
+            self.imp_workers_spin.configure(state=tk.DISABLED)
+            self.imp_deploy_cb.configure(text="Commit after import")
+
+            # Update Cleanup tab labels
+            self.cln_host_label.configure(text="PAN-OS Host / IP:")
+            self.cln_model_combo.configure(values=PA_MODEL_LIST)
+            self.cln_model_var.set("pa-440")
+            self.cln_deploy_cb.configure(text="Commit after cleanup")
+
+            self.title(f"FortiGate to Palo Alto PAN-OS Migration Tool v{APP_VERSION}")
+        else:
+            # Restore FTD defaults
+            self.conv_model_combo.configure(values=FTD_MODEL_LIST)
+            self.conv_model_var.set("ftd-3120")
+            self.conv_output_var.set("ftd_config")
+            self.conv_ha_entry.configure(state=tk.NORMAL)
+            self.conv_ha_label.configure(foreground=_FG)
+            self.conv_ha_hint.configure(text="e.g. Ethernet1/5  (leave blank = no HA port)")
+
+            self.imp_host_label.configure(text="FTD Host / IP:")
+            self.imp_base_var.set("ftd_config")
+            self.imp_workers_label.configure(foreground=_FG)
+            self.imp_workers_spin.configure(state=tk.NORMAL)
+            self.imp_deploy_cb.configure(text="Deploy after import")
+
+            self.cln_host_label.configure(text="FTD Host / IP:")
+            self.cln_model_combo.configure(values=FTD_MODEL_LIST)
+            self.cln_model_var.set("ftd-3120")
+            self.cln_deploy_cb.configure(text="Deploy after cleanup")
+
+            self.title(f"FortiGate to Cisco FTD Converter v{APP_VERSION}")
 
     # ==================== CONVERT TAB ====================
     def _build_convert_tab(self, notebook):
@@ -353,18 +461,20 @@ class App(tk.Tk):
         # Row 3: Target model
         ttk.Label(opts, text="Target Model:").grid(row=3, column=0, sticky=tk.W, pady=3)
         self.conv_model_var = tk.StringVar(value="ftd-3120")
-        ttk.Combobox(
+        self.conv_model_combo = ttk.Combobox(
             opts, textvariable=self.conv_model_var,
             values=FTD_MODEL_LIST, state="readonly", width=18,
-        ).grid(row=3, column=1, sticky=tk.W, padx=4)
+        )
+        self.conv_model_combo.grid(row=3, column=1, sticky=tk.W, padx=4)
 
         # Row 4: HA port (optional)
-        ttk.Label(opts, text="HA Port (optional):").grid(row=4, column=0, sticky=tk.W, pady=3)
+        self.conv_ha_label = ttk.Label(opts, text="HA Port (optional):")
+        self.conv_ha_label.grid(row=4, column=0, sticky=tk.W, pady=3)
         self.conv_ha_var = tk.StringVar()
-        ttk.Entry(opts, textvariable=self.conv_ha_var, width=20).grid(
-            row=4, column=1, sticky=tk.W, padx=4,
-        )
-        ttk.Label(opts, text="e.g. Ethernet1/5  (leave blank = no HA port)").grid(row=5, column=1, sticky=tk.W)
+        self.conv_ha_entry = ttk.Entry(opts, textvariable=self.conv_ha_var, width=20)
+        self.conv_ha_entry.grid(row=4, column=1, sticky=tk.W, padx=4)
+        self.conv_ha_hint = ttk.Label(opts, text="e.g. Ethernet1/5  (leave blank = no HA port)")
+        self.conv_ha_hint.grid(row=5, column=1, sticky=tk.W)
 
         # Row 5: Pretty-print
         self.conv_pretty_var = tk.BooleanVar(value=True)
@@ -402,7 +512,8 @@ class App(tk.Tk):
         opts.pack(fill=tk.X, padx=8, pady=(8, 4))
 
         # Connection settings
-        ttk.Label(opts, text="FTD Host / IP:").grid(row=0, column=0, sticky=tk.W, pady=3)
+        self.imp_host_label = ttk.Label(opts, text="FTD Host / IP:")
+        self.imp_host_label.grid(row=0, column=0, sticky=tk.W, pady=3)
         self.imp_host_var = tk.StringVar()
         ttk.Entry(opts, textvariable=self.imp_host_var, width=30).grid(
             row=0, column=1, sticky=tk.W, padx=4,
@@ -436,16 +547,19 @@ class App(tk.Tk):
             row=4, column=1, sticky=tk.W, padx=4,
         )
 
-        ttk.Label(opts, text="Workers:").grid(row=5, column=0, sticky=tk.W, pady=3)
+        self.imp_workers_label = ttk.Label(opts, text="Workers:")
+        self.imp_workers_label.grid(row=5, column=0, sticky=tk.W, pady=3)
         self.imp_workers_var = tk.StringVar(value="6")
-        ttk.Spinbox(
+        self.imp_workers_spin = ttk.Spinbox(
             opts, from_=1, to=32, textvariable=self.imp_workers_var, width=6,
-        ).grid(row=5, column=1, sticky=tk.W, padx=4)
+        )
+        self.imp_workers_spin.grid(row=5, column=1, sticky=tk.W, padx=4)
 
         self.imp_deploy_var = tk.BooleanVar()
-        ttk.Checkbutton(
+        self.imp_deploy_cb = ttk.Checkbutton(
             opts, text="Deploy after import", variable=self.imp_deploy_var,
-        ).grid(row=6, column=1, sticky=tk.W, padx=4, pady=3)
+        )
+        self.imp_deploy_cb.grid(row=6, column=1, sticky=tk.W, padx=4, pady=3)
 
         self.imp_debug_var = tk.BooleanVar()
         ttk.Checkbutton(
@@ -509,7 +623,8 @@ class App(tk.Tk):
         opts = ttk.LabelFrame(tab, text="FTD Connection", padding=10)
         opts.pack(fill=tk.X, padx=8, pady=(8, 4))
 
-        ttk.Label(opts, text="FTD Host / IP:").grid(row=0, column=0, sticky=tk.W, pady=3)
+        self.cln_host_label = ttk.Label(opts, text="FTD Host / IP:")
+        self.cln_host_label.grid(row=0, column=0, sticky=tk.W, pady=3)
         self.cln_host_var = tk.StringVar()
         ttk.Entry(opts, textvariable=self.cln_host_var, width=30).grid(
             row=0, column=1, sticky=tk.W, padx=4,
@@ -529,10 +644,11 @@ class App(tk.Tk):
 
         ttk.Label(opts, text="Target Model:").grid(row=3, column=0, sticky=tk.W, pady=3)
         self.cln_model_var = tk.StringVar(value="ftd-3120")
-        ttk.Combobox(
+        self.cln_model_combo = ttk.Combobox(
             opts, textvariable=self.cln_model_var,
             values=FTD_MODEL_LIST, state="readonly", width=18,
-        ).grid(row=3, column=1, sticky=tk.W, padx=4)
+        )
+        self.cln_model_combo.grid(row=3, column=1, sticky=tk.W, padx=4)
 
         ttk.Label(opts, text="Workers:").grid(row=4, column=0, sticky=tk.W, pady=3)
         self.cln_workers_var = tk.StringVar(value="6")
@@ -581,9 +697,10 @@ class App(tk.Tk):
             flag_frame, text="Dry run (preview only)", variable=self.cln_dry_var,
         ).pack(side=tk.LEFT, padx=6)
         self.cln_deploy_var = tk.BooleanVar()
-        ttk.Checkbutton(
+        self.cln_deploy_cb = ttk.Checkbutton(
             flag_frame, text="Deploy after cleanup", variable=self.cln_deploy_var,
-        ).pack(side=tk.LEFT, padx=6)
+        )
+        self.cln_deploy_cb.pack(side=tk.LEFT, padx=6)
 
         # Buttons
         btn_frame = ttk.Frame(tab)
@@ -977,8 +1094,10 @@ class App(tk.Tk):
             messagebox.showerror("Missing Input", "Please select a FortiGate YAML file.")
             return
 
+        is_pa = self._current_platform == "Palo Alto PAN-OS"
+
         outdir = self.conv_outdir_var.get().strip()
-        base = self.conv_output_var.get().strip() or "ftd_config"
+        base = self.conv_output_var.get().strip() or ("pa_config" if is_pa else "ftd_config")
         full_base = os.path.join(outdir, base) if outdir else base
 
         argv = [input_file, "-o", full_base]
@@ -987,102 +1106,165 @@ class App(tk.Tk):
         if model:
             argv.extend(["-m", model])
 
-        ha_port = self.conv_ha_var.get().strip()
-        # Always pass --ha-port: user value or "none" to skip model default
-        argv.extend(["--ha-port", ha_port if ha_port else "none"])
+        if not is_pa:
+            ha_port = self.conv_ha_var.get().strip()
+            # Always pass --ha-port: user value or "none" to skip model default
+            argv.extend(["--ha-port", ha_port if ha_port else "none"])
 
         if self.conv_pretty_var.get():
             argv.append("--pretty")
 
-        self._run_in_thread(convert_main, argv, self.conv_output, "Convert")
+        main_fn = pa_convert_main if is_pa else convert_main
+        self._run_in_thread(main_fn, argv, self.conv_output, "Convert")
 
     def _run_import(self):
         host = self.imp_host_var.get().strip()
         password = self.imp_pass_var.get()
+        is_pa = self._current_platform == "Palo Alto PAN-OS"
 
+        platform_label = "PAN-OS" if is_pa else "FTD"
         if not host:
-            messagebox.showerror("Missing Field", "Please enter the FTD host/IP address.")
+            messagebox.showerror("Missing Field", f"Please enter the {platform_label} host/IP address.")
             return
         if not password:
-            messagebox.showerror("Missing Field", "Please enter the FTD password.")
+            messagebox.showerror("Missing Field", f"Please enter the {platform_label} password.")
             return
 
         impdir = self.imp_dir_var.get().strip()
-        base = self.imp_base_var.get().strip() or "ftd_config"
+        base = self.imp_base_var.get().strip() or ("pa_config" if is_pa else "ftd_config")
         full_base = os.path.join(impdir, base) if impdir else base
 
-        argv = [
-            "--host", host,
-            "-u", self.imp_user_var.get().strip() or "admin",
-            "-p", password,
-            "--base", full_base,
-            "--workers", self.imp_workers_var.get(),
-        ]
+        if is_pa:
+            argv = [
+                "--host", host,
+                "--username", self.imp_user_var.get().strip() or "admin",
+                "--password", password,
+                "--input", full_base,
+            ]
+            if self.imp_deploy_var.get():
+                argv.append("--commit")
+            if self.imp_debug_var.get():
+                argv.append("--debug")
 
-        if self.imp_deploy_var.get():
-            argv.append("--deploy")
-        if self.imp_debug_var.get():
-            argv.append("--debug")
+            self._run_in_thread(pa_import_main, argv, self.imp_output, "Import (PAN-OS)")
+        else:
+            argv = [
+                "--host", host,
+                "-u", self.imp_user_var.get().strip() or "admin",
+                "-p", password,
+                "--base", full_base,
+                "--workers", self.imp_workers_var.get(),
+            ]
 
-        # Selective import flags
-        selected = [k for k, v in self.imp_only_vars.items() if v.get()]
-        for key in selected:
-            argv.append(f"--only-{key}")
+            if self.imp_deploy_var.get():
+                argv.append("--deploy")
+            if self.imp_debug_var.get():
+                argv.append("--debug")
 
-        self._run_in_thread(import_main, argv, self.imp_output, "Import")
+            # Selective import flags
+            selected = [k for k, v in self.imp_only_vars.items() if v.get()]
+            for key in selected:
+                argv.append(f"--only-{key}")
+
+            self._run_in_thread(import_main, argv, self.imp_output, "Import")
 
     def _run_cleanup(self):
         host = self.cln_host_var.get().strip()
         password = self.cln_pass_var.get()
+        is_pa = self._current_platform == "Palo Alto PAN-OS"
 
+        platform_label = "PAN-OS" if is_pa else "FTD"
         if not host:
-            messagebox.showerror("Missing Field", "Please enter the FTD host/IP address.")
+            messagebox.showerror("Missing Field", f"Please enter the {platform_label} host/IP address.")
             return
         if not password:
-            messagebox.showerror("Missing Field", "Please enter the FTD password.")
+            messagebox.showerror("Missing Field", f"Please enter the {platform_label} password.")
             return
 
-        argv = [
-            "--host", host,
-            "-u", self.cln_user_var.get().strip() or "admin",
-            "-p", password,
-            "--appliance-model", self.cln_model_var.get(),
-            "--workers", self.cln_workers_var.get(),
-            "--yes",  # skip CLI interactive prompt (GUI has its own dialog)
-        ]
+        if is_pa:
+            argv = [
+                "--host", host,
+                "--username", self.cln_user_var.get().strip() or "admin",
+                "--password", password,
+            ]
 
-        if self.cln_dry_var.get():
-            argv.append("--dry-run")
-        if self.cln_deploy_var.get():
-            argv.append("--deploy")
+            if self.cln_dry_var.get():
+                argv.append("--dry-run")
+            if self.cln_deploy_var.get():
+                argv.append("--commit")
 
-        if self.cln_all_var.get():
-            argv.append("--delete-all")
+            if self.cln_all_var.get():
+                argv.append("--delete-all")
+            else:
+                selected = [k for k, v in self.cln_del_vars.items() if v.get()]
+                if not selected:
+                    messagebox.showerror(
+                        "Nothing Selected",
+                        "Please check 'Delete ALL' or select specific object types.",
+                    )
+                    return
+                for key in selected:
+                    # Map FTD-style keys to PA cleanup flags
+                    pa_key_map = {
+                        "rules": "security-rules",
+                        "routes": "static-routes",
+                    }
+                    mapped = pa_key_map.get(key, key)
+                    argv.append(f"--delete-{mapped}")
+
+            # Confirm before destructive cleanup
+            if not self.cln_dry_var.get():
+                if not messagebox.askyesno(
+                    "Confirm Cleanup",
+                    "This will DELETE objects from the PAN-OS device.\n\n"
+                    "Are you sure you want to proceed?\n\n"
+                    "(Use 'Dry run' to preview first)",
+                ):
+                    return
+
+            self._run_in_thread(pa_cleanup_main, argv, self.cln_output, "Cleanup (PAN-OS)")
         else:
-            selected = [k for k, v in self.cln_del_vars.items() if v.get()]
-            if not selected:
-                messagebox.showerror(
-                    "Nothing Selected",
-                    "Please check 'Delete ALL' or select specific object types.",
-                )
-                return
-            for key in selected:
-                if key == "reset-physical-interfaces":
-                    argv.append("--reset-physical-interfaces")
-                else:
-                    argv.append(f"--delete-{key}")
+            argv = [
+                "--host", host,
+                "-u", self.cln_user_var.get().strip() or "admin",
+                "-p", password,
+                "--appliance-model", self.cln_model_var.get(),
+                "--workers", self.cln_workers_var.get(),
+                "--yes",  # skip CLI interactive prompt (GUI has its own dialog)
+            ]
 
-        # Confirm before destructive cleanup
-        if not self.cln_dry_var.get():
-            if not messagebox.askyesno(
-                "Confirm Cleanup",
-                "This will DELETE objects from the FTD device.\n\n"
-                "Are you sure you want to proceed?\n\n"
-                "(Use 'Dry run' to preview first)",
-            ):
-                return
+            if self.cln_dry_var.get():
+                argv.append("--dry-run")
+            if self.cln_deploy_var.get():
+                argv.append("--deploy")
 
-        self._run_in_thread(cleanup_main, argv, self.cln_output, "Cleanup")
+            if self.cln_all_var.get():
+                argv.append("--delete-all")
+            else:
+                selected = [k for k, v in self.cln_del_vars.items() if v.get()]
+                if not selected:
+                    messagebox.showerror(
+                        "Nothing Selected",
+                        "Please check 'Delete ALL' or select specific object types.",
+                    )
+                    return
+                for key in selected:
+                    if key == "reset-physical-interfaces":
+                        argv.append("--reset-physical-interfaces")
+                    else:
+                        argv.append(f"--delete-{key}")
+
+            # Confirm before destructive cleanup
+            if not self.cln_dry_var.get():
+                if not messagebox.askyesno(
+                    "Confirm Cleanup",
+                    "This will DELETE objects from the FTD device.\n\n"
+                    "Are you sure you want to proceed?\n\n"
+                    "(Use 'Dry run' to preview first)",
+                ):
+                    return
+
+            self._run_in_thread(cleanup_main, argv, self.cln_output, "Cleanup")
 
 
 def main():
