@@ -1,4 +1,4 @@
-# FortiGate to Cisco FTD Migration Tool - Complete User Guide
+# FortiGate Firewall Migration Tool - Complete User Guide
 
 ## Table of Contents
 
@@ -7,7 +7,9 @@
 3. [Installation](#installation)
 4. [Quick Start Checklist](#quick-start-checklist)
 5. [Phase 1: Converting FortiGate Configuration](#phase-1-converting-fortigate-configuration)
-6. [Phase 2: Importing to FTD](#phase-2-importing-to-ftd)
+6. [Phase 2: Importing to Target Platform](#phase-2-importing-to-target-platform)
+   - [Importing to Cisco FTD](#phase-2a-importing-to-ftd)
+   - [Importing to Palo Alto PAN-OS](#phase-2b-importing-to-palo-alto-pan-os)
 7. [Phase 3: Cleanup (Optional)](#phase-3-cleanup-optional)
 8. [Performance and Concurrency](#performance-and-concurrency)
 9. [Troubleshooting](#troubleshooting)
@@ -18,7 +20,14 @@
 
 ## Overview
 
-This toolset converts FortiGate firewall configurations to Cisco FTD (Firepower Threat Defense) format and imports them via the FDM (Firewall Device Manager) API.
+This toolset converts FortiGate firewall configurations to **Cisco FTD** (Firepower Threat Defense) or **Palo Alto PAN-OS** format and imports them via the target platform's API.
+
+### Supported Target Platforms
+
+| Platform | API | Status |
+|----------|-----|--------|
+| Cisco FTD | FDM REST API | Production-ready |
+| Palo Alto PAN-OS | XML API | Beta (testing in progress) |
 
 ### What Gets Converted
 
@@ -36,11 +45,13 @@ This toolset converts FortiGate firewall configurations to Cisco FTD (Firepower 
 ### Additional Features
 
 - Automatic name sanitization (spaces → underscores)
-- Model-aware interface port mapping with customizable HA port assignment
+- **Multi-platform support** — Convert to Cisco FTD or Palo Alto PAN-OS from the same FortiGate source
+- Model-aware interface port mapping with customizable HA port assignment (FTD)
 - Flexible HA port configuration (override model defaults)
 - Metadata file for seamless import workflow
 - Bulk cleanup/delete script for rollback
 - Idempotent imports (skip existing objects)
+- Unified GUI with platform selector for Convert, Import, and Cleanup workflows
 
 ---
 
@@ -69,6 +80,15 @@ pip install pyyaml requests urllib3
 | Credentials      | Admin username and password                                                      |
 | Supported Models | FTD-1010, 1120, 1140, 2110, 2120, 2130, 2140, 3105, 3110, 3120, 3130, 3140, 4215 |
 
+### Palo Alto PAN-OS Requirements
+
+| Requirement      | Details                                                   |
+|------------------|-----------------------------------------------------------|
+| Management Mode  | Direct PAN-OS management (XML API access)                 |
+| Firmware         | PAN-OS 10.1+                                              |
+| Credentials      | Admin username and password (API key generated at runtime) |
+| Supported Models | PA-440, PA-450, PA-460, PA-3220, PA-3250, PA-5220         |
+
 ---
 
 ## Installation
@@ -78,19 +98,34 @@ pip install pyyaml requests urllib3
 Your working directory should contain:
 
 ```
-FortiGate-FTD-Migration/
-├── fortigate_converter.py          # Main converter script
-├── address_converter.py            # Address object module
-├── address_group_converter.py      # Address group module
-├── service_converter.py            # Service object module
-├── service_group_converter.py      # Service group module
-├── policy_converter.py             # Access policy module
-├── route_converter.py              # Static route module
-├── interface_converter.py          # Interface conversion module
-├── ftd_api_importer.py             # API importer script
-├── ftd_api_cleanup.py              # Bulk delete/cleanup utility
-├── fortigate_config.yaml           # Your FortiGate YAML (input)
-└── ftd_config_*.json               # Generated FTD JSON files (output)
+FortiGate-Migration/
+├── fortigate_converter.py              # Main FTD converter script
+├── address_converter.py                # Address object module (FTD)
+├── address_group_converter.py          # Address group module (FTD)
+├── service_converter.py                # Service object module (FTD)
+├── service_group_converter.py          # Service group module (FTD)
+├── policy_converter.py                 # Access policy module (FTD)
+├── route_converter.py                  # Static route module (FTD)
+├── interface_converter.py              # Interface conversion module (FTD)
+├── ftd_api_importer.py                 # FTD API importer script
+├── ftd_api_cleanup.py                  # FTD bulk delete/cleanup utility
+├── gui_app.py                          # Unified GUI application (FTD + PA)
+├── FortiGateToPaloAltoTool/            # Palo Alto conversion modules
+│   ├── pa_converter.py                 # Main PA converter script
+│   ├── pa_address_converter.py         # Address object module (PA)
+│   ├── pa_address_group_converter.py   # Address group module (PA)
+│   ├── pa_service_converter.py         # Service object module (PA)
+│   ├── pa_service_group_converter.py   # Service group module (PA)
+│   ├── pa_policy_converter.py          # Security rule module (PA)
+│   ├── pa_route_converter.py           # Static route module (PA)
+│   ├── pa_interface_converter.py       # Interface & zone module (PA)
+│   ├── pa_common.py                    # Shared PA utilities
+│   ├── panos_api_base.py               # PAN-OS XML API client
+│   ├── panos_api_importer.py           # PAN-OS API importer
+│   └── panos_api_cleanup.py            # PAN-OS bulk cleanup
+├── fortigate_config.yaml               # Your FortiGate YAML (input)
+├── ftd_config_*.json                   # Generated FTD JSON files (output)
+└── pa_config_*.json                    # Generated PA JSON files (output)
 ```
 
 ### Step 2: Install Dependencies
@@ -527,7 +562,47 @@ cat ftd_config_summary.json
 
 ---
 
-## Phase 2: Importing to FTD
+### Palo Alto PAN-OS Conversion
+
+To convert for Palo Alto instead of Cisco FTD, use the `pa_converter.py` script in the `FortiGateToPaloAltoTool/` directory:
+
+**Basic conversion (uses default PA-440):**
+```bash
+python FortiGateToPaloAltoTool/pa_converter.py fortigate_config.yaml --pretty
+```
+
+**Specify target model:**
+```bash
+python FortiGateToPaloAltoTool/pa_converter.py fortigate_config.yaml --target-model pa-3220 --pretty
+```
+
+**List supported Palo Alto models:**
+```bash
+python FortiGateToPaloAltoTool/pa_converter.py --list-models
+```
+
+**Supported Palo Alto models:**
+
+| Model   | Description        |
+|---------|--------------------|
+| pa-440  | Entry-level        |
+| pa-450  | Entry-level        |
+| pa-460  | Entry-level        |
+| pa-3220 | Mid-range          |
+| pa-3250 | Mid-range          |
+| pa-5220 | Enterprise         |
+
+The PA converter generates 10 JSON files (addresses, address groups, services, service groups, security rules, static routes, zones, interfaces, metadata, and summary).
+
+**Key differences from FTD conversion:**
+- Services with both TCP and UDP are automatically split into two separate objects (PAN-OS requires one protocol per service)
+- Routes use CIDR notation directly instead of separate gateway network objects
+- Zones are auto-generated from interface assignments
+- No HA port configuration (managed externally on PAN-OS)
+
+---
+
+## Phase 2a: Importing to FTD
 
 ### Important: Object Dependency Order
 
@@ -640,9 +715,73 @@ python ftd_api_importer.py --host 192.168.1.1 -u admin --deploy
 
 ---
 
+## Phase 2b: Importing to Palo Alto PAN-OS
+
+### Step 1: Import Configuration
+
+The PAN-OS importer pushes converted JSON to your Palo Alto firewall via the XML API. It imports objects in dependency order automatically.
+
+```bash
+# Basic import (prompts for password)
+python FortiGateToPaloAltoTool/panos_api_importer.py --host 10.0.0.1 --username admin
+
+# Import with auto-commit
+python FortiGateToPaloAltoTool/panos_api_importer.py --host 10.0.0.1 --username admin --password pass --commit
+
+# Dry run (preview without changes)
+python FortiGateToPaloAltoTool/panos_api_importer.py --host 10.0.0.1 --username admin --dry-run
+
+# Debug mode (show API payloads)
+python FortiGateToPaloAltoTool/panos_api_importer.py --host 10.0.0.1 --username admin --debug
+
+# Specify custom input base name
+python FortiGateToPaloAltoTool/panos_api_importer.py --host 10.0.0.1 --username admin --input my_pa_config
+```
+
+**Import order (handled automatically):**
+```
+1. Zones                ← Foundation
+2. Address Objects      ← Standalone
+3. Address Groups       ← References address objects
+4. Service Objects      ← Standalone
+5. Service Groups       ← References service objects
+6. Static Routes        ← References interfaces
+7. Security Rules       ← References everything above
+8. Commit (optional)    ← Activates configuration
+```
+
+### Step 2: Commit Configuration
+
+If you did not use `--commit`, commit manually via the PAN-OS web UI or CLI:
+
+```
+# PAN-OS CLI
+commit
+```
+
+### PAN-OS Cleanup
+
+To remove imported objects from PAN-OS:
+
+```bash
+# Preview deletion (dry run)
+python FortiGateToPaloAltoTool/panos_api_cleanup.py --host 10.0.0.1 --username admin --delete-all --dry-run
+
+# Delete all custom objects
+python FortiGateToPaloAltoTool/panos_api_cleanup.py --host 10.0.0.1 --username admin --delete-all
+
+# Delete and commit
+python FortiGateToPaloAltoTool/panos_api_cleanup.py --host 10.0.0.1 --username admin --delete-all --commit
+
+# Delete specific types
+python FortiGateToPaloAltoTool/panos_api_cleanup.py --host 10.0.0.1 --username admin --delete-security-rules
+```
+
+---
+
 ## Phase 3: Cleanup (Optional)
 
-The cleanup script removes imported objects for rollback or fresh start.
+The FTD cleanup script removes imported objects for rollback or fresh start.
 
 ### Important: Deletion Order
 
@@ -1251,6 +1390,6 @@ python ftd_api_cleanup.py --help
 
 ---
 
-**Document Version:** 2.1
+**Document Version:** 3.0
 **Last Updated:** March 2026
-**Compatible With:** FTD 7.4.x with FDM, Python 3.9+
+**Compatible With:** FTD 7.4.x with FDM, PAN-OS 10.1+, Python 3.9+

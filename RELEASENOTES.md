@@ -1,5 +1,111 @@
 # Release Notes
 
+## v1.1.0 — Palo Alto PAN-OS Target Support
+
+### Overview
+
+Adds Palo Alto PAN-OS as a second conversion target alongside Cisco FTD. FortiGate configurations can now be migrated to either Cisco FTD or Palo Alto firewalls using the same source YAML input. The Palo Alto implementation includes a full conversion engine, XML API importer, bulk cleanup tool, and GUI integration. **Note:** Palo Alto support is in beta — the base is implemented but live device testing is still in progress.
+
+---
+
+### New Features
+
+#### Palo Alto Conversion Engine (`FortiGateToPaloAltoTool/`)
+
+- **Address Objects** — Hosts (ip-netmask /32), subnets (ip-netmask), IP ranges (ip-range), and FQDNs with PAN-OS name sanitization (63-char max, alphanumeric/underscore/hyphen/period)
+- **Address Groups** — Static address groups with nested group support
+- **Service Objects** — TCP/UDP port objects; dual-protocol services automatically split into separate PAN-OS objects (one protocol per object requirement)
+- **Service Groups** — Port groups with automatic split-service reference resolution and member deduplication
+- **Security Rules** — FortiGate policies mapped to PAN-OS security rules with zone-based source/destination, address objects, service objects, and action mapping (accept→allow, deny→deny); logging configurable
+- **Static Routes** — IPv4 routes using CIDR notation directly (no separate gateway objects); blackhole route filtering
+- **Interfaces** — Physical interfaces, VLAN subinterfaces, and aggregate-ethernet (LACP) with model-aware port mapping
+- **Zones** — Auto-generated from interface assignments
+- **10 output JSON files** per conversion including summary statistics and metadata
+
+#### Supported Palo Alto Models (6)
+
+| Model   | Description  |
+|---------|--------------|
+| PA-440  | Entry-level  |
+| PA-450  | Entry-level  |
+| PA-460  | Entry-level  |
+| PA-3220 | Mid-range    |
+| PA-3250 | Mid-range    |
+| PA-5220 | Enterprise   |
+
+#### PAN-OS XML API Importer (`panos_api_importer.py`)
+
+- **Dependency-ordered import** — Zones → addresses → address groups → services → service groups → routes → security rules
+- **API key authentication** — Automatic key generation via PAN-OS keygen endpoint
+- **Dry-run mode** — Preview import without making changes
+- **Optional auto-commit** — Commit configuration changes after import via `--commit`
+- **Debug mode** — Inspect XML API payloads
+- **SSL handling** — Self-signed certificate support
+
+#### PAN-OS Bulk Cleanup (`panos_api_cleanup.py`)
+
+- **Selective or full deletion** — Delete specific object types or all custom objects
+- **Reverse dependency order** — Security rules → service groups → services → address groups → addresses → routes → zones
+- **Dry-run mode** — Preview deletions
+- **Interactive confirmation** — Safety prompt before destructive operations
+- **Optional auto-commit** — Commit after cleanup
+
+#### GUI Updates
+
+- **Platform selector** — Dropdown at top of GUI to switch between Cisco FTD and Palo Alto PAN-OS
+- **Dynamic tab updates** — Convert, Import, and Cleanup tabs adapt to selected platform
+- **Palo Alto model selection** — PA model dropdown replaces FTD models when PA is selected
+- **Commit toggle** — "Commit after import/cleanup" checkbox for PAN-OS operations
+
+---
+
+### Key Differences: Palo Alto vs Cisco FTD
+
+| Aspect | Palo Alto PAN-OS | Cisco FTD |
+|--------|------------------|-----------|
+| API | XML API (keygen auth) | REST API (OAuth 2.0) |
+| Service objects | One protocol per object (auto-split) | Supports dual-protocol |
+| Routes | CIDR notation directly | Separate gateway network objects |
+| Zones | Auto-generated from interfaces | Defined in config |
+| Import concurrency | Sequential | Multithreaded (`--workers`) |
+| HA configuration | Managed externally | Configurable via `--ha-port` |
+| Name max length | 63 characters | Varies |
+
+---
+
+### CLI Quick Reference
+
+```bash
+# Convert for Palo Alto
+python FortiGateToPaloAltoTool/pa_converter.py config.yaml --target-model pa-3220 --pretty
+
+# List PA models
+python FortiGateToPaloAltoTool/pa_converter.py --list-models
+
+# Import to PAN-OS
+python FortiGateToPaloAltoTool/panos_api_importer.py --host 10.0.0.1 --username admin --commit
+
+# Dry-run import
+python FortiGateToPaloAltoTool/panos_api_importer.py --host 10.0.0.1 --username admin --dry-run
+
+# Cleanup PAN-OS
+python FortiGateToPaloAltoTool/panos_api_cleanup.py --host 10.0.0.1 --username admin --delete-all --dry-run
+```
+
+---
+
+### Known Limitations (Palo Alto)
+
+- ICMP, ICMP6, IP, IPIP, GRE, ESP, and AH protocol services are skipped during conversion
+- Application field in security rules is set to "any" (manual tuning recommended post-migration)
+- Loopback, tunnel, and switch interfaces are not converted
+- Only IPv4 addresses and routes are supported
+- Live device testing is in progress — verify results on a test device before production use
+
+---
+
+---
+
 ## v1.0.0 — Initial Release
 
 ### Overview
