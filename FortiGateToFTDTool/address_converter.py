@@ -133,12 +133,8 @@ class AddressConverter:
                 self.failed_items.append({"name": object_name, "reason": "name is 'none'", "config": properties})
                 continue
             
-            # Check 2: Skip if name is just an IP address (contains only digits, dots, colons)
-            # Valid names should have letters or underscores
-            if self._is_ip_address(object_name):
-                print(f"  Skipped: {object_name} (name is just an IP address)")
-                self.failed_items.append({"name": object_name, "reason": "name is just an IP address", "config": properties})
-                continue
+            # Note: Objects named with just an IP address are allowed.
+            # The IP is kept as the object name.
             
             # ================================================================
             # STEP 2D: Determine the address type (HOST, NETWORK, RANGE)
@@ -436,36 +432,6 @@ class AddressConverter:
             print(f"  Warning: Could not convert netmask '{netmask}' to CIDR (Error: {e})")
             print(f"    Defaulting to /32 (single host)")
             return 32
-    
-    def _is_ip_address(self, name: str) -> bool:
-        """
-        Check if a string looks like an IP address rather than a proper object name.
-        
-        Valid object names should contain letters, not just numbers and dots/colons.
-        Examples that should be rejected:
-        - "192.168.1.1"
-        - "10.0.0.0"
-        - "2001:db8::1"
-        
-        Args:
-            name: The object name to check
-            
-        Returns:
-            True if the name looks like an IP address, False otherwise
-        """
-        # Remove dots, colons, and digits
-        # If nothing is left, it was probably just an IP
-        remaining = name.replace('.', '').replace(':', '').replace('-', '')
-        
-        # If all digits, it's an IP address
-        if remaining.isdigit():
-            return True
-        
-        # If very short and mostly numbers, probably an IP
-        if len(remaining) == 0 or (len(remaining) < 3 and remaining.isdigit()):
-            return True
-        
-        return False
     
     def _is_valid_address_value(self, value: str) -> bool:
         """

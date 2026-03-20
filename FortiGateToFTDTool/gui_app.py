@@ -661,6 +661,21 @@ class App(tk.Tk):
         content_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         ttk.Label(content_frame, text="File Contents:").pack(anchor=tk.W)
+
+        # Search bar
+        search_bar = ttk.Frame(content_frame)
+        search_bar.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(search_bar, text="Search:").pack(side=tk.LEFT)
+        self._viewer_search_var = tk.StringVar()
+        search_entry = ttk.Entry(search_bar, textvariable=self._viewer_search_var, width=30)
+        search_entry.pack(side=tk.LEFT, padx=4)
+        search_entry.bind("<Return>", lambda e: self._viewer_find_next())
+        ttk.Button(search_bar, text="Find Next", command=self._viewer_find_next).pack(side=tk.LEFT, padx=2)
+        ttk.Button(search_bar, text="Find Prev", command=self._viewer_find_prev).pack(side=tk.LEFT, padx=2)
+        self._viewer_match_label = ttk.Label(search_bar, text="")
+        self._viewer_match_label.pack(side=tk.LEFT, padx=6)
+        self._viewer_search_idx = "1.0"
+
         self.viewer_text = tk.Text(
             content_frame, wrap=tk.NONE, font=("Consolas", 10),
             bg=_OUT_BG, fg=_OUT_FG,
@@ -732,6 +747,82 @@ class App(tk.Tk):
         self.viewer_text.delete("1.0", tk.END)
         self.viewer_text.insert("1.0", display)
         self.viewer_text.configure(state=tk.DISABLED)
+        # Reset search position when a new file is loaded
+        self._viewer_search_idx = "1.0"
+        self._viewer_clear_highlights()
+        self._viewer_match_label.configure(text="")
+
+    def _viewer_clear_highlights(self):
+        self.viewer_text.tag_remove("search_hit", "1.0", tk.END)
+        self.viewer_text.tag_remove("search_current", "1.0", tk.END)
+
+    def _viewer_find(self, forwards: bool = True):
+        query = self._viewer_search_var.get()
+        if not query:
+            self._viewer_clear_highlights()
+            self._viewer_match_label.configure(text="")
+            return
+
+        self._viewer_clear_highlights()
+
+        # Highlight all matches
+        self.viewer_text.tag_configure("search_hit", background="#3a3a00", foreground=_OUT_FG)
+        self.viewer_text.tag_configure("search_current", background="#48ea33", foreground="#000000")
+
+        count_var = tk.IntVar()
+        total = 0
+        pos = "1.0"
+        while True:
+            pos = self.viewer_text.search(query, pos, stopindex=tk.END, nocase=True, count=count_var)
+            if not pos:
+                break
+            end = f"{pos}+{count_var.get()}c"
+            self.viewer_text.tag_add("search_hit", pos, end)
+            total += 1
+            pos = end
+
+        if total == 0:
+            self._viewer_match_label.configure(text="No matches")
+            return
+
+        # Find next/prev from current position
+        if forwards:
+            hit = self.viewer_text.search(query, self._viewer_search_idx, stopindex=tk.END, nocase=True, count=count_var)
+            if not hit:
+                # Wrap to beginning
+                hit = self.viewer_text.search(query, "1.0", stopindex=tk.END, nocase=True, count=count_var)
+        else:
+            hit = self.viewer_text.search(query, self._viewer_search_idx, stopindex="1.0", backwards=True, nocase=True, count=count_var)
+            if not hit:
+                # Wrap to end
+                hit = self.viewer_text.search(query, tk.END, stopindex="1.0", backwards=True, nocase=True, count=count_var)
+
+        if hit:
+            end = f"{hit}+{count_var.get()}c"
+            self.viewer_text.tag_add("search_current", hit, end)
+            self.viewer_text.see(hit)
+            # Advance past this match for the next search
+            self._viewer_search_idx = end if forwards else hit
+
+        # Count which match we're on
+        match_num = 0
+        pos = "1.0"
+        while hit and pos:
+            pos = self.viewer_text.search(query, pos, stopindex=tk.END, nocase=True, count=count_var)
+            if not pos:
+                break
+            match_num += 1
+            if self.viewer_text.compare(pos, "==", hit):
+                break
+            pos = f"{pos}+{count_var.get()}c"
+
+        self._viewer_match_label.configure(text=f"{match_num} of {total}")
+
+    def _viewer_find_next(self):
+        self._viewer_find(forwards=True)
+
+    def _viewer_find_prev(self):
+        self._viewer_find(forwards=False)
 
     # ------------------------------------------------------------------
     # Shared widgets / helpers
