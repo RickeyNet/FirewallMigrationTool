@@ -1,0 +1,142 @@
+!
+hostname ASA5506
+!
+!==============================
+! Interfaces (routed + mgmt)
+!==============================
+interface GigabitEthernet1/1
+ description WAN
+ nameif outside
+ security-level 0
+ ip address 10.1.1.1 255.255.255.0
+ no shutdown
+!
+interface GigabitEthernet1/2
+ description User LAN
+ nameif inside
+ security-level 100
+ ip address 192.168.0.1 255.255.255.0
+ no shutdown
+!
+interface GigabitEthernet1/3
+ description DMZ servers
+ nameif dmz1
+ security-level 50
+ ip address 192.168.1.1 255.255.255.0
+ no shutdown
+!
+interface Management1/1
+ nameif management
+ security-level 100
+ ip address 192.168.100.1 255.255.255.0
+ management-only
+ no shutdown
+!
+!==============================
+! Static routes
+!==============================
+route outside 0.0.0.0 0.0.0.0 10.1.1.254 1
+route inside 192.168.100.0 255.255.255.0 192.168.0.254 1
+!
+!==============================
+! Address objects
+!==============================
+object network OBJ_INSIDE_NET
+ subnet 192.168.0.0 255.255.255.0
+object network OBJ_DMZ1_NET
+ subnet 192.168.1.0 255.255.255.0
+object network OBJ_MGMT_NET
+ subnet 192.168.100.0 255.255.255.0
+object network OBJ_WEB_INT
+ host 192.168.1.10
+object network OBJ_WEB_EXT
+ host 10.1.1.10
+object network OBJ_DNS_SERVER
+ host 8.8.8.8
+!
+!==============================
+! Address object-groups
+!==============================
+object-group network OG_INTERNAL_NETS
+ network-object object OBJ_INSIDE_NET
+ network-object object OBJ_DMZ1_NET
+ network-object object OBJ_MGMT_NET
+!
+object-group network OG_DMZ_SERVERS
+ network-object host 192.168.1.10
+ network-object host 192.168.1.20
+!
+!==============================
+! Service/port objects & groups
+!==============================
+object service OBJ_TCP_HTTPS
+ service tcp destination eq 443
+object service OBJ_TCP_HTTP
+ service tcp destination eq 80
+object service OBJ_TCP_SSH
+ service tcp destination eq 22
+object service OBJ_UDP_DNS
+ service udp destination eq 53
+!
+object-group service OG_WEB_SERVICES tcp
+ port-object eq 80
+ port-object eq 443
+!
+object-group service OG_ADMIN_SERVICES tcp
+ port-object eq 22
+ port-object eq 3389
+!
+object-group service OG_DNS_SERVICES udp
+ port-object eq 53
+!
+!==============================
+! NAT (dynamic PAT + static)
+!==============================
+! Dynamic PAT to Internet for inside and dmz1
+nat (inside,outside) after-auto source dynamic OBJ_INSIDE_NET interface
+nat (dmz1,outside) after-auto source dynamic OBJ_DMZ1_NET interface
+!
+! Static NAT for web server
+nat (dmz1,outside) source static OBJ_WEB_INT OBJ_WEB_EXT
+!
+!==============================
+! Access-lists (firewall rules)
+!==============================
+! Outside to DMZ web server
+access-list OUTSIDE-IN extended permit tcp any object OBJ_WEB_INT object-group OG_WEB_SERVICES
+access-list OUTSIDE-IN extended permit icmp any any echo-reply
+access-list OUTSIDE-IN extended deny ip any any log
+access-group OUTSIDE-IN in interface outside
+!
+! Inside to anywhere (typical user LAN)
+access-list INSIDE-OUT extended permit ip object-group OG_INTERNAL_NETS any
+access-group INSIDE-OUT in interface inside
+!
+! DMZ outbound (only web + DNS to Internet)
+access-list DMZ1-OUT extended permit object-group OG_WEB_SERVICES host 192.168.1.10 any
+access-list DMZ1-OUT extended permit object-group OG_DNS_SERVICES host 192.168.1.10 object OBJ_DNS_SERVER
+access-group DMZ1-OUT in interface dmz1
+!
+! Management network – SSH/HTTPS from inside only
+access-list MGMT-IN extended permit object-group OG_ADMIN_SERVICES object OBJ_INSIDE_NET host 192.168.100.1
+access-group MGMT-IN in interface management
+!
+!==============================
+! Management / services
+!==============================
+ssh 192.168.0.0 255.255.255.0 inside
+ssh 192.168.100.0 255.255.255.0 management
+ssh version 2
+http 192.168.0.0 255.255.255.0 inside
+http 192.168.100.0 255.255.255.0 management
+http server enable
+!
+dns domain-lookup outside
+dns server-group DefaultDNS
+ name-server 8.8.8.8
+ name-server 8.8.4.4
+ domain-name example.local
+!
+service-policy global_policy global
+!
+write memory

@@ -37,8 +37,9 @@ else:
 # Add both tool directories to sys.path
 _FTD_DIR = os.path.join(APP_DIR, "FortiGateToFTDTool")
 _PA_DIR = os.path.join(APP_DIR, "FortiGateToPaloAltoTool")
+_ASA_DIR = os.path.join(APP_DIR, "CiscoASAToPaloAltoTool")
 
-for _d in (_FTD_DIR, _PA_DIR, _PKG_DIR):
+for _d in (_FTD_DIR, _PA_DIR, _ASA_DIR, _PKG_DIR):
     if os.path.isdir(_d) and _d not in sys.path:
         sys.path.insert(0, _d)
 
@@ -58,6 +59,15 @@ except ImportError as _e:
     _PA_AVAILABLE = False
     _PA_IMPORT_ERROR = str(_e)
 
+# Cisco ASA → Palo Alto modules — optional
+_ASA_IMPORT_ERROR = ""
+try:
+    from asa_converter import main as asa_convert_main        # noqa: E402
+    _ASA_AVAILABLE = True
+except ImportError as _e:
+    _ASA_AVAILABLE = False
+    _ASA_IMPORT_ERROR = str(_e)
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -73,6 +83,8 @@ PA_MODEL_LIST = [
     "pa-3220", "pa-3250",
     "pa-5220",
 ]
+
+SOURCE_PLATFORM_LIST = ["FortiGate", "Cisco ASA"]
 
 PLATFORM_LIST = ["Cisco FTD", "Palo Alto PAN-OS"]
 
@@ -144,6 +156,7 @@ class App(tk.Tk):
 
         # Current platform selection
         self._current_platform = "Cisco FTD"
+        self._current_source = "FortiGate"
 
         self._apply_dark_theme()
         self._build_ui()
@@ -328,14 +341,24 @@ class App(tk.Tk):
         # Platform selector bar
         platform_frame = ttk.Frame(self)
         platform_frame.pack(fill=tk.X, padx=6, pady=(6, 0))
-        ttk.Label(platform_frame, text="Target Platform:").pack(side=tk.LEFT, padx=(4, 6))
+
+        ttk.Label(platform_frame, text="Source:").pack(side=tk.LEFT, padx=(4, 4))
+        self.source_var = tk.StringVar(value="FortiGate")
+        source_combo = ttk.Combobox(
+            platform_frame, textvariable=self.source_var,
+            values=SOURCE_PLATFORM_LIST, state="readonly", width=14,
+        )
+        source_combo.pack(side=tk.LEFT)
+        source_combo.bind("<<ComboboxSelected>>", self._on_source_change)
+
+        ttk.Label(platform_frame, text="Target:").pack(side=tk.LEFT, padx=(12, 4))
         self.platform_var = tk.StringVar(value="Cisco FTD")
-        platform_combo = ttk.Combobox(
+        self.platform_combo = ttk.Combobox(
             platform_frame, textvariable=self.platform_var,
             values=PLATFORM_LIST, state="readonly", width=20,
         )
-        platform_combo.pack(side=tk.LEFT)
-        platform_combo.bind("<<ComboboxSelected>>", self._on_platform_change)
+        self.platform_combo.pack(side=tk.LEFT)
+        self.platform_combo.bind("<<ComboboxSelected>>", self._on_platform_change)
 
         if not _PA_AVAILABLE:
             self._pa_warning = ttk.Label(
@@ -357,6 +380,22 @@ class App(tk.Tk):
             self, textvariable=self.status_var, style="Status.TLabel",
             anchor=tk.W, padding=(6, 2),
         ).pack(side=tk.BOTTOM, fill=tk.X)
+
+    def _on_source_change(self, event=None):
+        """Handle source platform change — update target list and input label."""
+        source = self.source_var.get()
+        self._current_source = source
+
+        if source == "Cisco ASA":
+            # When source is ASA, target must be Palo Alto PAN-OS
+            self.platform_combo.configure(values=["Palo Alto PAN-OS"])
+            self.platform_var.set("Palo Alto PAN-OS")
+            self._on_platform_change()
+            self.conv_input_label.configure(text="Input Config:")
+        else:
+            # FortiGate — restore both targets
+            self.platform_combo.configure(values=PLATFORM_LIST)
+            self.conv_input_label.configure(text="Input YAML:")
 
     def _on_platform_change(self, event=None):
         """Handle platform selector change — update model lists and labels."""
@@ -400,7 +439,11 @@ class App(tk.Tk):
             self.cln_model_var.set("pa-440")
             self.cln_deploy_cb.configure(text="Commit after cleanup")
 
-            self.title(f"FortiGate to Palo Alto PAN-OS Migration Tool v{APP_VERSION}")
+            source = self._current_source
+            if source == "Cisco ASA":
+                self.title(f"Cisco ASA to Palo Alto PAN-OS Migration Tool v{APP_VERSION}")
+            else:
+                self.title(f"FortiGate to Palo Alto PAN-OS Migration Tool v{APP_VERSION}")
         else:
             # Restore FTD defaults
             self.conv_model_combo.configure(values=FTD_MODEL_LIST)
@@ -432,7 +475,8 @@ class App(tk.Tk):
         opts.pack(fill=tk.X, padx=8, pady=(8, 4))
 
         # Row 0: Input file
-        ttk.Label(opts, text="Input YAML:").grid(row=0, column=0, sticky=tk.W, pady=3)
+        self.conv_input_label = ttk.Label(opts, text="Input YAML:")
+        self.conv_input_label.grid(row=0, column=0, sticky=tk.W, pady=3)
         self.conv_input_var = tk.StringVar()
         ttk.Entry(opts, textvariable=self.conv_input_var, width=60).grid(
             row=0, column=1, sticky=tk.EW, padx=4,
@@ -976,10 +1020,19 @@ class App(tk.Tk):
         text_widget.configure(state=tk.DISABLED)
 
     def _browse_yaml(self):
-        path = filedialog.askopenfilename(
-            title="Select FortiGate YAML Configuration",
-            filetypes=[("YAML files", "*.yaml *.yml"), ("All files", "*.*")],
-        )
+        if self._current_source == "Cisco ASA":
+            path = filedialog.askopenfilename(
+                title="Select Cisco ASA Configuration File",
+                filetypes=[
+                    ("Config files", "*.txt *.cfg *.conf"),
+                    ("All files", "*.*"),
+                ],
+            )
+        else:
+            path = filedialog.askopenfilename(
+                title="Select FortiGate YAML Configuration",
+                filetypes=[("YAML files", "*.yaml *.yml"), ("All files", "*.*")],
+            )
         if path:
             self.conv_input_var.set(path)
             # Auto-set output directory to same folder as the input file
@@ -1090,8 +1143,11 @@ class App(tk.Tk):
     # ------------------------------------------------------------------
     def _run_convert(self):
         input_file = self.conv_input_var.get().strip()
+        is_asa = self._current_source == "Cisco ASA"
+
         if not input_file:
-            messagebox.showerror("Missing Input", "Please select a FortiGate YAML file.")
+            file_type = "Cisco ASA config" if is_asa else "FortiGate YAML"
+            messagebox.showerror("Missing Input", f"Please select a {file_type} file.")
             return
 
         is_pa = self._current_platform == "Palo Alto PAN-OS"
@@ -1114,7 +1170,19 @@ class App(tk.Tk):
         if self.conv_pretty_var.get():
             argv.append("--pretty")
 
-        main_fn = pa_convert_main if is_pa else convert_main
+        if is_asa:
+            if not _ASA_AVAILABLE:
+                messagebox.showerror(
+                    "ASA Modules Missing",
+                    f"Cisco ASA converter modules not found.\n\n"
+                    f"Error: {_ASA_IMPORT_ERROR}",
+                )
+                return
+            main_fn = asa_convert_main
+        elif is_pa:
+            main_fn = pa_convert_main
+        else:
+            main_fn = convert_main
         self._run_in_thread(main_fn, argv, self.conv_output, "Convert")
 
     def _run_import(self):
