@@ -130,7 +130,7 @@ _TAB_BG   = "#222222"   # inactive tab background
 _OUT_BG   = "#0d0d0d"   # output console background
 _OUT_FG   = "#31A005"   # output console text
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
 
 class App(tk.Tk):
