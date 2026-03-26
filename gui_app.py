@@ -115,22 +115,22 @@ class _QueueWriter(io.TextIOBase):
 
 
 # ---------------------------------------------------------------------------
-# Dark theme palette
+# Ocean Coral theme palette
 # ---------------------------------------------------------------------------
-_BG       = "#292929"   # root / frame background
-_INPUT    = "#2C2C2C"   # entry / combobox / spinbox fields
-_FG       = "#e0e0e0"   # primary text
-_FG_DIM   = "#777777"   # secondary / disabled text
-_PURPLE   = "#48ea33"   # vivid green — accents, active elements
-_PURPLE_D = "#5c5c5c"   # dark grey — buttons resting, selected tab
-_PURPLE_H = "#063aca"   # mid blue — hover
-_BORDER   = "#3d3d3d"   # subtle grey border
-_BTN_BG   = "#1F6D5C"   # button resting
-_TAB_BG   = "#222222"   # inactive tab background
-_OUT_BG   = "#0d0d0d"   # output console background
-_OUT_FG   = "#31A005"   # output console text
+_BG       = "#0b1e24"   # root / frame background
+_INPUT    = "#112e35"   # entry / combobox / spinbox fields
+_FG       = "#e0d4bc"   # primary text
+_FG_DIM   = "#7a9a8a"   # secondary / disabled text
+_ACCENT   = "#f08a65"   # coral — accents, active elements
+_ACCENT_D = "#1a4450"   # dark teal — buttons resting, selected tab
+_ACCENT_H = "#5abaa0"   # teal — hover
+_BORDER   = "#3e6058"   # muted green border
+_BTN_BG   = "#f08a65"   # coral button resting
+_TAB_BG   = "#112e35"   # inactive tab background
+_OUT_BG   = "#0b1e24"   # output console background
+_OUT_FG   = "#5abaa0"   # teal output console text
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.1.1"
 
 
 class App(tk.Tk):
@@ -165,21 +165,21 @@ class App(tk.Tk):
     # Dark theme
     # ------------------------------------------------------------------
     def _apply_dark_theme(self):
-        """Configure ttk.Style for a dark black/purple/grey theme."""
+        """Configure ttk.Style for the Ocean Coral theme."""
         self.configure(bg=_BG)
 
         # Pure-tk widget defaults (messageboxes, dialogs, etc.)
         self.option_add("*background", _BG)
         self.option_add("*foreground", _FG)
-        self.option_add("*activeBackground", _PURPLE_D)
+        self.option_add("*activeBackground", _ACCENT_D)
         self.option_add("*activeForeground", _FG)
-        self.option_add("*selectBackground", _PURPLE_D)
+        self.option_add("*selectBackground", _ACCENT_D)
         self.option_add("*selectForeground", _FG)
         self.option_add("*relief", "flat")
         # Combobox popup listbox
         self.option_add("*TCombobox*Listbox.background", _INPUT)
         self.option_add("*TCombobox*Listbox.foreground", _FG)
-        self.option_add("*TCombobox*Listbox.selectBackground", _PURPLE_D)
+        self.option_add("*TCombobox*Listbox.selectBackground", _ACCENT_D)
         self.option_add("*TCombobox*Listbox.selectForeground", _FG)
 
         style = ttk.Style(self)
@@ -192,13 +192,13 @@ class App(tk.Tk):
         style.configure(
             "TLabelframe",
             background=_BG,
-            bordercolor=_PURPLE_D,
+            bordercolor=_ACCENT_D,
             relief="groove",
         )
         style.configure(
             "TLabelframe.Label",
             background=_BG,
-            foreground=_PURPLE,
+            foreground=_ACCENT,
             font=("Segoe UI", 9, "bold"),
         )
 
@@ -223,29 +223,29 @@ class App(tk.Tk):
         )
         style.map(
             "TEntry",
-            bordercolor=[("focus", _PURPLE)],
-            lightcolor=[("focus", _PURPLE)],
+            bordercolor=[("focus", _ACCENT)],
+            lightcolor=[("focus", _ACCENT)],
         )
 
         # --- Button ---
         style.configure(
             "TButton",
             background=_BTN_BG,
-            foreground=_FG,
-            bordercolor=_PURPLE_D,
-            focuscolor=_PURPLE,
+            foreground="#000000",
+            bordercolor=_ACCENT_D,
+            focuscolor=_ACCENT,
             relief="flat",
             padding=(10, 5),
         )
         style.map(
             "TButton",
             background=[
-                ("active", _PURPLE_H),
-                ("pressed", _PURPLE_D),
+                ("active", _ACCENT_H),
+                ("pressed", _ACCENT_D),
                 ("disabled", _TAB_BG),
             ],
             foreground=[("disabled", _FG_DIM)],
-            bordercolor=[("active", _PURPLE), ("focus", _PURPLE)],
+            bordercolor=[("active", _ACCENT), ("focus", _ACCENT)],
         )
 
         # --- Checkbutton ---
@@ -254,13 +254,13 @@ class App(tk.Tk):
             background=_BG,
             foreground=_FG,
             indicatorbackground=_INPUT,
-            indicatorforeground=_PURPLE,
+            indicatorforeground=_ACCENT,
         )
         style.map(
             "TCheckbutton",
             background=[("active", _BG)],
-            indicatorbackground=[("selected", _PURPLE_D), ("active", _INPUT)],
-            indicatorforeground=[("selected", _PURPLE), ("active", _FG_DIM)],
+            indicatorbackground=[("selected", _ACCENT_D), ("active", _INPUT)],
+            indicatorforeground=[("selected", _ACCENT), ("active", _FG_DIM)],
             foreground=[("active", _FG)],
         )
 
@@ -278,8 +278,8 @@ class App(tk.Tk):
             "TCombobox",
             fieldbackground=[("readonly", _INPUT), ("disabled", _BG)],
             foreground=[("disabled", _FG_DIM)],
-            bordercolor=[("focus", _PURPLE)],
-            arrowcolor=[("active", _PURPLE)],
+            bordercolor=[("focus", _ACCENT)],
+            arrowcolor=[("active", _ACCENT)],
         )
 
         # --- Spinbox ---
@@ -294,8 +294,8 @@ class App(tk.Tk):
         )
         style.map(
             "TSpinbox",
-            bordercolor=[("focus", _PURPLE)],
-            arrowcolor=[("active", _PURPLE)],
+            bordercolor=[("focus", _ACCENT)],
+            arrowcolor=[("active", _ACCENT)],
         )
 
         # --- Notebook (tabs) ---
@@ -314,7 +314,7 @@ class App(tk.Tk):
         )
         style.map(
             "TNotebook.Tab",
-            background=[("selected", _PURPLE_D), ("active", _PURPLE_H)],
+            background=[("selected", _ACCENT_D), ("active", _ACCENT_H)],
             foreground=[("selected", _FG), ("active", _FG)],
             expand=[("selected", [1, 1, 1, 0])],
         )
@@ -330,7 +330,7 @@ class App(tk.Tk):
         )
         style.map(
             "TScrollbar",
-            background=[("active", _PURPLE_D), ("pressed", _PURPLE)],
+            background=[("active", _ACCENT_D), ("pressed", _ACCENT)],
             arrowcolor=[("active", _FG)],
         )
 
@@ -807,8 +807,8 @@ class App(tk.Tk):
         self.viewer_listbox = tk.Listbox(
             list_frame, width=30, font=("Consolas", 10),
             bg=_OUT_BG, fg=_OUT_FG,
-            selectbackground=_PURPLE_D, selectforeground=_OUT_FG,
-            highlightthickness=1, highlightbackground=_BORDER, highlightcolor=_PURPLE,
+            selectbackground=_ACCENT_D, selectforeground=_OUT_FG,
+            highlightthickness=1, highlightbackground=_BORDER, highlightcolor=_ACCENT,
             relief=tk.FLAT, bd=1,
         )
         list_scroll = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.viewer_listbox.yview)
@@ -841,9 +841,9 @@ class App(tk.Tk):
             content_frame, wrap=tk.NONE, font=("Consolas", 10),
             bg=_OUT_BG, fg=_OUT_FG,
             insertbackground=_OUT_FG,
-            selectbackground=_PURPLE_D, selectforeground=_OUT_FG,
+            selectbackground=_ACCENT_D, selectforeground=_OUT_FG,
             state=tk.DISABLED, relief=tk.FLAT, bd=1,
-            highlightthickness=1, highlightbackground=_BORDER, highlightcolor=_PURPLE,
+            highlightthickness=1, highlightbackground=_BORDER, highlightcolor=_ACCENT,
         )
         yscroll = ttk.Scrollbar(content_frame, orient=tk.VERTICAL, command=self.viewer_text.yview)
         xscroll = ttk.Scrollbar(content_frame, orient=tk.HORIZONTAL, command=self.viewer_text.xview)
@@ -997,9 +997,9 @@ class App(tk.Tk):
             frame, wrap=tk.WORD, font=("Consolas", 10),
             bg=_OUT_BG, fg=_OUT_FG,
             insertbackground=_OUT_FG,
-            selectbackground=_PURPLE_D, selectforeground=_OUT_FG,
+            selectbackground=_ACCENT_D, selectforeground=_OUT_FG,
             state=tk.DISABLED, relief=tk.FLAT, bd=1,
-            highlightthickness=1, highlightbackground=_BORDER, highlightcolor=_PURPLE,
+            highlightthickness=1, highlightbackground=_BORDER, highlightcolor=_ACCENT,
         )
         scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=text.yview)
         text.configure(yscrollcommand=scrollbar.set)
