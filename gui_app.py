@@ -115,22 +115,60 @@ class _QueueWriter(io.TextIOBase):
 
 
 # ---------------------------------------------------------------------------
-# Ocean Coral theme palette
+# Theme definitions
 # ---------------------------------------------------------------------------
-_BG       = "#0b1e24"   # root / frame background
-_INPUT    = "#112e35"   # entry / combobox / spinbox fields
-_FG       = "#e0d4bc"   # primary text
-_FG_DIM   = "#7a9a8a"   # secondary / disabled text
-_ACCENT   = "#f08a65"   # coral — accents, active elements
-_ACCENT_D = "#1a4450"   # dark teal — buttons resting, selected tab
-_ACCENT_H = "#5abaa0"   # teal — hover
-_BORDER   = "#3e6058"   # muted green border
-_BTN_BG   = "#f08a65"   # coral button resting
-_TAB_BG   = "#112e35"   # inactive tab background
-_OUT_BG   = "#0b1e24"   # output console background
-_OUT_FG   = "#5abaa0"   # teal output console text
+THEMES = {
+    "Ocean Coral": {
+        "bg":       "#0b1e24",
+        "input":    "#112e35",
+        "fg":       "#e0d4bc",
+        "fg_dim":   "#7a9a8a",
+        "accent":   "#f08a65",
+        "accent_d": "#1a4450",
+        "accent_h": "#5abaa0",
+        "border":   "#3e6058",
+        "btn_bg":   "#f08a65",
+        "btn_fg":   "#000000",
+        "tab_bg":   "#112e35",
+        "out_bg":   "#0b1e24",
+        "out_fg":   "#5abaa0",
+    },
+    "Chris": {
+        "bg":       "#ff69b4",
+        "input":    "#ff3399",
+        "fg":       "#1b00ff",
+        "fg_dim":   "#ff6600",
+        "accent":   "#00ff00",
+        "accent_d": "#ffd700",
+        "accent_h": "#ffff00",
+        "border":   "#8b00ff",
+        "btn_bg":   "#00ff00",
+        "btn_fg":   "#000000",
+        "tab_bg":   "#ff85c2",
+        "out_bg":   "#ebfa21",
+        "out_fg":   "#ff0000",
+    },
+}
 
-APP_VERSION = "1.1.1"
+DEFAULT_THEME = "Ocean Coral"
+
+# Initialize module-level colors from the default theme
+_t = THEMES[DEFAULT_THEME]
+_BG       = _t["bg"]
+_INPUT    = _t["input"]
+_FG       = _t["fg"]
+_FG_DIM   = _t["fg_dim"]
+_ACCENT   = _t["accent"]
+_ACCENT_D = _t["accent_d"]
+_ACCENT_H = _t["accent_h"]
+_BORDER   = _t["border"]
+_BTN_BG   = _t["btn_bg"]
+_BTN_FG   = _t["btn_fg"]
+_TAB_BG   = _t["tab_bg"]
+_OUT_BG   = _t["out_bg"]
+_OUT_FG   = _t["out_fg"]
+
+APP_VERSION = "1.2.0"
 
 
 class App(tk.Tk):
@@ -158,181 +196,219 @@ class App(tk.Tk):
         self._current_platform = "Cisco FTD"
         self._current_source = "FortiGate"
 
-        self._apply_dark_theme()
+        # Track current theme
+        self._current_theme = DEFAULT_THEME
+        self._tk_widgets = []  # raw tk widgets that need manual recolor
+
+        self._apply_theme(THEMES[self._current_theme])
         self._build_ui()
 
     # ------------------------------------------------------------------
-    # Dark theme
+    # Theme engine
     # ------------------------------------------------------------------
-    def _apply_dark_theme(self):
-        """Configure ttk.Style for the Ocean Coral theme."""
-        self.configure(bg=_BG)
+    def _apply_theme(self, t: dict):
+        """Apply a theme dictionary to all ttk styles and tk widget defaults."""
+        bg       = t["bg"]
+        inp      = t["input"]
+        fg       = t["fg"]
+        fg_dim   = t["fg_dim"]
+        accent   = t["accent"]
+        accent_d = t["accent_d"]
+        accent_h = t["accent_h"]
+        border   = t["border"]
+        btn_bg   = t["btn_bg"]
+        btn_fg   = t["btn_fg"]
+        tab_bg   = t["tab_bg"]
+        out_bg   = t["out_bg"]
+        out_fg   = t["out_fg"]
+
+        self.configure(bg=bg)
 
         # Pure-tk widget defaults (messageboxes, dialogs, etc.)
-        self.option_add("*background", _BG)
-        self.option_add("*foreground", _FG)
-        self.option_add("*activeBackground", _ACCENT_D)
-        self.option_add("*activeForeground", _FG)
-        self.option_add("*selectBackground", _ACCENT_D)
-        self.option_add("*selectForeground", _FG)
+        self.option_add("*background", bg)
+        self.option_add("*foreground", fg)
+        self.option_add("*activeBackground", accent_d)
+        self.option_add("*activeForeground", fg)
+        self.option_add("*selectBackground", accent_d)
+        self.option_add("*selectForeground", fg)
         self.option_add("*relief", "flat")
         # Combobox popup listbox
-        self.option_add("*TCombobox*Listbox.background", _INPUT)
-        self.option_add("*TCombobox*Listbox.foreground", _FG)
-        self.option_add("*TCombobox*Listbox.selectBackground", _ACCENT_D)
-        self.option_add("*TCombobox*Listbox.selectForeground", _FG)
+        self.option_add("*TCombobox*Listbox.background", inp)
+        self.option_add("*TCombobox*Listbox.foreground", fg)
+        self.option_add("*TCombobox*Listbox.selectBackground", accent_d)
+        self.option_add("*TCombobox*Listbox.selectForeground", fg)
 
         style = ttk.Style(self)
         style.theme_use("clam")
 
         # --- Frames ---
-        style.configure("TFrame", background=_BG)
+        style.configure("TFrame", background=bg)
 
         # --- LabelFrame (panels) ---
         style.configure(
             "TLabelframe",
-            background=_BG,
-            bordercolor=_ACCENT_D,
+            background=bg,
+            bordercolor=accent_d,
             relief="groove",
         )
         style.configure(
             "TLabelframe.Label",
-            background=_BG,
-            foreground=_ACCENT,
+            background=bg,
+            foreground=accent,
             font=("Segoe UI", 9, "bold"),
         )
 
         # --- Labels ---
-        style.configure("TLabel", background=_BG, foreground=_FG)
+        style.configure("TLabel", background=bg, foreground=fg)
         style.configure(
             "Status.TLabel",
-            background=_TAB_BG,
-            foreground=_FG_DIM,
+            background=tab_bg,
+            foreground=fg_dim,
             relief="flat",
         )
 
         # --- Entry ---
         style.configure(
             "TEntry",
-            fieldbackground=_INPUT,
-            foreground=_FG,
-            insertcolor=_FG,
-            bordercolor=_BORDER,
-            lightcolor=_BORDER,
-            darkcolor=_BORDER,
+            fieldbackground=inp,
+            foreground=fg,
+            insertcolor=fg,
+            bordercolor=border,
+            lightcolor=border,
+            darkcolor=border,
         )
         style.map(
             "TEntry",
-            bordercolor=[("focus", _ACCENT)],
-            lightcolor=[("focus", _ACCENT)],
+            bordercolor=[("focus", accent)],
+            lightcolor=[("focus", accent)],
         )
 
         # --- Button ---
         style.configure(
             "TButton",
-            background=_BTN_BG,
-            foreground="#000000",
-            bordercolor=_ACCENT_D,
-            focuscolor=_ACCENT,
+            background=btn_bg,
+            foreground=btn_fg,
+            bordercolor=accent_d,
+            focuscolor=accent,
             relief="flat",
             padding=(10, 5),
         )
         style.map(
             "TButton",
             background=[
-                ("active", _ACCENT_H),
-                ("pressed", _ACCENT_D),
-                ("disabled", _TAB_BG),
+                ("active", accent_h),
+                ("pressed", accent_d),
+                ("disabled", tab_bg),
             ],
-            foreground=[("disabled", _FG_DIM)],
-            bordercolor=[("active", _ACCENT), ("focus", _ACCENT)],
+            foreground=[("disabled", fg_dim)],
+            bordercolor=[("active", accent), ("focus", accent)],
         )
 
         # --- Checkbutton ---
         style.configure(
             "TCheckbutton",
-            background=_BG,
-            foreground=_FG,
-            indicatorbackground=_INPUT,
-            indicatorforeground=_ACCENT,
+            background=bg,
+            foreground=fg,
+            indicatorbackground=inp,
+            indicatorforeground=accent,
         )
         style.map(
             "TCheckbutton",
-            background=[("active", _BG)],
-            indicatorbackground=[("selected", _ACCENT_D), ("active", _INPUT)],
-            indicatorforeground=[("selected", _ACCENT), ("active", _FG_DIM)],
-            foreground=[("active", _FG)],
+            background=[("active", bg)],
+            indicatorbackground=[("selected", accent_d), ("active", inp)],
+            indicatorforeground=[("selected", accent), ("active", fg_dim)],
+            foreground=[("active", fg)],
         )
 
         # --- Combobox ---
         style.configure(
             "TCombobox",
-            fieldbackground=_INPUT,
-            foreground=_FG,
-            background=_TAB_BG,
-            bordercolor=_BORDER,
-            arrowcolor=_FG_DIM,
-            insertcolor=_FG,
+            fieldbackground=inp,
+            foreground=fg,
+            background=tab_bg,
+            bordercolor=border,
+            arrowcolor=fg_dim,
+            insertcolor=fg,
         )
         style.map(
             "TCombobox",
-            fieldbackground=[("readonly", _INPUT), ("disabled", _BG)],
-            foreground=[("disabled", _FG_DIM)],
-            bordercolor=[("focus", _ACCENT)],
-            arrowcolor=[("active", _ACCENT)],
+            fieldbackground=[("readonly", inp), ("disabled", bg)],
+            foreground=[("disabled", fg_dim)],
+            bordercolor=[("focus", accent)],
+            arrowcolor=[("active", accent)],
         )
 
         # --- Spinbox ---
         style.configure(
             "TSpinbox",
-            fieldbackground=_INPUT,
-            foreground=_FG,
-            background=_TAB_BG,
-            bordercolor=_BORDER,
-            arrowcolor=_FG_DIM,
-            insertcolor=_FG,
+            fieldbackground=inp,
+            foreground=fg,
+            background=tab_bg,
+            bordercolor=border,
+            arrowcolor=fg_dim,
+            insertcolor=fg,
         )
         style.map(
             "TSpinbox",
-            bordercolor=[("focus", _ACCENT)],
-            arrowcolor=[("active", _ACCENT)],
+            bordercolor=[("focus", accent)],
+            arrowcolor=[("active", accent)],
         )
 
         # --- Notebook (tabs) ---
         style.configure(
             "TNotebook",
-            background=_BG,
-            bordercolor=_BORDER,
+            background=bg,
+            bordercolor=border,
             tabmargins=[2, 5, 2, 0],
         )
         style.configure(
             "TNotebook.Tab",
-            background=_TAB_BG,
-            foreground=_FG_DIM,
-            bordercolor=_BORDER,
+            background=tab_bg,
+            foreground=fg_dim,
+            bordercolor=border,
             padding=[12, 5],
         )
         style.map(
             "TNotebook.Tab",
-            background=[("selected", _ACCENT_D), ("active", _ACCENT_H)],
-            foreground=[("selected", _FG), ("active", _FG)],
+            background=[("selected", accent_d), ("active", accent_h)],
+            foreground=[("selected", fg), ("active", fg)],
             expand=[("selected", [1, 1, 1, 0])],
         )
 
         # --- Scrollbar ---
         style.configure(
             "TScrollbar",
-            background=_TAB_BG,
-            troughcolor=_BG,
-            bordercolor=_BORDER,
-            arrowcolor=_FG_DIM,
+            background=tab_bg,
+            troughcolor=bg,
+            bordercolor=border,
+            arrowcolor=fg_dim,
             relief="flat",
         )
         style.map(
             "TScrollbar",
-            background=[("active", _ACCENT_D), ("pressed", _ACCENT)],
-            arrowcolor=[("active", _FG)],
+            background=[("active", accent_d), ("pressed", accent)],
+            arrowcolor=[("active", fg)],
         )
+
+        # Recolor raw tk widgets (Text, Listbox) that don't use ttk styles
+        for w in getattr(self, "_tk_widgets", []):
+            try:
+                w.configure(
+                    bg=out_bg, fg=out_fg,
+                    insertbackground=out_fg,
+                    selectbackground=accent_d, selectforeground=out_fg,
+                    highlightbackground=border, highlightcolor=accent,
+                )
+            except tk.TclError:
+                pass
+
+    def _on_theme_change(self, event=None):
+        """Handle theme selector change."""
+        name = self.theme_var.get()
+        if name == self._current_theme:
+            return
+        self._current_theme = name
+        self._apply_theme(THEMES[name])
 
     # ------------------------------------------------------------------
     # UI construction
@@ -365,6 +441,16 @@ class App(tk.Tk):
                 platform_frame, text="(PA modules not found)", foreground=_FG_DIM,
             )
             self._pa_warning.pack(side=tk.LEFT, padx=8)
+
+        # Theme selector (right-aligned)
+        self.theme_var = tk.StringVar(value=self._current_theme)
+        theme_combo = ttk.Combobox(
+            platform_frame, textvariable=self.theme_var,
+            values=list(THEMES.keys()), state="readonly", width=14,
+        )
+        theme_combo.pack(side=tk.RIGHT, padx=(4, 4))
+        theme_combo.bind("<<ComboboxSelected>>", self._on_theme_change)
+        ttk.Label(platform_frame, text="Theme:").pack(side=tk.RIGHT)
 
         notebook = ttk.Notebook(self)
         notebook.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
@@ -816,6 +902,7 @@ class App(tk.Tk):
         list_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.viewer_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.viewer_listbox.bind("<<ListboxSelect>>", self._on_viewer_select)
+        self._tk_widgets.append(self.viewer_listbox)
 
         # Right pane: JSON content
         content_frame = ttk.Frame(body)
@@ -851,6 +938,7 @@ class App(tk.Tk):
         yscroll.pack(side=tk.RIGHT, fill=tk.Y)
         xscroll.pack(side=tk.BOTTOM, fill=tk.X)
         self.viewer_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._tk_widgets.append(self.viewer_text)
 
         # Storage for discovered file paths
         self._viewer_files: list[str] = []
@@ -1005,6 +1093,7 @@ class App(tk.Tk):
         text.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._tk_widgets.append(text)
         return text
 
     def _append_output(self, text_widget, content):
