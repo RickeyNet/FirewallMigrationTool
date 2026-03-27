@@ -1,10 +1,63 @@
 # Release Notes
 
-## v1.1.0 — Palo Alto PAN-OS Target Support
+## v1.2.0 - Theme Selector
 
 ### Overview
 
-Adds Palo Alto PAN-OS as a second conversion target alongside Cisco FTD. FortiGate configurations can now be migrated to either Cisco FTD or Palo Alto firewalls using the same source YAML input. The Palo Alto implementation includes a full conversion engine, XML API importer, bulk cleanup tool, and GUI integration. **Note:** Palo Alto support is in beta — the base is implemented but live device testing is still in progress.
+Adds a live theme selector to the GUI with two built-in themes. The theme system is data-driven - adding new themes only requires adding an entry to the `THEMES` dictionary in `gui_app.py`.
+
+---
+
+### New Features
+
+#### Theme Engine
+
+- **Live theme switching** - Theme dropdown in the top toolbar (right-aligned) allows switching themes without restarting the app
+- **Ocean Coral** (default) - Dark teal background with coral accents and teal highlights
+- **Chris** - Hot pink background with neon green accents and blue text
+
+#### Theme Architecture
+
+- All color values defined in a single `THEMES` dictionary for easy customization
+- Theme applies to all ttk-styled widgets (frames, labels, buttons, tabs, entries, comboboxes, checkbuttons, spinboxes, scrollbars)
+- Raw tk widgets (Text, Listbox) are registered and recolored on theme change
+- Button text color is theme-aware via `btn_fg` key (ensures readability on colored button backgrounds)
+
+#### Adding Custom Themes
+
+Add a new entry to the `THEMES` dict in `gui_app.py` with these keys:
+
+| Key        | Description                         |
+|------------|-------------------------------------|
+| `bg`       | Root/frame background               |
+| `input`    | Entry/combobox field background     |
+| `fg`       | Primary text color                  |
+| `fg_dim`   | Secondary/disabled text             |
+| `accent`   | Accent color (active elements)      |
+| `accent_d` | Dark accent (selected tabs, pressed)|
+| `accent_h` | Hover accent                        |
+| `border`   | Border color                        |
+| `btn_bg`   | Button background                   |
+| `btn_fg`   | Button text color                   |
+| `tab_bg`   | Inactive tab background             |
+| `out_bg`   | Output console background           |
+| `out_fg`   | Output console text color           |
+
+---
+
+### Other Changes
+
+- Renamed color variables from `_PURPLE`/`_PURPLE_D`/`_PURPLE_H` to `_ACCENT`/`_ACCENT_D`/`_ACCENT_H` for clarity
+
+---
+
+---
+
+## v1.1.0 - Palo Alto PAN-OS Target Support
+
+### Overview
+
+Adds Palo Alto PAN-OS as a second conversion target alongside Cisco FTD. FortiGate configurations can now be migrated to either Cisco FTD or Palo Alto firewalls using the same source YAML input. The Palo Alto implementation includes a full conversion engine, XML API importer, bulk cleanup tool, and GUI integration. **Note:** Palo Alto support is in beta - the base is implemented but live device testing is still in progress.
 
 ---
 
@@ -12,14 +65,14 @@ Adds Palo Alto PAN-OS as a second conversion target alongside Cisco FTD. FortiGa
 
 #### Palo Alto Conversion Engine (`FortiGateToPaloAltoTool/`)
 
-- **Address Objects** — Hosts (ip-netmask /32), subnets (ip-netmask), IP ranges (ip-range), and FQDNs with PAN-OS name sanitization (63-char max, alphanumeric/underscore/hyphen/period)
-- **Address Groups** — Static address groups with nested group support
-- **Service Objects** — TCP/UDP port objects; dual-protocol services automatically split into separate PAN-OS objects (one protocol per object requirement)
-- **Service Groups** — Port groups with automatic split-service reference resolution and member deduplication
-- **Security Rules** — FortiGate policies mapped to PAN-OS security rules with zone-based source/destination, address objects, service objects, and action mapping (accept→allow, deny→deny); logging configurable
-- **Static Routes** — IPv4 routes using CIDR notation directly (no separate gateway objects); blackhole route filtering
-- **Interfaces** — Physical interfaces, VLAN subinterfaces, and aggregate-ethernet (LACP) with model-aware port mapping
-- **Zones** — Auto-generated from interface assignments
+- **Address Objects** - Hosts (ip-netmask /32), subnets (ip-netmask), IP ranges (ip-range), and FQDNs with PAN-OS name sanitization (63-char max, alphanumeric/underscore/hyphen/period)
+- **Address Groups** - Static address groups with nested group support
+- **Service Objects** - TCP/UDP port objects; dual-protocol services automatically split into separate PAN-OS objects (one protocol per object requirement)
+- **Service Groups** - Port groups with automatic split-service reference resolution and member deduplication
+- **Security Rules** - FortiGate policies mapped to PAN-OS security rules with zone-based source/destination, address objects, service objects, and action mapping (accept→allow, deny→deny); logging configurable
+- **Static Routes** - IPv4 routes using CIDR notation directly (no separate gateway objects); blackhole route filtering
+- **Interfaces** - Physical interfaces, VLAN subinterfaces, and aggregate-ethernet (LACP) with model-aware port mapping
+- **Zones** - Auto-generated from interface assignments
 - **10 output JSON files** per conversion including summary statistics and metadata
 
 #### Supported Palo Alto Models (6)
@@ -35,27 +88,27 @@ Adds Palo Alto PAN-OS as a second conversion target alongside Cisco FTD. FortiGa
 
 #### PAN-OS XML API Importer (`panos_api_importer.py`)
 
-- **Dependency-ordered import** — Zones → addresses → address groups → services → service groups → routes → security rules
-- **API key authentication** — Automatic key generation via PAN-OS keygen endpoint
-- **Dry-run mode** — Preview import without making changes
-- **Optional auto-commit** — Commit configuration changes after import via `--commit`
-- **Debug mode** — Inspect XML API payloads
-- **SSL handling** — Self-signed certificate support
+- **Dependency-ordered import** - Zones → addresses → address groups → services → service groups → routes → security rules
+- **API key authentication** - Automatic key generation via PAN-OS keygen endpoint
+- **Dry-run mode** - Preview import without making changes
+- **Optional auto-commit** - Commit configuration changes after import via `--commit`
+- **Debug mode** - Inspect XML API payloads
+- **SSL handling** - Self-signed certificate support
 
 #### PAN-OS Bulk Cleanup (`panos_api_cleanup.py`)
 
-- **Selective or full deletion** — Delete specific object types or all custom objects
-- **Reverse dependency order** — Security rules → service groups → services → address groups → addresses → routes → zones
-- **Dry-run mode** — Preview deletions
-- **Interactive confirmation** — Safety prompt before destructive operations
-- **Optional auto-commit** — Commit after cleanup
+- **Selective or full deletion** - Delete specific object types or all custom objects
+- **Reverse dependency order** - Security rules → service groups → services → address groups → addresses → routes → zones
+- **Dry-run mode** - Preview deletions
+- **Interactive confirmation** - Safety prompt before destructive operations
+- **Optional auto-commit** - Commit after cleanup
 
 #### GUI Updates
 
-- **Platform selector** — Dropdown at top of GUI to switch between Cisco FTD and Palo Alto PAN-OS
-- **Dynamic tab updates** — Convert, Import, and Cleanup tabs adapt to selected platform
-- **Palo Alto model selection** — PA model dropdown replaces FTD models when PA is selected
-- **Commit toggle** — "Commit after import/cleanup" checkbox for PAN-OS operations
+- **Platform selector** - Dropdown at top of GUI to switch between Cisco FTD and Palo Alto PAN-OS
+- **Dynamic tab updates** - Convert, Import, and Cleanup tabs adapt to selected platform
+- **Palo Alto model selection** - PA model dropdown replaces FTD models when PA is selected
+- **Commit toggle** - "Commit after import/cleanup" checkbox for PAN-OS operations
 
 ---
 
@@ -100,13 +153,13 @@ python FortiGateToPaloAltoTool/panos_api_cleanup.py --host 10.0.0.1 --username a
 - Application field in security rules is set to "any" (manual tuning recommended post-migration)
 - Loopback, tunnel, and switch interfaces are not converted
 - Only IPv4 addresses and routes are supported
-- Live device testing is in progress — verify results on a test device before production use
+- Live device testing is in progress - verify results on a test device before production use
 
 ---
 
 ---
 
-## v1.0.0 — Initial Release
+## v1.0.0 - Initial Release
 
 ### Overview
 
@@ -118,14 +171,14 @@ FortiGate to Cisco FTD Configuration Converter is a three-phase migration tool t
 
 #### Conversion Engine
 
-- **Network Objects** — Hosts, subnets (CIDR), IP ranges, and FQDNs with automatic type detection and name sanitization
-- **Network Groups** — Address groups with automatic nested-group flattening and circular reference detection
-- **Service Objects** — TCP/UDP port objects with automatic splitting of dual-protocol services into separate FTD-compatible entries
-- **Service Groups** — Port object groups with expanded split-service references and member deduplication
-- **Access Control Rules** — Firewall policies with multi-zone, multi-service, and multi-network support; FortiGate action mapping (accept/deny to PERMIT/DENY)
-- **Static Routes** — IPv4 routing entries with gateway object creation, default route handling, and blackhole route filtering
-- **Interfaces** — Physical interfaces, EtherChannels, subinterfaces (VLANs), and bridge groups with model-aware port mapping
-- **Security Zones** — Auto-generated from interface names and aliases
+- **Network Objects** - Hosts, subnets (CIDR), IP ranges, and FQDNs with automatic type detection and name sanitization
+- **Network Groups** - Address groups with automatic nested-group flattening and circular reference detection
+- **Service Objects** - TCP/UDP port objects with automatic splitting of dual-protocol services into separate FTD-compatible entries
+- **Service Groups** - Port object groups with expanded split-service references and member deduplication
+- **Access Control Rules** - Firewall policies with multi-zone, multi-service, and multi-network support; FortiGate action mapping (accept/deny to PERMIT/DENY)
+- **Static Routes** - IPv4 routing entries with gateway object creation, default route handling, and blackhole route filtering
+- **Interfaces** - Physical interfaces, EtherChannels, subinterfaces (VLANs), and bridge groups with model-aware port mapping
+- **Security Zones** - Auto-generated from interface names and aliases
 - **13 output JSON files** per conversion including summary statistics and metadata
 
 #### Supported FTD Models (13)
@@ -150,30 +203,30 @@ Custom HA port override supported via `--ha-port`.
 
 #### FDM API Import
 
-- **11 selective import filters** — Physical interfaces, EtherChannels, subinterfaces, bridge groups, security zones, address objects, address groups, service objects, service groups, static routes, and access rules
-- **Dependency-ordered import** — Objects created in the correct sequence to satisfy FTD reference requirements
-- **Idempotent operations** — Existing objects are skipped without error
-- **Multithreaded** — Configurable worker count (1–32, default 6) for concurrent object creation
-- **OAuth 2.0 authentication** — Automatic token refresh with thread-safe locking and fallback re-authentication
-- **Retry with exponential backoff** — Up to 4 attempts with jittered delays for transient errors (429, 503, 504)
-- **Optional deployment** — Trigger FTD deployment immediately after import
-- **JSON report output** — Machine-readable import summary
+- **11 selective import filters** - Physical interfaces, EtherChannels, subinterfaces, bridge groups, security zones, address objects, address groups, service objects, service groups, static routes, and access rules
+- **Dependency-ordered import** - Objects created in the correct sequence to satisfy FTD reference requirements
+- **Idempotent operations** - Existing objects are skipped without error
+- **Multithreaded** - Configurable worker count (1–32, default 6) for concurrent object creation
+- **OAuth 2.0 authentication** - Automatic token refresh with thread-safe locking and fallback re-authentication
+- **Retry with exponential backoff** - Up to 4 attempts with jittered delays for transient errors (429, 503, 504)
+- **Optional deployment** - Trigger FTD deployment immediately after import
+- **JSON report output** - Machine-readable import summary
 
 #### Bulk Cleanup / Rollback
 
-- **Selective or full deletion** — Delete specific object types or all custom objects
-- **Dry-run mode** — Preview what would be deleted without making changes
-- **System-object protection** — System-defined objects are never deleted
-- **Confirmation prompt** — Interactive approval required before destructive operations
-- **Multithreaded deletion** — Same configurable concurrency as import
+- **Selective or full deletion** - Delete specific object types or all custom objects
+- **Dry-run mode** - Preview what would be deleted without making changes
+- **System-object protection** - System-defined objects are never deleted
+- **Confirmation prompt** - Interactive approval required before destructive operations
+- **Multithreaded deletion** - Same configurable concurrency as import
 
 #### GUI Application
 
-- **Three-tab interface** — Convert, Import to FTD, and Cleanup tabs
-- **Real-time console output** — Streaming progress updates during all operations
-- **Dark theme** — Professional dark interface with green accents
-- **Full control** — All CLI options exposed through the GUI (model selection, worker count, selective imports, dry-run, deploy toggle, debug mode)
-- **File/directory browsers** — Native OS dialogs for selecting input configs and output directories
+- **Three-tab interface** - Convert, Import to FTD, and Cleanup tabs
+- **Real-time console output** - Streaming progress updates during all operations
+- **Dark theme** - Professional dark interface with green accents
+- **Full control** - All CLI options exposed through the GUI (model selection, worker count, selective imports, dry-run, deploy toggle, debug mode)
+- **File/directory browsers** - Native OS dialogs for selecting input configs and output directories
 
 #### CLI Interface
 

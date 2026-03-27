@@ -48,7 +48,7 @@ from fortigate_converter import main as convert_main   # noqa: E402
 from ftd_api_importer import main as import_main       # noqa: E402
 from ftd_api_cleanup import main as cleanup_main       # noqa: E402
 
-# Palo Alto modules — optional (only needed when PA platform is selected)
+# Palo Alto modules - optional (only needed when PA platform is selected)
 _PA_IMPORT_ERROR = ""
 try:
     from pa_converter import main as pa_convert_main          # noqa: E402
@@ -59,7 +59,7 @@ except ImportError as _e:
     _PA_AVAILABLE = False
     _PA_IMPORT_ERROR = str(_e)
 
-# Cisco ASA → Palo Alto modules — optional
+# Cisco ASA → Palo Alto modules - optional
 _ASA_IMPORT_ERROR = ""
 try:
     from asa_converter import main as asa_convert_main        # noqa: E402
@@ -468,7 +468,7 @@ class App(tk.Tk):
         ).pack(side=tk.BOTTOM, fill=tk.X)
 
     def _on_source_change(self, event=None):
-        """Handle source platform change — update target list and input label."""
+        """Handle source platform change - update target list and input label."""
         source = self.source_var.get()
         self._current_source = source
 
@@ -479,12 +479,12 @@ class App(tk.Tk):
             self._on_platform_change()
             self.conv_input_label.configure(text="Input Config:")
         else:
-            # FortiGate — restore both targets
+            # FortiGate - restore both targets
             self.platform_combo.configure(values=PLATFORM_LIST)
             self.conv_input_label.configure(text="Input YAML:")
 
     def _on_platform_change(self, event=None):
-        """Handle platform selector change — update model lists and labels."""
+        """Handle platform selector change - update model lists and labels."""
         platform = self.platform_var.get()
         self._current_platform = platform
 

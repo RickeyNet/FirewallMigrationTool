@@ -189,7 +189,7 @@ This checklist tracks technical debt, performance hardening, and usability impro
 
 - [x] Fix FTD-3105 model port count inconsistency
   - Done: Verified `total_ports: 16` is correct (8 RJ45 + 8 SFP = 16 data ports).
-    No code change needed — the original values were accurate.
+    No code change needed - the original values were accurate.
 
 - [x] Remove unnecessary defensive guard in converter
   - Done: Replaced verbose `args.debug if 'args' in locals() ...` with `getattr(args, 'debug', False)`.

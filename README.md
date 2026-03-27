@@ -45,7 +45,7 @@ This toolset converts FortiGate firewall configurations to **Cisco FTD** (Firepo
 ### Additional Features
 
 - Automatic name sanitization (spaces → underscores)
-- **Multi-platform support** — Convert to Cisco FTD or Palo Alto PAN-OS from the same FortiGate source
+- **Multi-platform support** - Convert to Cisco FTD or Palo Alto PAN-OS from the same FortiGate source
 - Model-aware interface port mapping with customizable HA port assignment (FTD)
 - Flexible HA port configuration (override model defaults)
 - Metadata file for seamless import workflow
@@ -1077,7 +1077,7 @@ API Error 422: Validation failed
 ```
 
 **Solutions:**
-1. The appliance may be under heavy load — wait a few minutes and retry
+1. The appliance may be under heavy load - wait a few minutes and retry
 2. Reduce worker count: `--workers 2`
 3. Check FDM System → Task Status for pending deployments or other background operations
 4. If persistent, verify the appliance is healthy (CPU/memory usage)
@@ -1091,7 +1091,7 @@ API Error 422: Validation failed
 
 **Solutions:**
 1. These are automatically retried (up to 4 attempts)
-2. If frequent, the management network may have latency or packet loss — check connectivity
+2. If frequent, the management network may have latency or packet loss - check connectivity
 3. Reduce parallelism with `--workers 2` to lower concurrent load on the appliance
 
 ---
