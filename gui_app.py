@@ -168,7 +168,7 @@ _TAB_BG   = _t["tab_bg"]
 _OUT_BG   = _t["out_bg"]
 _OUT_FG   = _t["out_fg"]
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 
 
 class App(tk.Tk):
@@ -459,6 +459,7 @@ class App(tk.Tk):
         self._build_import_tab(notebook)
         self._build_cleanup_tab(notebook)
         self._build_viewer_tab(notebook)
+        self._build_help_tab(notebook)
 
         # Status bar
         self.status_var = tk.StringVar(value="Ready")
@@ -1072,6 +1073,351 @@ class App(tk.Tk):
 
     def _viewer_find_prev(self):
         self._viewer_find(forwards=False)
+
+    # ==================== HOW-TO GUIDE TAB ====================
+    def _build_help_tab(self, notebook):
+        tab = ttk.Frame(notebook)
+        notebook.add(tab, text="  How-To Guide  ")
+
+        # Scrollable text widget for the guide content
+        frame = ttk.Frame(tab)
+        frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        help_text = tk.Text(
+            frame, wrap=tk.WORD, font=("Segoe UI", 10),
+            bg=_OUT_BG, fg=_OUT_FG,
+            insertbackground=_OUT_FG,
+            selectbackground=_ACCENT_D, selectforeground=_OUT_FG,
+            state=tk.DISABLED, relief=tk.FLAT, bd=1,
+            highlightthickness=1, highlightbackground=_BORDER, highlightcolor=_ACCENT,
+            padx=12, pady=10, spacing1=2, spacing3=4,
+        )
+        scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=help_text.yview)
+        help_text.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        help_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._tk_widgets.append(help_text)
+
+        # Tag styles for rich formatting
+        help_text.tag_configure("title", font=("Segoe UI", 18, "bold"), foreground=_ACCENT,
+                                spacing1=8, spacing3=12)
+        help_text.tag_configure("h1", font=("Segoe UI", 14, "bold"), foreground=_ACCENT,
+                                spacing1=16, spacing3=6)
+        help_text.tag_configure("h2", font=("Segoe UI", 11, "bold"), foreground=_ACCENT_H,
+                                spacing1=12, spacing3=4)
+        help_text.tag_configure("bold", font=("Segoe UI", 10, "bold"))
+        help_text.tag_configure("italic", font=("Segoe UI", 10, "italic"),
+                                foreground=_FG_DIM)
+        help_text.tag_configure("code", font=("Consolas", 9), foreground=_ACCENT_H)
+        help_text.tag_configure("bullet", lmargin1=20, lmargin2=34)
+        help_text.tag_configure("sub_bullet", lmargin1=40, lmargin2=54)
+        help_text.tag_configure("tip", foreground=_ACCENT_H, font=("Segoe UI", 10, "italic"))
+        help_text.tag_configure("warning", foreground=_ACCENT, font=("Segoe UI", 10, "bold"))
+        help_text.tag_configure("separator", font=("Segoe UI", 4), spacing1=6, spacing3=6)
+
+        # Helper to insert styled text
+        def put(text, *tags):
+            help_text.insert(tk.END, text, tags)
+
+        help_text.configure(state=tk.NORMAL)
+
+        # ----- Title -----
+        put("Firewall Migration Tool - How-To Guide\n", "title")
+        put("=" * 70 + "\n\n", "separator")
+
+        # ----- Overview -----
+        put("Overview\n", "h1")
+        put("This tool converts firewall configurations from a source platform "
+            "(FortiGate or Cisco ASA) into JSON files, then imports them into a "
+            "target platform (Cisco FTD or Palo Alto PAN-OS) via API. The workflow "
+            "has three phases: Convert, Import, and Cleanup. Each phase has its own "
+            "tab in this application.\n\n")
+
+        # ----- Getting Started -----
+        put("Getting Started\n", "h1")
+        put("=" * 70 + "\n\n", "separator")
+
+        put("Step 1: Select Your Platforms\n", "h2")
+        put("Use the toolbar at the top of the window to choose your source and target:\n\n")
+        put("\u2022  Source: ", "bullet")
+        put("FortiGate", "bold")
+        put(" (YAML config) or ", "bullet")
+        put("Cisco ASA", "bold")
+        put(" (text config)\n", "bullet")
+        put("\u2022  Target: ", "bullet")
+        put("Cisco FTD", "bold")
+        put(" (FDM REST API) or ", "bullet")
+        put("Palo Alto PAN-OS", "bold")
+        put(" (XML API)\n\n", "bullet")
+        put("Note: ", "warning")
+        put("Selecting Cisco ASA as the source automatically sets the target to "
+            "Palo Alto PAN-OS.\n\n", "italic")
+
+        put("Step 2: Convert Your Configuration\n", "h2")
+        put("Go to the ", "")
+        put("Convert", "bold")
+        put(" tab (see details below).\n\n", "")
+
+        put("Step 3: Import to the Target Device\n", "h2")
+        put("Go to the ", "")
+        put("Import", "bold")
+        put(" tab (see details below).\n\n", "")
+
+        put("Step 4: Verify and Review\n", "h2")
+        put("Use the ", "")
+        put("Config Viewer", "bold")
+        put(" tab to browse generated JSON files.\n\n", "")
+
+        put("Step 5: Rollback if Needed\n", "h2")
+        put("Use the ", "")
+        put("Cleanup", "bold")
+        put(" tab to delete imported objects from the target device.\n\n", "")
+
+        # ----- Convert Tab -----
+        put("Tab 1: Convert\n", "h1")
+        put("=" * 70 + "\n\n", "separator")
+        put("Converts your source firewall configuration file into JSON files "
+            "ready for API import.\n\n")
+
+        put("Fields\n", "h2")
+        put("\u2022  Input YAML / Input Config: ", "bullet")
+        put("Path to your source configuration file. Click ", "bullet")
+        put("Browse...", "code")
+        put(" to select it. FortiGate uses YAML format; Cisco ASA uses "
+            "plain text (.txt, .cfg, .conf).\n", "bullet")
+        put("\u2022  Output Directory: ", "bullet")
+        put("Folder where generated JSON files will be saved. Automatically "
+            "set to the input file's directory when you browse for the input.\n", "bullet")
+        put("\u2022  Output Base Name: ", "bullet")
+        put("Prefix for all generated files. For example, ", "bullet")
+        put("ftd_config", "code")
+        put(" produces files like ", "bullet")
+        put("ftd_config_address_objects.json", "code")
+        put(". Defaults to ", "bullet")
+        put("ftd_config", "code")
+        put(" for FTD or ", "bullet")
+        put("pa_config", "code")
+        put(" for PAN-OS.\n", "bullet")
+        put("\u2022  Target Model: ", "bullet")
+        put("The specific hardware model you are migrating to. This controls "
+            "interface port mapping and available port count.\n", "bullet")
+        put("\u2022  HA Port (optional): ", "bullet")
+        put("The port reserved for High Availability (FTD only). Enter as ", "bullet")
+        put("Ethernet1/X", "code")
+        put(". Leave blank if not using HA. Disabled for PAN-OS targets.\n", "bullet")
+        put("\u2022  Pretty-print JSON output: ", "bullet")
+        put("Formats JSON with indentation for readability. Enabled by default.\n\n", "bullet")
+
+        put("How to Run\n", "h2")
+        put("1.  Click ", "bullet")
+        put("Browse...", "code")
+        put(" to select your source config file.\n", "bullet")
+        put("2.  Verify or change the output directory and base name.\n", "bullet")
+        put("3.  Select your target model from the dropdown.\n", "bullet")
+        put("4.  (FTD only) Enter an HA port if needed.\n", "bullet")
+        put("5.  Click ", "bullet")
+        put("Run Conversion", "bold")
+        put(".\n", "bullet")
+        put("6.  Watch the output console for progress and warnings.\n", "bullet")
+        put("7.  When done, the console shows a summary of converted objects.\n\n", "bullet")
+
+        # ----- Import Tab -----
+        put("Tab 2: Import\n", "h1")
+        put("=" * 70 + "\n\n", "separator")
+        put("Imports the converted JSON files into the target firewall appliance "
+            "via its management API.\n\n")
+
+        put("Connection Fields\n", "h2")
+        put("\u2022  Host / IP: ", "bullet")
+        put("Management IP address or hostname of the target appliance.\n", "bullet")
+        put("\u2022  Username: ", "bullet")
+        put("Admin account username (default: ", "bullet")
+        put("admin", "code")
+        put(").\n", "bullet")
+        put("\u2022  Password: ", "bullet")
+        put("Admin password.\n", "bullet")
+        put("\u2022  Config Directory: ", "bullet")
+        put("Folder containing the JSON files from the Convert step. Must match "
+            "the output directory used during conversion.\n", "bullet")
+        put("\u2022  JSON Base Name: ", "bullet")
+        put("Must match the base name used during conversion.\n", "bullet")
+        put("\u2022  Workers: ", "bullet")
+        put("Number of concurrent API threads (1-32, default 6). Higher values "
+            "speed up large imports. FTD only; disabled for PAN-OS.\n", "bullet")
+        put("\u2022  Deploy / Commit after import: ", "bullet")
+        put("Automatically activate the configuration on the appliance after "
+            "import completes.\n", "bullet")
+        put("\u2022  Debug mode: ", "bullet")
+        put("Prints full API request/response payloads to the console.\n\n", "bullet")
+
+        put("Selective Import\n", "h2")
+        put("By default (no boxes checked), all object types are imported in "
+            "dependency order. To import only specific types, check one or more:\n\n")
+        put("\u2022  Physical Interfaces", "bullet")
+        put(" - Port configurations (IP, name, enabled state)\n", "bullet")
+        put("\u2022  EtherChannels", "bullet")
+        put(" - Port-channel / LACP bond configurations\n", "bullet")
+        put("\u2022  Subinterfaces", "bullet")
+        put(" - VLAN subinterface configurations\n", "bullet")
+        put("\u2022  Bridge Groups", "bullet")
+        put(" - Bridge group / BVI configurations\n", "bullet")
+        put("\u2022  Security Zones", "bullet")
+        put(" - Zone definitions\n", "bullet")
+        put("\u2022  Address Objects", "bullet")
+        put(" - Host, network, range, and FQDN objects\n", "bullet")
+        put("\u2022  Address Groups", "bullet")
+        put(" - Groups of address objects\n", "bullet")
+        put("\u2022  Service Objects", "bullet")
+        put(" - TCP/UDP port objects\n", "bullet")
+        put("\u2022  Service Groups", "bullet")
+        put(" - Groups of service objects\n", "bullet")
+        put("\u2022  Static Routes", "bullet")
+        put(" - IPv4 static route entries\n", "bullet")
+        put("\u2022  Access Rules", "bullet")
+        put(" - Firewall policy / access control rules\n\n", "bullet")
+
+        put("How to Run\n", "h2")
+        put("1.  Enter the target appliance ", "bullet")
+        put("Host / IP", "bold")
+        put(", ", "bullet")
+        put("Username", "bold")
+        put(", and ", "bullet")
+        put("Password", "bold")
+        put(".\n", "bullet")
+        put("2.  Set the Config Directory to the folder with your JSON files.\n", "bullet")
+        put("3.  Verify the JSON Base Name matches the conversion output.\n", "bullet")
+        put("4.  (Optional) Check specific object types to import selectively.\n", "bullet")
+        put("5.  (Optional) Check ", "bullet")
+        put("Deploy/Commit after import", "bold")
+        put(" to activate immediately.\n", "bullet")
+        put("6.  Click ", "bullet")
+        put("Start Import", "bold")
+        put(".\n", "bullet")
+        put("7.  Monitor the console. Each object is reported as created or "
+            "skipped (if it already exists).\n\n", "bullet")
+        put("Tip: ", "tip")
+        put("Imports are idempotent. If an object already exists on the target, "
+            "it is skipped without error. You can safely re-run an import.\n\n")
+
+        # ----- Cleanup Tab -----
+        put("Tab 3: Cleanup / Rollback\n", "h1")
+        put("=" * 70 + "\n\n", "separator")
+        put("Deletes imported objects from the target appliance. Useful for "
+            "rollback or starting a fresh migration.\n\n")
+
+        put("Connection Fields\n", "h2")
+        put("\u2022  Host / IP, Username, Password: ", "bullet")
+        put("Same as the Import tab.\n", "bullet")
+        put("\u2022  Target Model: ", "bullet")
+        put("The model of the appliance being cleaned.\n", "bullet")
+        put("\u2022  Workers: ", "bullet")
+        put("Concurrent threads for deletion (1-32, default 6).\n\n", "bullet")
+
+        put("What to Delete\n", "h2")
+        put("\u2022  Delete ALL custom objects: ", "bullet")
+        put("Master checkbox that selects all object types.\n", "bullet")
+        put("\u2022  Individual checkboxes: ", "bullet")
+        put("Delete specific types: Access Rules, Static Routes, Subinterfaces, "
+            "EtherChannels, Security Zones, Bridge Groups, Service Groups, "
+            "Service Objects, Address Groups, Address Objects, Physical "
+            "Interfaces (reset to defaults).\n\n", "bullet")
+
+        put("Flags\n", "h2")
+        put("\u2022  Dry run (preview only): ", "bullet")
+        put("Shows what would be deleted without actually deleting anything. ", "bullet")
+        put("Always use this first.\n", "warning")
+        put("\u2022  Deploy / Commit after cleanup: ", "bullet")
+        put("Activate the changes on the appliance after deletion.\n\n", "bullet")
+
+        put("How to Run\n", "h2")
+        put("1.  Enter the target appliance credentials.\n", "bullet")
+        put("2.  Select the Target Model.\n", "bullet")
+        put("3.  Check ", "bullet")
+        put("Delete ALL custom objects", "bold")
+        put(" for a full rollback, or check individual types.\n", "bullet")
+        put("4.  Check ", "bullet")
+        put("Dry run", "bold")
+        put(" first to preview what will be deleted.\n", "bullet")
+        put("5.  Click ", "bullet")
+        put("Start Cleanup", "bold")
+        put(" and review the dry-run output.\n", "bullet")
+        put("6.  Once satisfied, uncheck Dry run and run again to perform "
+            "the actual deletion.\n", "bullet")
+        put("7.  A confirmation dialog appears before destructive operations.\n\n", "bullet")
+        put("Important: ", "warning")
+        put("Objects are deleted in reverse dependency order (rules first, "
+            "then routes, then interfaces, etc.) to avoid reference errors.\n\n")
+
+        # ----- Config Viewer Tab -----
+        put("Tab 4: Config Viewer\n", "h1")
+        put("=" * 70 + "\n\n", "separator")
+        put("Browse and search the generated JSON configuration files without "
+            "leaving the application.\n\n")
+
+        put("How to Use\n", "h2")
+        put("1.  Set the Config Directory to the folder with your JSON files.\n", "bullet")
+        put("2.  Enter the JSON Base Name (e.g., ", "bullet")
+        put("ftd_config", "code")
+        put(" or ", "bullet")
+        put("pa_config", "code")
+        put(").\n", "bullet")
+        put("3.  Click ", "bullet")
+        put("Load Files", "bold")
+        put(". The left pane shows all matching files.\n", "bullet")
+        put("4.  Click a file to view its contents (auto-formatted as "
+            "pretty-printed JSON) in the right pane.\n", "bullet")
+        put("5.  Use the Search bar to find text within the displayed file:\n", "bullet")
+        put("    \u2013  Type a term and press Enter or click Find Next.\n", "sub_bullet")
+        put("    \u2013  Click Find Prev to search backward.\n", "sub_bullet")
+        put("    \u2013  The match counter shows your position (e.g., \"3 of 7\").\n", "sub_bullet")
+        put("    \u2013  Search wraps around automatically.\n\n", "sub_bullet")
+
+        # ----- Theme Selector -----
+        put("Theme Selector\n", "h1")
+        put("=" * 70 + "\n\n", "separator")
+        put("The theme dropdown in the top-right corner switches the color scheme "
+            "instantly. No restart required.\n\n")
+        put("\u2022  Ocean Coral: ", "bullet")
+        put("Dark teal background with coral accents. Professional and easy on "
+            "the eyes. (Default)\n", "bullet")
+        put("\u2022  Chris: ", "bullet")
+        put("Hot pink background with neon green accents. High contrast and "
+            "vibrant.\n\n", "bullet")
+
+        # ----- Tips -----
+        put("Tips and Notes\n", "h1")
+        put("=" * 70 + "\n\n", "separator")
+        put("\u2022  ", "bullet")
+        put("One operation at a time: ", "bold")
+        put("Only one background operation (convert, import, or cleanup) can "
+            "run at a time. The Run buttons are disabled while an operation is "
+            "in progress.\n", "bullet")
+        put("\u2022  ", "bullet")
+        put("Cancel safely: ", "bold")
+        put("Clicking Cancel interrupts the running operation. It may take a "
+            "few seconds to stop.\n", "bullet")
+        put("\u2022  ", "bullet")
+        put("Status bar: ", "bold")
+        put("The bottom of the window shows the current status (Ready, Running, "
+            "Cancelling, or Finished).\n", "bullet")
+        put("\u2022  ", "bullet")
+        put("Directory consistency: ", "bold")
+        put("The Convert tab's output directory and the Import tab's config "
+            "directory should point to the same folder.\n", "bullet")
+        put("\u2022  ", "bullet")
+        put("Base name consistency: ", "bold")
+        put("The output base name in Convert must match the JSON base name in "
+            "Import and Config Viewer.\n", "bullet")
+        put("\u2022  ", "bullet")
+        put("Separate credentials: ", "bold")
+        put("The Import and Cleanup tabs have their own credential fields. "
+            "Credentials are not shared between tabs.\n", "bullet")
+        put("\u2022  ", "bullet")
+        put("Compiled executable: ", "bold")
+        put("When running from the .exe, all functionality is identical. No "
+            "Python installation is needed.\n", "bullet")
+
+        help_text.configure(state=tk.DISABLED)
 
     # ------------------------------------------------------------------
     # Shared widgets / helpers
