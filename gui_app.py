@@ -47,6 +47,10 @@ for _d in (_FTD_DIR, _PA_DIR, _ASA_DIR, _PKG_DIR):
 from fortigate_converter import main as convert_main   # noqa: E402
 from ftd_api_importer import main as import_main       # noqa: E402
 from ftd_api_cleanup import main as cleanup_main       # noqa: E402
+from cleanup_auth import (                              # noqa: E402
+    set_password, verify_password,
+    has_custom_password, reset_to_default,
+)  # stdlib only — no third-party deps, portable across machines
 
 # Palo Alto modules - optional (only needed when PA platform is selected)
 _PA_IMPORT_ERROR = ""
@@ -168,7 +172,7 @@ _TAB_BG   = _t["tab_bg"]
 _OUT_BG   = _t["out_bg"]
 _OUT_FG   = _t["out_fg"]
 
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 
 
 class App(tk.Tk):
@@ -697,6 +701,12 @@ class App(tk.Tk):
             opts, text="Debug mode (show API payloads)", variable=self.imp_debug_var,
         ).grid(row=7, column=1, sticky=tk.W, padx=4, pady=3)
 
+        self.imp_update_existing_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            opts, text="Update existing objects (uncheck to skip duplicates)",
+            variable=self.imp_update_existing_var,
+        ).grid(row=8, column=1, sticky=tk.W, padx=4, pady=3)
+
         opts.columnconfigure(1, weight=1)
 
         # Selective import
@@ -849,6 +859,22 @@ class App(tk.Tk):
             btn_frame, text="Clear Output",
             command=lambda: self._clear_output(self.cln_output),
         ).pack(side=tk.LEFT, padx=8)
+
+        # Password management (right-aligned)
+        self.cln_reset_pw_btn = ttk.Button(
+            btn_frame,
+            text="Reset to Default Password",
+            command=self._reset_cleanup_password,
+            state=tk.NORMAL if has_custom_password() else tk.DISABLED,
+        )
+        self.cln_reset_pw_btn.pack(side=tk.RIGHT, padx=4)
+
+        self.cln_pw_btn = ttk.Button(
+            btn_frame,
+            text="Change Cleanup Password",
+            command=self._manage_cleanup_password,
+        )
+        self.cln_pw_btn.pack(side=tk.RIGHT, padx=4)
 
         self.cln_output = self._make_output_area(tab)
 
@@ -1663,6 +1689,8 @@ class App(tk.Tk):
                 argv.append("--deploy")
             if self.imp_debug_var.get():
                 argv.append("--debug")
+            if not self.imp_update_existing_var.get():
+                argv.append("--skip-existing")
 
             # Selective import flags
             selected = [k for k, v in self.imp_only_vars.items() if v.get()]
@@ -1671,7 +1699,130 @@ class App(tk.Tk):
 
             self._run_in_thread(import_main, argv, self.imp_output, "Import")
 
+    # ------------------------------------------------------------------
+    # Cleanup password management
+    # ------------------------------------------------------------------
+    def _prompt_password(self, title: str, prompt: str) -> str | None:
+        """Show a modal dialog that asks for a single masked password.
+
+        Returns the entered string, or None if the user cancelled.
+        """
+        result: list[str | None] = [None]
+
+        dlg = tk.Toplevel(self)
+        dlg.title(title)
+        dlg.geometry("360x150")
+        dlg.resizable(False, False)
+        dlg.transient(self)
+        dlg.grab_set()
+
+        ttk.Label(dlg, text=prompt).pack(padx=16, pady=(16, 4), anchor=tk.W)
+        pw_var = tk.StringVar()
+        entry = ttk.Entry(dlg, textvariable=pw_var, show="*", width=36)
+        entry.pack(padx=16, pady=4)
+        entry.focus_set()
+
+        btn_frame = ttk.Frame(dlg)
+        btn_frame.pack(pady=12)
+
+        def on_ok(_event=None):
+            result[0] = pw_var.get()
+            dlg.destroy()
+
+        def on_cancel(_event=None):
+            dlg.destroy()
+
+        entry.bind("<Return>", on_ok)
+        dlg.bind("<Escape>", on_cancel)
+        ttk.Button(btn_frame, text="OK", command=on_ok).pack(side=tk.LEFT, padx=8)
+        ttk.Button(btn_frame, text="Cancel", command=on_cancel).pack(side=tk.LEFT, padx=8)
+
+        dlg.wait_window()
+        return result[0]
+
+    def _manage_cleanup_password(self):
+        """Change the cleanup password (requires current password first)."""
+        # Verify current password
+        current = self._prompt_password(
+            "Verify Password",
+            "Enter your current cleanup password:",
+        )
+        if current is None:
+            return
+        if not verify_password(current):
+            messagebox.showerror("Incorrect Password", "The current password is incorrect.")
+            return
+
+        # Get new password
+        new_pw = self._prompt_password(
+            "New Cleanup Password",
+            "Enter new cleanup password:",
+        )
+        if not new_pw:
+            if new_pw is None:
+                return  # cancelled
+            messagebox.showerror("Empty Password", "Password cannot be empty.")
+            return
+
+        # Confirm new password
+        confirm = self._prompt_password(
+            "Confirm Password",
+            "Confirm new cleanup password:",
+        )
+        if confirm is None:
+            return
+        if new_pw != confirm:
+            messagebox.showerror("Mismatch", "Passwords do not match.")
+            return
+
+        set_password(new_pw)
+        self.cln_reset_pw_btn.configure(state=tk.NORMAL)
+        messagebox.showinfo("Success", "Cleanup password has been changed.")
+
+    def _reset_cleanup_password(self):
+        """Reset to the built-in default password (requires current password)."""
+        current = self._prompt_password(
+            "Verify Password",
+            "Enter your current cleanup password to reset:",
+        )
+        if current is None:
+            return
+        if not verify_password(current):
+            messagebox.showerror("Incorrect Password", "The current password is incorrect.")
+            return
+
+        if not messagebox.askyesno(
+            "Confirm Reset",
+            "This will reset the cleanup password to the built-in default.\n\n"
+            "Are you sure?",
+        ):
+            return
+
+        reset_to_default()
+        self.cln_reset_pw_btn.configure(state=tk.DISABLED)
+        messagebox.showinfo("Success", "Cleanup password has been reset to default.")
+
+    def _verify_cleanup_access(self) -> bool:
+        """Gate cleanup behind the password. Returns True if access granted."""
+        entered = self._prompt_password(
+            "Cleanup Password",
+            "Enter the cleanup password to continue:",
+        )
+        if entered is None:
+            return False
+        if not verify_password(entered):
+            messagebox.showerror("Access Denied", "Incorrect cleanup password.")
+            return False
+        return True
+
+    # ------------------------------------------------------------------
+    # Cleanup execution
+    # ------------------------------------------------------------------
     def _run_cleanup(self):
+        # --- Password gate ---
+        if not self._verify_cleanup_access():
+            return
+
         host = self.cln_host_var.get().strip()
         password = self.cln_pass_var.get()
         is_pa = self._current_platform == "Palo Alto PAN-OS"

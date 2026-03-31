@@ -129,6 +129,7 @@ pyinstaller --onefile --windowed ^
     --hidden-import panos_api_base ^
     --hidden-import panos_api_importer ^
     --hidden-import panos_api_cleanup ^
+    --hidden-import cleanup_auth ^
     --clean ^
     gui_app.py
 

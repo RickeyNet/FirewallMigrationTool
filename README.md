@@ -11,6 +11,8 @@
    - [Importing to Cisco FTD](#phase-2a-importing-to-ftd)
    - [Importing to Palo Alto PAN-OS](#phase-2b-importing-to-palo-alto-pan-os)
 7. [Phase 3: Cleanup (Optional)](#phase-3-cleanup-optional)
+   - [Cleanup Password Protection](#cleanup-password-protection)
+   - [Changing the Built-in Default Password](#changing-the-built-in-default-password)
 8. [Performance and Concurrency](#performance-and-concurrency)
 9. [Troubleshooting](#troubleshooting)
 10. [Best Practices](#best-practices)
@@ -111,6 +113,8 @@ FortiGate-Migration/
 ├── ftd_api_importer.py                 # FTD API importer script
 ├── ftd_api_cleanup.py                  # FTD bulk delete/cleanup utility
 ├── gui_app.py                          # Unified GUI application (FTD + PA)
+├── cleanup_auth.py                     # Cleanup password authentication module
+├── set_cleanup_password.py             # Utility to change built-in default password
 ├── FortiGateToPaloAltoTool/            # Palo Alto conversion modules
 │   ├── pa_converter.py                 # Main PA converter script
 │   ├── pa_address_converter.py         # Address object module (PA)
@@ -837,6 +841,43 @@ python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-etherchannels
 python ftd_api_cleanup.py --host 192.168.1.1 -u admin --reset-physical-interfaces
 ```
 
+### Cleanup Password Protection
+
+The cleanup feature is password-protected to prevent accidental deletion of firewall objects. A password prompt appears every time a user clicks **Start Cleanup** in the GUI.
+
+**How it works:**
+
+1. A **built-in default password** is baked into the application at build time (stored as a PBKDF2-HMAC-SHA256 hash — not plaintext).
+2. If a user clicks **Change Cleanup Password** in the GUI, a `cleanup_auth.json` file is created next to the application. This override takes priority over the built-in default.
+3. If `cleanup_auth.json` is deleted, the application automatically falls back to the built-in default password — users are never locked out.
+
+**GUI buttons:**
+
+| Button | Action |
+|--------|--------|
+| **Change Cleanup Password** | Change the active password (requires entering the current password first). Creates a `cleanup_auth.json` override file. |
+| **Reset to Default Password** | Remove the `cleanup_auth.json` override and revert to the built-in default password (requires current password). |
+
+### Changing the Built-in Default Password
+
+To change the default password that is baked into the application before building:
+
+```bash
+python set_cleanup_password.py <new-password>
+```
+
+This updates the hash constants in `cleanup_auth.py`. You must **rebuild the exe** afterward for the change to take effect:
+
+```bash
+# Step 1: Set the new default password
+python set_cleanup_password.py MyNewPassword
+
+# Step 2: Rebuild the exe
+build.bat
+```
+
+The script only modifies the hash — the plaintext password is never stored in the source code.
+
 ---
 
 ## Performance and Concurrency
@@ -1349,9 +1390,10 @@ This tab deletes imported objects from the target appliance, useful for rollback
    - Check individual object types to delete selectively.
 4. **Check "Dry run" first** to preview what will be deleted without making changes.
 5. Click **Start Cleanup**.
-6. A confirmation dialog will appear for destructive operations. Review and confirm.
-7. Monitor the output console for progress and results.
-8. Once satisfied with the dry-run output, uncheck "Dry run" and run again to perform the actual deletion.
+6. Enter the **cleanup password** when prompted (see [Cleanup Password Protection](#cleanup-password-protection)).
+7. A confirmation dialog will appear for destructive operations. Review and confirm.
+8. Monitor the output console for progress and results.
+9. Once satisfied with the dry-run output, uncheck "Dry run" and run again to perform the actual deletion.
 
 **Important:** Objects are deleted in reverse dependency order (rules first, then routes, then interfaces, etc.) to avoid reference errors.
 
@@ -1359,9 +1401,11 @@ This tab deletes imported objects from the target appliance, useful for rollback
 
 | Button | Action |
 |--------|--------|
-| **Start Cleanup** | Begin the cleanup/deletion process. |
+| **Start Cleanup** | Begin the cleanup/deletion process (requires cleanup password). |
 | **Cancel** | Stop a running cleanup. |
 | **Clear Output** | Clear the output console. |
+| **Change Cleanup Password** | Change the active cleanup password. Requires entering the current password first. |
+| **Reset to Default Password** | Revert to the built-in default password. Requires entering the current password first. |
 
 ---
 

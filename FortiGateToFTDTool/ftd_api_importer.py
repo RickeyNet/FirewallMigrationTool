@@ -65,7 +65,7 @@ class FTDAPIClient(FTDBaseClient):
     - Error handling and retry logic
     """
 
-    def __init__(self, host: str, username: str, password: str, verify_ssl: bool = False):
+    def __init__(self, host: str, username: str, password: str, verify_ssl: bool = False, update_existing: bool = True):
         """
         Initialize the FTD API client.
 
@@ -74,8 +74,11 @@ class FTDAPIClient(FTDBaseClient):
             username: FDM username (typically 'admin')
             password: FDM password
             verify_ssl: Whether to verify SSL certificates (False for self-signed)
+            update_existing: When True, update objects that already exist instead of skipping them.
+                             Defaults to True so existing objects are always brought in sync.
         """
         super().__init__(host, username, password, verify_ssl)
+        self.update_existing = update_existing
         self._stats_lock = threading.Lock()
 
         # =================================================================
@@ -98,36 +101,46 @@ class FTDAPIClient(FTDBaseClient):
         # Track statistics
         self.stats = {
             "address_objects_created": 0,
+            "address_objects_updated": 0,
             "address_objects_failed": 0,
             "address_objects_skipped": 0,
             "address_groups_created": 0,
+            "address_groups_updated": 0,
             "address_groups_failed": 0,
             "address_groups_skipped": 0,
             "port_objects_created": 0,
+            "port_objects_updated": 0,
             "port_objects_failed": 0,
             "port_objects_skipped": 0,
             "port_groups_created": 0,
+            "port_groups_updated": 0,
             "port_groups_failed": 0,
             "port_groups_skipped": 0,
             "security_zones_created": 0,
+            "security_zones_updated": 0,
             "security_zones_failed": 0,
             "security_zones_skipped": 0,
             "routes_created": 0,
+            "routes_updated": 0,
             "routes_failed": 0,
             "routes_skipped": 0,
             "rules_created": 0,
+            "rules_updated": 0,
             "rules_failed": 0,
             "rules_skipped": 0,
             "physical_interfaces_updated": 0,
             "physical_interfaces_failed": 0,
             "physical_interfaces_skipped": 0,
             "subinterfaces_created": 0,
+            "subinterfaces_updated": 0,
             "subinterfaces_failed": 0,
             "subinterfaces_skipped": 0,
             "etherchannels_created": 0,
+            "etherchannels_updated": 0,
             "etherchannels_failed": 0,
             "etherchannels_skipped": 0,
             "bridge_groups_created": 0,
+            "bridge_groups_updated": 0,
             "bridge_groups_failed": 0,
             "bridge_groups_skipped": 0
         }
@@ -178,6 +191,111 @@ class FTDAPIClient(FTDBaseClient):
             text = (response.text or "").strip()
             return text if text else default
 
+    def _get_object_by_name_from_endpoint(self, endpoint: str, name: str) -> Tuple[bool, Union[Dict[str, Any], str]]:
+        """
+        Look up an existing FTD object by name from the given list endpoint.
+
+        Uses the filter parameter first, then falls back to paginated search.
+
+        Args:
+            endpoint: The list endpoint (e.g. /object/networks)
+            name: Object name to find
+
+        Returns:
+            (True, object_dict) if found, (False, error_message) otherwise.
+        """
+        try:
+            # Try filter parameter first
+            response = self.session.get(
+                endpoint, params={"filter": f"name:{name}", "limit": 10}, timeout=30,
+            )
+            if response.status_code == 200:
+                for obj in response.json().get("items", []):
+                    if obj.get("name") == name:
+                        return True, obj
+
+            # Fallback: paginated scan
+            offset = 0
+            limit = 100
+            while True:
+                response = self.session.get(
+                    endpoint, params={"offset": offset, "limit": limit}, timeout=30,
+                )
+                if response.status_code != 200:
+                    return False, f"API error: {response.status_code}"
+                data = response.json()
+                items = data.get("items", [])
+                for obj in items:
+                    if obj.get("name") == name:
+                        return True, obj
+                paging = data.get("paging", {})
+                if not items or offset + len(items) >= paging.get("count", len(items)):
+                    break
+                offset += limit
+            return False, f"Object not found: {name}"
+        except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
+            return False, str(e)
+
+    def _update_existing_object(
+        self,
+        endpoint: str,
+        payload: Dict,
+        stat_prefix: str,
+        track_stats: bool = True,
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Look up an existing object by name and PUT an update.
+
+        Used by _create_api_object when a duplicate is detected and
+        update_existing is True.
+
+        Args:
+            endpoint: The collection endpoint (e.g. /object/networks).
+            payload: The desired object payload (must contain "name").
+            stat_prefix: Stat key prefix for _updated / _failed counters.
+            track_stats: Whether to record stats.
+
+        Returns:
+            (success, object_id or error message)
+        """
+        obj_name = payload.get("name", "")
+        found, existing = self._get_object_by_name_from_endpoint(endpoint, obj_name)
+        if not found or not isinstance(existing, dict):
+            if track_stats:
+                self.record_stat(f"{stat_prefix}_failed")
+            return False, f"Could not look up existing object for update: {existing}"
+
+        obj_id = existing.get("id")
+        obj_version = existing.get("version")
+        if not obj_id:
+            if track_stats:
+                self.record_stat(f"{stat_prefix}_failed")
+            return False, f"Existing object has no ID: {obj_name}"
+
+        # Merge: keep the existing id/version, apply new payload on top
+        update_payload = dict(existing)
+        update_payload.update(payload)
+        update_payload["id"] = obj_id
+        update_payload["version"] = obj_version
+
+        try:
+            put_url = f"{endpoint}/{obj_id}"
+            response = self.session.put(put_url, json=update_payload, timeout=30)
+
+            if response.status_code in (200, 201):
+                updated_obj = response.json()
+                if track_stats:
+                    self.record_stat(f"{stat_prefix}_updated")
+                return True, f"UPDATED:{updated_obj.get('id', obj_id)}"
+            if track_stats:
+                self.record_stat(f"{stat_prefix}_failed")
+            error_msg = self._extract_error_message(response, response.text)
+            return False, f"Update failed: {error_msg}"
+        except requests.exceptions.RequestException as e:
+            if track_stats:
+                self.record_stat(f"{stat_prefix}_failed")
+            return False, f"Update request error: {e}"
+
     def _create_api_object(
         self,
         endpoint: str,
@@ -186,18 +304,23 @@ class FTDAPIClient(FTDBaseClient):
         track_stats: bool = True,
     ) -> Tuple[bool, Optional[str]]:
         """
-        Generic POST-create with duplicate detection and stat recording.
+        Generic POST-create with duplicate detection, optional update, and stat recording.
 
         This is the shared implementation behind create_network_object,
         create_network_group, create_port_object, create_port_group,
         create_access_rule, and create_static_route.
 
+        When ``self.update_existing`` is True and the POST returns 422 with
+        "already exists" / "duplicate", the method will GET the existing
+        object by name and PUT an update instead of skipping.
+
         Args:
             endpoint: Full API URL to POST to.
             payload: JSON-serializable body.
             stat_prefix: Stat key prefix (e.g. "address_objects"). Counters
-                         "{prefix}_created", "{prefix}_skipped", and
-                         "{prefix}_failed" are incremented as appropriate.
+                         "{prefix}_created", "{prefix}_updated",
+                         "{prefix}_skipped", and "{prefix}_failed" are
+                         incremented as appropriate.
             track_stats: When False, skip stat recording (callers that use
                          run_with_retry handle stats externally).
 
@@ -216,6 +339,11 @@ class FTDAPIClient(FTDBaseClient):
             if response.status_code == 422:
                 error_msg = self._extract_error_message(response)
                 if "already exists" in error_msg.lower() or "duplicate" in error_msg.lower():
+                    # Object exists — try to update it if update_existing is enabled
+                    if self.update_existing:
+                        return self._update_existing_object(
+                            endpoint, payload, stat_prefix, track_stats,
+                        )
                     if track_stats:
                         self.record_stat(f"{stat_prefix}_skipped")
                     return True, f"SKIPPED: {error_msg}"
@@ -1414,9 +1542,13 @@ class FTDAPIClient(FTDBaseClient):
                         error_msg = str(error_data)
                     
                     if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
+                        if self.update_existing:
+                            return self._update_existing_object(
+                                endpoint, subintf_payload, "subinterfaces",
+                            )
                         self.stats["subinterfaces_skipped"] += 1
                         return True, f"SKIPPED: {error_msg}"
-                    
+
                     self.stats["subinterfaces_failed"] += 1
                     return False, f"422: {error_msg}"
                 except (ValueError, TypeError, KeyError):
@@ -1555,6 +1687,10 @@ class FTDAPIClient(FTDBaseClient):
                 error_msg = self._extract_error_message(response)
                 
                 if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
+                    if self.update_existing:
+                        return self._update_existing_object(
+                            endpoint, intf, "etherchannels",
+                        )
                     self.stats["etherchannels_skipped"] += 1
                     return True, f"SKIPPED: {error_msg}"
                 else:
@@ -1564,14 +1700,14 @@ class FTDAPIClient(FTDBaseClient):
                 self.stats["etherchannels_failed"] += 1
                 error_msg = response.text
                 return False, error_msg
-                
+
         except (ValueError, TypeError, KeyError) as e:
             self.stats["etherchannels_failed"] += 1
             return False, f"Invalid etherchannel response payload: {e}"
         except requests.exceptions.RequestException as e:
             self.stats["etherchannels_failed"] += 1
             return False, str(e)
-    
+
     def create_bridge_group(self, intf: Dict) -> Tuple[bool, Optional[str]]:
         """
         Create a Bridge Group interface in FTD.
@@ -1644,6 +1780,10 @@ class FTDAPIClient(FTDBaseClient):
                 error_msg = self._extract_error_message(response)
                 
                 if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
+                    if self.update_existing:
+                        return self._update_existing_object(
+                            endpoint, intf, "bridge_groups",
+                        )
                     self.stats["bridge_groups_skipped"] += 1
                     return True, f"SKIPPED: {error_msg}"
                 else:
@@ -1725,6 +1865,10 @@ class FTDAPIClient(FTDBaseClient):
                 error_msg = self._extract_error_message(response)
                 
                 if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
+                    if self.update_existing:
+                        return self._update_existing_object(
+                            endpoint, zone_payload, "security_zones",
+                        )
                     self.stats["security_zones_skipped"] += 1
                     return True, f"SKIPPED: {error_msg}"
                 else:
@@ -1734,7 +1878,7 @@ class FTDAPIClient(FTDBaseClient):
                 self.stats["security_zones_failed"] += 1
                 error_msg = response.text
                 return False, error_msg
-                
+
         except (ValueError, TypeError, KeyError) as e:
             self.stats["security_zones_failed"] += 1
             return False, f"Invalid security-zone response payload: {e}"
@@ -1860,6 +2004,8 @@ class FTDAPIClient(FTDBaseClient):
         """
         print(f"\n{'='*60}")
         print("IMPORT STATISTICS")
+        if self.update_existing:
+            print("  (Update-existing mode enabled)")
         print(f"{'='*60}")
         print(f"\nPhysical Interfaces:")
         print(f"  Updated: {self.stats['physical_interfaces_updated']}")
@@ -1867,42 +2013,52 @@ class FTDAPIClient(FTDBaseClient):
         print(f"  Failed:  {self.stats['physical_interfaces_failed']}")
         print(f"\nEtherChannels:")
         print(f"  Created: {self.stats['etherchannels_created']}")
+        print(f"  Updated: {self.stats['etherchannels_updated']}")
         print(f"  Skipped: {self.stats['etherchannels_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['etherchannels_failed']}")
         print(f"\nBridge Groups:")
         print(f"  Created: {self.stats['bridge_groups_created']}")
+        print(f"  Updated: {self.stats['bridge_groups_updated']}")
         print(f"  Skipped: {self.stats['bridge_groups_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['bridge_groups_failed']}")
         print(f"\nSubinterfaces:")
         print(f"  Created: {self.stats['subinterfaces_created']}")
+        print(f"  Updated: {self.stats['subinterfaces_updated']}")
         print(f"  Skipped: {self.stats['subinterfaces_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['subinterfaces_failed']}")
         print(f"\nSecurity Zones:")
         print(f"  Created: {self.stats['security_zones_created']}")
+        print(f"  Updated: {self.stats['security_zones_updated']}")
         print(f"  Skipped: {self.stats['security_zones_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['security_zones_failed']}")
         print(f"\nAddress Objects:")
         print(f"  Created: {self.stats['address_objects_created']}")
+        print(f"  Updated: {self.stats['address_objects_updated']}")
         print(f"  Skipped: {self.stats['address_objects_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['address_objects_failed']}")
         print(f"\nAddress Groups:")
         print(f"  Created: {self.stats['address_groups_created']}")
+        print(f"  Updated: {self.stats['address_groups_updated']}")
         print(f"  Skipped: {self.stats['address_groups_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['address_groups_failed']}")
         print(f"\nPort Objects:")
         print(f"  Created: {self.stats['port_objects_created']}")
+        print(f"  Updated: {self.stats['port_objects_updated']}")
         print(f"  Skipped: {self.stats['port_objects_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['port_objects_failed']}")
         print(f"\nPort Groups:")
         print(f"  Created: {self.stats['port_groups_created']}")
+        print(f"  Updated: {self.stats['port_groups_updated']}")
         print(f"  Skipped: {self.stats['port_groups_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['port_groups_failed']}")
         print(f"\nStatic Routes:")
         print(f"  Created: {self.stats['routes_created']}")
+        print(f"  Updated: {self.stats['routes_updated']}")
         print(f"  Skipped: {self.stats['routes_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['routes_failed']}")
         print(f"\nAccess Rules:")
         print(f"  Created: {self.stats['rules_created']}")
+        print(f"  Updated: {self.stats['rules_updated']}")
         print(f"  Skipped: {self.stats['rules_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['rules_failed']}")
 
@@ -2157,6 +2313,9 @@ def import_address_objects(client: FTDAPIClient, filename: str, max_workers: int
             if isinstance(result, str) and str(result).startswith("SKIPPED"):
                 client.record_stat("address_objects_skipped")
                 line = f"  [{idx+1}/{total}] Creating: {name}... SKIP"
+            elif isinstance(result, str) and str(result).startswith("UPDATED"):
+                client.record_stat("address_objects_updated")
+                line = f"  [{idx+1}/{total}] Updating: {name}... OK"
             else:
                 client.record_stat("address_objects_created")
                 line = f"  [{idx+1}/{total}] Creating: {name}... OK"
@@ -2208,10 +2367,13 @@ def import_address_groups(client: FTDAPIClient, filename: str, delay: float = 0.
         cleaned_group = clean_group_object(group)
         
         print(f"  [{i}/{len(groups)}] Creating: {name}...", end=" ")
-        
+
         success, result = client.create_network_group(cleaned_group)
         if success:
-            print("[OK]")
+            if isinstance(result, str) and str(result).startswith("UPDATED"):
+                print("[UPDATED]")
+            else:
+                print("[OK]")
         else:
             print(f"[FAIL {result}]")
             client.record_failure("Address Group", name, result)
@@ -2306,6 +2468,9 @@ def import_service_objects(client: FTDAPIClient, filename: str, max_workers: int
             if isinstance(result, str) and str(result).startswith("SKIPPED"):
                 client.record_stat("port_objects_skipped")
                 line = f"  [{idx+1}/{total}] Creating: {name} ({obj_type})... SKIP"
+            elif isinstance(result, str) and str(result).startswith("UPDATED"):
+                client.record_stat("port_objects_updated")
+                line = f"  [{idx+1}/{total}] Updating: {name} ({obj_type})... OK"
             else:
                 client.record_stat("port_objects_created")
                 line = f"  [{idx+1}/{total}] Creating: {name} ({obj_type})... OK"
@@ -2357,10 +2522,13 @@ def import_service_groups(client: FTDAPIClient, filename: str, delay: float = 0.
         cleaned_group = clean_group_object(group)
         
         print(f"  [{i}/{len(groups)}] Creating: {name}...", end=" ")
-        
+
         success, result = client.create_port_group(cleaned_group)
         if success:
-            print("[OK]")
+            if isinstance(result, str) and str(result).startswith("UPDATED"):
+                print("[UPDATED]")
+            else:
+                print("[OK]")
         else:
             print(f"[FAIL {result}]")
             client.record_failure("Port Group", name, result)
@@ -2513,6 +2681,8 @@ def import_etherchannels(client: FTDAPIClient, filename: str, delay: float = 0.2
                     print("[SKIP] already exists")
                 else:
                     print(f"[SKIP] {result.split('SKIPPED:')[-1].strip()[:50]}")
+            elif isinstance(result, str) and result.startswith("UPDATED"):
+                print("[UPDATED]")
             else:
                 print("[OK]")
         else:
@@ -2561,6 +2731,8 @@ def import_bridge_groups(client: FTDAPIClient, filename: str, delay: float = 0.2
                     print("[SKIP] already exists")
                 else:
                     print(f"[SKIP] {result.split('SKIPPED:')[-1].strip()[:50]}")
+            elif isinstance(result, str) and result.startswith("UPDATED"):
+                print("[UPDATED]")
             else:
                 print("[OK]")
         else:
@@ -2664,6 +2836,9 @@ def import_subinterfaces(client: FTDAPIClient, filename: str, parent_type_filter
                 else:
                     print(f"[SKIP] {result.split('SKIPPED:')[-1].strip()[:50]}")
                 skipped_api_count += 1
+            elif isinstance(result, str) and result.startswith("UPDATED"):
+                print("[UPDATED]")
+                created_count += 1
             else:
                 print("[OK]")
                 created_count += 1
@@ -2674,9 +2849,9 @@ def import_subinterfaces(client: FTDAPIClient, filename: str, parent_type_filter
             all_success = False
 
         time.sleep(delay)
-    
+
     # Print summary
-    print(f"\n  Summary: {created_count} created, {skipped_api_count} skipped, {failed_count} failed")
+    print(f"\n  Summary: {created_count} created/updated, {skipped_api_count} skipped, {failed_count} failed")
     
     return all_success
 
@@ -2711,7 +2886,9 @@ def import_security_zones(client: FTDAPIClient, filename: str, delay: float = 0.
         success, result = client.create_security_zone(zone)
         if success:
             if isinstance(result, str) and result.startswith("SKIPPED"):
-                print(f"[SKIPPED]")
+                print("[SKIPPED]")
+            elif isinstance(result, str) and result.startswith("UPDATED"):
+                print("[UPDATED]")
             else:
                 print("[OK]")
         else:
@@ -2759,7 +2936,10 @@ def import_static_routes(client: FTDAPIClient, filename: str, delay: float = 0.2
         
         success, result = client.create_static_route(route)
         if success:
-            print("[OK]")
+            if isinstance(result, str) and str(result).startswith("UPDATED"):
+                print("[UPDATED]")
+            else:
+                print("[OK]")
         else:
             print(f"[FAIL {result}]")
             client.record_failure("Static Route", name, result)
@@ -2800,7 +2980,10 @@ def import_access_rules(client: FTDAPIClient, filename: str, delay: float = 0.2)
         
         success, result = client.create_access_rule(rule)
         if success:
-            print("[OK]")
+            if isinstance(result, str) and str(result).startswith("UPDATED"):
+                print("[UPDATED]")
+            else:
+                print("[OK]")
         else:
             print(f"[FAIL {result}]")
             client.record_failure("Access Rule", name, result)
@@ -2875,6 +3058,8 @@ Examples:
                        help='Write run summary to a JSON report file')
     parser.add_argument('--validate-only', action='store_true',
                        help='Authenticate and probe all API endpoints without importing anything')
+    parser.add_argument('--skip-existing', action='store_true',
+                       help='Skip objects that already exist instead of updating them (default: update)')
 
     # Selective import options - allows importing only specific object types
     parser.add_argument('--only-physical-interfaces', action='store_true',
@@ -2924,7 +3109,8 @@ Examples:
         host=args.host,
         username=args.username,
         password=args.password,
-        verify_ssl=not args.skip_verify
+        verify_ssl=not args.skip_verify,
+        update_existing=not args.skip_existing,
     )
 
     # Track per-phase timings for simple performance comparisons
@@ -2983,7 +3169,12 @@ Examples:
     if args.debug:
         client.debug = True
         print("[DEBUG MODE ENABLED]")
-    
+
+    if args.skip_existing:
+        print("[INFO] Skip-existing mode: objects that already exist will be skipped")
+    else:
+        print("[INFO] Update mode: objects that already exist will be updated to match the new config")
+
     # Authenticate
     if not client.authenticate():
         print("\n[FAIL] Authentication failed. Exiting.")
@@ -3216,6 +3407,7 @@ Examples:
                 args.only_rules,
             ]) else "full"),
             "workers": args.workers,
+            "update_existing": not args.skip_existing,
             "deploy_requested": args.deploy,
             "target_model": target_model,
             "stats": client.stats,

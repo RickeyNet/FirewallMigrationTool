@@ -588,7 +588,6 @@ Examples:
     parser.add_argument("--commit", action="store_true", help="Automatically commit after import")
     parser.add_argument("--verify-ssl", action="store_true", help="Verify SSL certificate (default: disabled)")
     parser.add_argument("--debug", action="store_true", help="Enable debug output")
-
     args = parser.parse_args()
 
     # Prompt for password if not provided
