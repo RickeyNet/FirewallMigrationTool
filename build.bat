@@ -7,7 +7,7 @@ REM    build.bat              - builds using the version in gui_app.py
 REM    build.bat 1.2.3        - sets the version to 1.2.3, then builds
 REM
 REM  Prerequisites:
-REM    - Python 3.8+ with pip
+REM    - Python 3.14 (via py launcher)
 REM    - Internet access (first run only, to install dependencies)
 REM
 REM  Output:
@@ -43,8 +43,8 @@ echo       Building version: %APP_VERSION%
 echo.
 
 REM Install dependencies if needed
-echo [1/3] Installing dependencies...
-pip install pyyaml requests urllib3 pyinstaller >nul 2>&1
+echo [1/3] Installing dependencies (Python 3.14)...
+py -3.14 -m pip install pyyaml requests urllib3 pyinstaller >nul 2>&1
 if errorlevel 1 (
     echo [WARN] pip install had warnings - continuing anyway...
 )
@@ -93,7 +93,7 @@ echo [2/3] Building executable with PyInstaller...
 echo       This may take a minute...
 echo.
 
-pyinstaller --onefile --windowed ^
+py -3.14 -m PyInstaller --onefile --windowed ^
     --name "Firewall-Migration-Tool-v%APP_VERSION%" ^
     --icon "app_icon.ico" ^
     --paths "FortiGateToFTDTool" ^

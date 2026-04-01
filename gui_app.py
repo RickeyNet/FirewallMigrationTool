@@ -1702,12 +1702,12 @@ class App(tk.Tk):
     # ------------------------------------------------------------------
     # Cleanup password management
     # ------------------------------------------------------------------
-    def _prompt_password(self, title: str, prompt: str) -> str | None:
+    def _prompt_password(self, title, prompt):
         """Show a modal dialog that asks for a single masked password.
 
         Returns the entered string, or None if the user cancelled.
         """
-        result: list[str | None] = [None]
+        result = [None]
 
         dlg = tk.Toplevel(self)
         dlg.title(title)
