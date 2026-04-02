@@ -1,5 +1,87 @@
 # Release Notes
 
+## v1.4.0 - Update Existing Objects, Cleanup Password Protection, Python 3.14
+
+### Overview
+
+Adds the ability to update existing firewall objects during import (instead of skipping duplicates), password protection for the cleanup feature, and upgrades the build toolchain to Python 3.14.
+
+---
+
+### New Features
+
+#### Update Existing Objects (FTD Import)
+
+- **Update-by-default** - When an object already exists on the target FTD, the importer now automatically updates it to match the new configuration via GET + merge + PUT instead of skipping it
+- **Generic object lookup** - New `_get_object_by_name_from_endpoint()` method uses filter parameters with paginated fallback to find existing objects across all endpoint types
+- **Merge-and-PUT pattern** - Retrieves the existing object (to get `id`/`version`), merges the new payload on top, and PUTs it back
+- **Works for all object types** - Address objects, address groups, service objects, service groups, security zones, static routes, access rules, EtherChannels, bridge groups, and subinterfaces
+- **`--skip-existing` flag** - Opt out of updates and revert to the previous skip-on-duplicate behavior
+- **GUI checkbox** - "Update existing objects" checkbox in the Import tab (checked by default)
+- **Updated statistics** - `print_statistics()` now shows an "Updated:" count for every object type
+- **Threaded support** - Update detection works correctly with the threaded import pool via the `"UPDATED:"` result prefix convention
+
+#### Cleanup Password Protection
+
+- **Password-gated cleanup** - A password prompt appears every time "Start Cleanup" is clicked in the GUI, preventing accidental deletion of firewall objects
+- **Built-in default password** - A PBKDF2-HMAC-SHA256 hashed password is baked into the source code at build time (no external files required)
+- **User-changeable password** - "Change Cleanup Password" button creates a `cleanup_auth.json` override file next to the application
+- **Automatic fallback** - If `cleanup_auth.json` is deleted, the app falls back to the built-in default password (users are never locked out)
+- **Reset to default** - "Reset to Default Password" button removes the override file and reverts to the built-in password
+- **`set_cleanup_password.py` utility** - Change the built-in default password before building the exe
+- **Standard library only** - Uses `hashlib.pbkdf2_hmac` (no third-party crypto dependencies), fully portable across machines
+
+#### Python 3.14 Build
+
+- **Build toolchain upgraded** - `build.bat` now uses `py -3.14` explicitly for both pip and PyInstaller
+- **Modern Python features** - Union type syntax (`str | None`), improved performance, and full `cryptography` library compatibility
+
+---
+
+### GUI Changes
+
+- **Import tab** - New "Update existing objects (uncheck to skip duplicates)" checkbox at row 8
+- **Cleanup tab** - New "Change Cleanup Password" and "Reset to Default Password" buttons (right-aligned in button row)
+- **Cleanup tab** - Password prompt dialog before every cleanup operation
+
+---
+
+### CLI Changes
+
+#### FTD Importer (`ftd_api_importer.py`)
+
+| Flag | Description |
+|------|-------------|
+| `--skip-existing` | Skip objects that already exist instead of updating them (default: update) |
+
+#### Utility Scripts
+
+| Script | Description |
+|--------|-------------|
+| `set_cleanup_password.py <password>` | Set the built-in default cleanup password (rebuild exe afterward) |
+
+---
+
+### Files Added
+
+| File | Purpose |
+|------|---------|
+| `cleanup_auth.py` | Cleanup password authentication module (PBKDF2 hashing, fallback logic) |
+| `set_cleanup_password.py` | Utility to change the built-in default cleanup password |
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `gui_app.py` | Update-existing checkbox, cleanup password UI, password gate on cleanup |
+| `FortiGateToFTDTool/ftd_api_importer.py` | `_get_object_by_name_from_endpoint()`, `_update_existing_object()`, update logic in all create methods, `--skip-existing` flag, updated statistics |
+| `build.bat` | Python 3.14 (`py -3.14`), `cleanup_auth` hidden import |
+| `README.md` | Cleanup password documentation, file listing updates |
+
+---
+
+---
+
 ## v1.2.0 - Theme Selector
 
 ### Overview

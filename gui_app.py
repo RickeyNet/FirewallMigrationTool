@@ -122,7 +122,7 @@ class _QueueWriter(io.TextIOBase):
 # Theme definitions
 # ---------------------------------------------------------------------------
 THEMES = {
-    "Ocean Coral": {
+    "Coral": {
         "bg":       "#0b1e24",
         "input":    "#112e35",
         "fg":       "#e0d4bc",
@@ -136,6 +136,21 @@ THEMES = {
         "tab_bg":   "#112e35",
         "out_bg":   "#0b1e24",
         "out_fg":   "#5abaa0",
+    },
+    "Sandstone": {
+        "bg":       "#868f76",
+        "input":    "#adab99",
+        "fg":       "#4a4a3a",
+        "fg_dim":   "#4b4938",
+        "accent":   "#5c2e2e",
+        "accent_d": "#b0ad94",
+        "accent_h": "#a06c6c",
+        "border":   "#b0ad94",
+        "btn_bg":   "#5c2e2e",
+        "btn_fg":   "#adab99",
+        "tab_bg":   "#a3ac9a",
+        "out_bg":   "#4b493d",
+        "out_fg":   "#5a7a4a",
     },
     "Chris": {
         "bg":       "#ff69b4",
@@ -154,7 +169,7 @@ THEMES = {
     },
 }
 
-DEFAULT_THEME = "Ocean Coral"
+DEFAULT_THEME = "Coral"
 
 # Initialize module-level colors from the default theme
 _t = THEMES[DEFAULT_THEME]
@@ -396,13 +411,14 @@ class App(tk.Tk):
 
         # Recolor raw tk widgets (Text, Listbox) that don't use ttk styles
         for w in getattr(self, "_tk_widgets", []):
+            w.configure(
+                bg=out_bg, fg=out_fg,
+                selectbackground=accent_d, selectforeground=out_fg,
+                highlightbackground=border, highlightcolor=accent,
+            )
+            # insertbackground is only supported by Text, not Listbox
             try:
-                w.configure(
-                    bg=out_bg, fg=out_fg,
-                    insertbackground=out_fg,
-                    selectbackground=accent_d, selectforeground=out_fg,
-                    highlightbackground=border, highlightcolor=accent,
-                )
+                w.configure(insertbackground=out_fg)
             except tk.TclError:
                 pass
 
@@ -1403,8 +1419,11 @@ class App(tk.Tk):
         put("=" * 70 + "\n\n", "separator")
         put("The theme dropdown in the top-right corner switches the color scheme "
             "instantly. No restart required.\n\n")
-        put("\u2022  Ocean Coral: ", "bullet")
+        put("\u2022  Coral: ", "bullet")
         put("Dark teal background with coral accents. Professional and easy on "
+            "the eyes. (Default)\n", "bullet")
+        put("\u2022  Sandstone: ", "bullet")
+        put("Sandstone background with Red accents. Professional and easy on "
             "the eyes. (Default)\n", "bullet")
         put("\u2022  Chris: ", "bullet")
         put("Hot pink background with neon green accents. High contrast and "
