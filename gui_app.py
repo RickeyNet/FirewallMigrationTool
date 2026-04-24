@@ -528,11 +528,14 @@ class App(tk.Tk):
             self.conv_input_label.configure(text="Input XML:")
             self.conv_browse_btn.configure(state=tk.NORMAL)
         elif source == "Cisco FTD":
-            # FTD → FortiGate: no input file — connect via FDM API
+            # FTD → FortiGate: default to live API mode
             self.platform_combo.configure(values=["FortiGate"])
             self.platform_var.set("FortiGate")
             self._on_platform_change()
+            self.conv_ftd_file_var.set(False)
+            self.conv_ftd_file_check.grid()  # show the mode toggle
             self.conv_input_label.configure(text="FTD Host / IP:")
+            self.conv_input_var.set("")
             self.conv_browse_btn.configure(state=tk.DISABLED)
             self.conv_ha_label.configure(foreground=_FG)
             self.conv_ha_entry.configure(state=tk.NORMAL)
@@ -540,12 +543,34 @@ class App(tk.Tk):
             self.conv_ha_hint.configure(text="FTD username (leave blank for 'admin')")
         else:
             # FortiGate - restore FTD and PA targets (not FortiGate-as-target)
+            self.conv_ftd_file_var.set(False)
+            self.conv_ftd_file_check.grid_remove()  # hide FTD toggle
             self.platform_combo.configure(values=["Cisco FTD", "Palo Alto PAN-OS"])
             if self.platform_var.get() == "FortiGate":
                 self.platform_var.set("Cisco FTD")
                 self._on_platform_change()
             self.conv_input_label.configure(text="Input YAML:")
             self.conv_browse_btn.configure(state=tk.NORMAL)
+
+    def _on_ftd_mode_change(self):
+        """Toggle between live FDM API and JSON file input for Cisco FTD source."""
+        if self.conv_ftd_file_var.get():
+            # File mode — enable browse, update labels, hide username field
+            self.conv_input_label.configure(text="FTD Config JSON:")
+            self.conv_input_var.set("")
+            self.conv_browse_btn.configure(state=tk.NORMAL)
+            self.conv_ha_entry.configure(state=tk.DISABLED)
+            self.conv_ha_label.configure(foreground=_FG_DIM)
+            self.conv_ha_hint.configure(text="(username/password not needed for file mode)")
+        else:
+            # API mode — restore host/username fields, disable browse
+            self.conv_input_label.configure(text="FTD Host / IP:")
+            self.conv_input_var.set("")
+            self.conv_browse_btn.configure(state=tk.DISABLED)
+            self.conv_ha_entry.configure(state=tk.NORMAL)
+            self.conv_ha_label.configure(foreground=_FG)
+            self.conv_ha_var.set("admin")
+            self.conv_ha_hint.configure(text="FTD username (leave blank for 'admin')")
 
     def _on_platform_change(self, event=None):
         """Handle platform selector change - update model lists and labels."""
@@ -736,11 +761,22 @@ class App(tk.Tk):
         self.conv_ha_hint = ttk.Label(opts, text="e.g. Ethernet1/5  (leave blank = no HA port)")
         self.conv_ha_hint.grid(row=5, column=1, sticky=tk.W)
 
-        # Row 5: Pretty-print
+        # Row 6: FTD file mode toggle (hidden unless source is Cisco FTD)
+        self.conv_ftd_file_var = tk.BooleanVar(value=False)
+        self.conv_ftd_file_check = ttk.Checkbutton(
+            opts,
+            text="Use JSON config file instead of live FDM API",
+            variable=self.conv_ftd_file_var,
+            command=self._on_ftd_mode_change,
+        )
+        self.conv_ftd_file_check.grid(row=6, column=1, sticky=tk.W, padx=4, pady=3)
+        self.conv_ftd_file_check.grid_remove()  # hidden until FTD source is selected
+
+        # Row 7: Pretty-print
         self.conv_pretty_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             opts, text="Pretty-print JSON output", variable=self.conv_pretty_var,
-        ).grid(row=6, column=1, sticky=tk.W, padx=4, pady=3)
+        ).grid(row=7, column=1, sticky=tk.W, padx=4, pady=3)
 
         opts.columnconfigure(1, weight=1)
 
@@ -1626,7 +1662,19 @@ class App(tk.Tk):
                 ],
             )
         elif self._current_source == "Cisco FTD":
-            return  # No file browse for FTD — uses live API connection
+            if not self.conv_ftd_file_var.get():
+                return  # API mode — no file to browse
+            path = filedialog.askopenfilename(
+                title="Select FTD FDM JSON Config File",
+                filetypes=[
+                    ("JSON files", "*.json"),
+                    ("All files", "*.*"),
+                ],
+            )
+            if path:
+                self.conv_input_var.set(path)
+                self.conv_outdir_var.set(os.path.dirname(path))
+            return
         else:
             path = filedialog.askopenfilename(
                 title="Select FortiGate YAML Configuration",
@@ -1749,12 +1797,8 @@ class App(tk.Tk):
 
         input_field = self.conv_input_var.get().strip()
 
-        # ── FTD → FortiGate (API-based: no input file) ─────────────────
+        # ── FTD → FortiGate ─────────────────────────────────────────────
         if is_ftd_source and is_fg_target:
-            host = input_field
-            if not host:
-                messagebox.showerror("Missing Field", "Please enter the FTD host / IP address.")
-                return
             if not _FTD_TO_FG_AVAILABLE:
                 messagebox.showerror(
                     "FTD→FG Modules Missing",
@@ -1763,23 +1807,44 @@ class App(tk.Tk):
                     f"Error: {_FTD_TO_FG_IMPORT_ERROR}",
                 )
                 return
-            username = self.conv_ha_var.get().strip() or "admin"
-            password = simpledialog.askstring(
-                "FTD Password",
-                f"Enter FDM password for {username}@{host}:",
-                show="*",
-                parent=self,
-            )
-            if password is None:  # User cancelled
-                return
-            if not password:
-                messagebox.showerror("Missing Field", "Password cannot be empty.")
-                return
             outdir = self.conv_outdir_var.get().strip()
             base = self.conv_output_var.get().strip() or "fg_config"
             full_base = os.path.join(outdir, base) if outdir else base
-            argv = ["--host", host, "--username", username, "--password", password,
-                    "-o", full_base, "--no-ssl-verify"]
+
+            if self.conv_ftd_file_var.get():
+                # File mode
+                json_path = input_field
+                if not json_path:
+                    messagebox.showerror("Missing Input",
+                                         "Please select a FTD FDM JSON config file.")
+                    return
+                if not os.path.isfile(json_path):
+                    messagebox.showerror("File Not Found",
+                                         f"Config file not found:\n{json_path}")
+                    return
+                argv = ["--input-file", json_path, "-o", full_base]
+            else:
+                # API mode
+                host = input_field
+                if not host:
+                    messagebox.showerror("Missing Field",
+                                         "Please enter the FTD host / IP address.")
+                    return
+                username = self.conv_ha_var.get().strip() or "admin"
+                password = simpledialog.askstring(
+                    "FTD Password",
+                    f"Enter FDM password for {username}@{host}:",
+                    show="*",
+                    parent=self,
+                )
+                if password is None:  # User cancelled
+                    return
+                if not password:
+                    messagebox.showerror("Missing Field", "Password cannot be empty.")
+                    return
+                argv = ["--host", host, "--username", username, "--password", password,
+                        "-o", full_base, "--no-ssl-verify"]
+
             self._run_in_thread(ftd_to_fg_convert_main, argv, self.conv_output, "Convert")
             return
 

@@ -48,6 +48,7 @@ for _d in (_SELF_DIR, _FTD_DIR, _PA_FG_DIR):
 
 try:
     from ftd_reader import FTDReader
+    from ftd_file_reader import FTDFileReader
     from fg_common import (
         cidr_to_netmask,
         split_cidr,
@@ -63,6 +64,7 @@ except ImportError as e:
     print("\nMake sure these directories are present:")
     print("  - FortiGateToFTDTool/ftd_api_base.py")
     print("  - CiscoFTDToFortiGateTool/ftd_reader.py")
+    print("  - CiscoFTDToFortiGateTool/ftd_file_reader.py")
     print("  - PaloAltoToFortiGateTool/fg_common.py")
     print("\n" + "=" * 60)
     raise
@@ -846,25 +848,31 @@ def main(argv=None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Live FDM API mode:
   python fg_ftd_converter.py --host 192.168.1.1 --username admin --password P@ss
-  python fg_ftd_converter.py --host 192.168.1.1 -o fg_migration
-  python fg_ftd_converter.py --host 192.168.1.1 --no-ssl-verify
+  python fg_ftd_converter.py --host 192.168.1.1 -o fg_migration --no-ssl-verify
+
+  # JSON file mode:
+  python fg_ftd_converter.py --input-file ftd_snapshot.json -o fg_migration
         """,
     )
     parser.add_argument(
+        "--input-file",
+        metavar="FILE",
+        help="Path to a JSON config file exported from the FDM API (skips live API connection)",
+    )
+    parser.add_argument(
         "--host",
-        required=True,
-        help="FTD management IP address or hostname",
+        help="FTD management IP address or hostname (required when not using --input-file)",
     )
     parser.add_argument(
         "--username",
         default="admin",
-        help="FDM username (default: admin)",
+        help="FDM username (default: admin; only used with --host)",
     )
     parser.add_argument(
         "--password",
-        required=True,
-        help="FDM password",
+        help="FDM password (required when not using --input-file)",
     )
     parser.add_argument(
         "-o", "--output",
@@ -874,33 +882,57 @@ Examples:
     parser.add_argument(
         "--no-ssl-verify",
         action="store_true",
-        help="Disable SSL certificate verification (for self-signed certs)",
+        help="Disable SSL certificate verification (for self-signed certs; only used with --host)",
     )
 
     args = parser.parse_args(argv)
+
+    # ── Validate arg combinations ─────────────────────────────────────────
+    using_file = bool(args.input_file)
+    using_api = bool(args.host)
+
+    if using_file and using_api:
+        parser.error("--input-file and --host are mutually exclusive.")
+    if not using_file and not using_api:
+        parser.error("Either --input-file or --host (with --password) must be provided.")
+    if using_api and not args.password:
+        parser.error("--password is required when using --host.")
 
     # ── Banner ────────────────────────────────────────────────────────────
     print("=" * 60)
     print("Cisco FTD to FortiGate Configuration Converter")
     print("=" * 60)
-    print(f"FTD Host:  {args.host}")
-    print(f"Username:  {args.username}")
-    print(f"Output:    {args.output}.conf")
+    if using_file:
+        source_label = os.path.basename(args.input_file)
+        print(f"Input File: {args.input_file}")
+    else:
+        source_label = args.host
+        print(f"FTD Host:   {args.host}")
+        print(f"Username:   {args.username}")
+    print(f"Output:     {args.output}.conf")
 
-    # ── Connect and authenticate ──────────────────────────────────────────
-    reader = FTDReader(
-        host=args.host,
-        username=args.username,
-        password=args.password,
-        verify_ssl=not args.no_ssl_verify,
-    )
-    if not reader.authenticate():
-        print("[ERROR] Authentication failed — check host, username, and password.")
-        return 1
-
-    # ── Read FTD configuration ────────────────────────────────────────────
-    print("\n[Reading FTD configuration...]")
-    ftd_config = reader.read_all()
+    # ── Load FTD configuration ────────────────────────────────────────────
+    if using_file:
+        print("\n[Loading FTD configuration from file...]")
+        try:
+            reader = FTDFileReader(args.input_file)
+            ftd_config = reader.read_all()
+        except (FileNotFoundError, ValueError, OSError) as exc:
+            print(f"[ERROR] {exc}")
+            return 1
+    else:
+        print("\n[Connecting to FTD via FDM API...]")
+        reader = FTDReader(
+            host=args.host,
+            username=args.username,
+            password=args.password,
+            verify_ssl=not args.no_ssl_verify,
+        )
+        if not reader.authenticate():
+            print("[ERROR] Authentication failed — check host, username, and password.")
+            return 1
+        print("\n[Reading FTD configuration...]")
+        ftd_config = reader.read_all()
 
     print(
         f"\n  Inventory: "
@@ -985,7 +1017,7 @@ Examples:
     output_path = f"{args.output}.conf"
     print(f"\n[Writing output file: {output_path}]")
     try:
-        _write_conf(output_sections, output_path, args.host)
+        _write_conf(output_sections, output_path, source_label)
     except OSError as exc:
         print(f"[ERROR] Could not write output file: {exc}")
         return 1
