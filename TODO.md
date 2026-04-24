@@ -227,3 +227,84 @@ This checklist tracks technical debt, performance hardening, and usability impro
   - Scope: Feed a small YAML config through `main()` and verify all 13 JSON output files
     are created with correct structure.
   - Priority: Low - would catch regressions in the orchestration layer.
+
+---
+
+## P4: GUI — Source/Target Matrix Polish
+
+Follow-up items identified during v1.6.1 label/tab fixes. The app supports multiple
+source→target pairs but several UI elements still carry FTD-centric defaults or wording.
+
+- [x] Disable the Target combobox when a source locks it to a single choice
+  - Done (v1.6.2): Target combobox now toggles between `disabled` (ASA / PA / FTD
+    sources) and `readonly` (FortiGate source) in `_on_source_change`, alongside
+    the existing `values=` update.
+  - Follow-up (still open): add a "→" arrow label between Source and Target on
+    the top bar. Low priority cosmetic.
+
+- [ ] Surface the supported conversion matrix in the UI
+  - Scope: Add a short hint line near the Source/Target selectors listing supported pairs
+    (FG↔FTD, FG↔PAN-OS, ASA→PAN-OS, PA→FG, FTD→FG). Today, users only discover
+    unsupported pairs by trying them.
+  - Priority: Medium.
+
+- [x] Preserve user-edited "Output Base Name" across source/target changes
+  - Done (v1.6.2): Added `DEFAULT_OUTPUT_BASES = {"", "ftd_config", "pa_config",
+    "fg_config"}` constant. All six call sites in `_on_platform_change` (three for
+    `conv_output_var`, three for `imp_base_var`) now guard the `.set(...)` with
+    `if self.conv_output_var.get().strip() in DEFAULT_OUTPUT_BASES`. Custom names
+    typed by the user now survive any number of source/target changes.
+
+- [ ] Make Input Config label wording consistent across sources
+  - Scope: Current labels mix format, generic, and connection wording:
+    "Input YAML:" (FG), "Input Config:" (ASA), "Input XML:" (PA),
+    "FTD Config JSON:" (FTD file mode), "FTD Host / IP:" (FTD API mode).
+  - Suggested pattern: `"<Source> Config (<format>):"` for file inputs,
+    keep "FTD Host / IP:" as the exception for API mode.
+  - Priority: Low — cosmetic polish.
+
+- [x] Dim or hide Import/Cleanup tabs when target is FortiGate
+  - Done (v1.6.2): Took the "dim and disable" approach. Added `_set_tab_enabled()`
+    helper that recursively walks a tab frame and toggles interactive widgets
+    (Entry / Checkbutton / Spinbox / Combobox / Button) — output Text widgets are
+    skipped so prior logs stay readable. `_retitle_import_cleanup_tabs()` sets
+    `_imp_locked_by_target` / `_cln_locked_by_target` flags that `_set_buttons_state()`
+    respects so the shared run/cancel toggle never re-enables locked buttons.
+    The `cln_reset_pw_btn` state is re-derived from `has_custom_password()` on unlock.
+
+- [ ] Filter Import tab "Selective Import" checkboxes per target
+  - Scope: Types at `gui_app.py:880-892` (Physical Interfaces, EtherChannels,
+    Subinterfaces, Bridge Groups, Security Zones, etc.) are FTD-specific terminology.
+    For PAN-OS target, rebuild the list with PAN-OS-relevant types, or hide the
+    whole Selective Import frame when the target doesn't support granular import.
+  - Priority: Medium — current state can mislead PAN-OS users into thinking they're
+    enabling filters that get ignored.
+
+- [ ] Filter Cleanup tab "What to Delete" checkboxes per target
+  - Scope: Same issue as the Import tab — delete-types at `gui_app.py:973-985` include
+    FDM-specific items like "Physical Interfaces (reset)". Rebuild per target.
+  - Priority: Medium.
+
+- [ ] Audit Config Viewer tab for target-specific behavior
+  - Scope: Verify whether the Viewer handles YAML (FG), XML (PA), JSON (FTD/PAN-OS
+    exports) appropriately, or hide/disable the tab for unsupported targets.
+  - Priority: Medium — unknown impact until audited.
+
+- [ ] Update Help tab to reflect FTD-username repurposing and new source/target pairs
+  - Scope: Help text at `gui_app.py:1391-1394` describes "HA Port (optional):" as
+    "FTD only" for HA purposes. With the v1.6.1 label fix, that field also serves as
+    FTD username when Cisco FTD is the source. Also expand the Help content to cover
+    the Palo Alto → FortiGate and Cisco FTD → FortiGate pipelines (added in v1.5.0 / v1.6.0).
+  - Priority: Medium.
+
+- [ ] Simplify the window-title template
+  - Scope: Seven hardcoded title strings across `_on_platform_change` branches.
+    Replace with a single template: `f"Firewall Migration Tool — {source} → {target} v{APP_VERSION}"`.
+  - Benefit: Fewer bespoke strings, consistent formatting, one place to change wording.
+  - Priority: Low.
+
+- [ ] Tooltip / helper text for the "Use JSON config file instead of live FDM API" toggle
+  - Scope: Checkbox has no context for where a user would obtain the JSON export.
+    Add a short hint line ("Exported via `curl` from FDM `/api/fdm/v6/object` …" or
+    a pointer to docs).
+  - Priority: Low.

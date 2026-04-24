@@ -98,6 +98,9 @@ py -3.14 -m PyInstaller --onefile --windowed ^
     --icon "app_icon.ico" ^
     --paths "FortiGateToFTDTool" ^
     --paths "FortiGateToPaloAltoTool" ^
+    --paths "CiscoASAToPaloAltoTool" ^
+    --paths "PaloAltoToFortiGateTool" ^
+    --paths "CiscoFTDToFortiGateTool" ^
     --version-file "version_info.txt" ^
     --hidden-import yaml ^
     --hidden-import requests ^
@@ -129,6 +132,21 @@ py -3.14 -m PyInstaller --onefile --windowed ^
     --hidden-import panos_api_base ^
     --hidden-import panos_api_importer ^
     --hidden-import panos_api_cleanup ^
+    --hidden-import asa_converter ^
+    --hidden-import asa_parser ^
+    --hidden-import fg_common ^
+    --hidden-import fg_converter ^
+    --hidden-import fg_pa_parser ^
+    --hidden-import fg_address_converter ^
+    --hidden-import fg_address_group_converter ^
+    --hidden-import fg_service_converter ^
+    --hidden-import fg_service_group_converter ^
+    --hidden-import fg_policy_converter ^
+    --hidden-import fg_route_converter ^
+    --hidden-import fg_interface_converter ^
+    --hidden-import ftd_reader ^
+    --hidden-import ftd_file_reader ^
+    --hidden-import fg_ftd_converter ^
     --hidden-import cleanup_auth ^
     --clean ^
     gui_app.py

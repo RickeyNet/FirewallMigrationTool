@@ -1,5 +1,76 @@
 # Release Notes
 
+## v1.6.2 - GUI Source/Target Matrix Polish
+
+### Overview
+
+Follow-up to v1.6.1 addressing the highest-priority Source/Target UX issues. The Target combobox now visually reflects when it's locked to a single choice, custom Output Base Names survive platform switches, and the Import/Cleanup tab forms are fully disabled — not just retitled — when the target doesn't support API-based operations.
+
+---
+
+### Improvements
+
+#### Target Combobox Locks Visually
+
+- When the source platform forces a single target (Cisco ASA → PAN-OS only; Palo Alto → FortiGate only; Cisco FTD → FortiGate only), the Target combobox now switches to `disabled` state so it clearly reads as locked. Switching back to FortiGate as source restores `readonly` state with the full set of choices.
+
+#### Custom Output Base Name Preserved Across Platform Changes
+
+- `Output Base Name` (Convert tab) and `JSON Base Name` (Import tab) no longer overwrite a user-typed value when the source or target changes. Overwrites now only happen when the field still holds one of the known auto-generated defaults (`""`, `"ftd_config"`, `"pa_config"`, `"fg_config"`). A custom name like `"prod_migration_q2"` survives any number of selector changes.
+
+#### Import & Cleanup Forms Disabled for FortiGate Target
+
+- Previously the Import and Cleanup tabs were retitled "(N/A for FortiGate)" but the full form was still clickable — users could type into fields and press Start only to hit a "not applicable" popup. Now the entire tab contents (entries, checkboxes, spinboxes, comboboxes, and the Start/Cancel buttons) are disabled when the target is FortiGate. Output text areas remain visible for reviewing prior logs, and the Clear Output button was intentionally disabled as well (use Cancel/Clear once the tab is re-enabled).
+- Lockout state is respected by the shared `_set_buttons_state()` helper so Convert-tab operations don't accidentally re-enable the Import/Cleanup run buttons mid-run.
+- The Cleanup password reset button correctly re-syncs with `has_custom_password()` when the tab is unlocked.
+
+---
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `gui_app.py` | Target combobox `state` toggled alongside `values` in `_on_source_change`; added `DEFAULT_OUTPUT_BASES` guard around `conv_output_var` / `imp_base_var` resets; new `_set_tab_enabled()` helper walks tab descendants and disables interactive widgets; `_retitle_import_cleanup_tabs()` applies the lockout; `_set_buttons_state()` respects per-tab lockout flags; version bumped to 1.6.2 |
+
+---
+
+---
+
+## v1.6.1 - GUI Label & Tab Fixes
+
+### Overview
+
+Fixes GUI labeling bugs introduced in v1.6.0 where the HA Port field label and the Import/Cleanup tab titles remained locked to FTD wording regardless of the selected source or target platform.
+
+---
+
+### Bug Fixes
+
+#### Convert Tab — HA Port / FTD Username Label
+
+- The field next to the username entry now correctly reads **"FTD Username:"** when Cisco FTD is selected as the source. Previously, the label stayed as "HA Port (optional):" while the helper text below read "FTD username (leave blank for 'admin')", producing a contradictory UI.
+- Label text now updates alongside the hint text in all five state transitions: FTD source (API mode), FTD source (JSON file mode), PAN-OS target, FortiGate target with non-FTD source, and FTD target.
+
+#### Import & Cleanup Tabs — Dynamic Tab Titles
+
+- The Import and Cleanup tab titles and section frame headers now update based on the selected target platform instead of being hard-coded to "FTD":
+  - **FTD target**: "Import to FTD" / "Cleanup FTD"
+  - **PAN-OS target**: "Import to PAN-OS" / "Cleanup PAN-OS"
+  - **FortiGate target**: "Import (N/A for FortiGate)" / "Cleanup (N/A for FortiGate)" — reflects that API-based import/cleanup is not supported for FortiGate (config must be applied manually)
+- The top `LabelFrame` section headers on both tabs (e.g. "FTD Connection & Import Options") are retitled to match.
+
+---
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `gui_app.py` | HA Port label text now switches to "FTD Username:" when FTD is the source; new `_retitle_import_cleanup_tabs` helper updates Import/Cleanup tab titles and section frame labels per target platform; version bumped to 1.6.1 |
+
+---
+
+---
+
 ## v1.6.0 - Cisco FTD → FortiGate Conversion Support
 
 ### Overview

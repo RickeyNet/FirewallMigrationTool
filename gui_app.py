@@ -112,6 +112,11 @@ SOURCE_PLATFORM_LIST = ["FortiGate", "Cisco ASA", "Palo Alto", "Cisco FTD"]
 
 PLATFORM_LIST = ["Cisco FTD", "Palo Alto PAN-OS", "FortiGate"]
 
+# Known auto-generated defaults for the "Output Base Name" field. When the field
+# holds any of these, platform changes may overwrite it; when the user has typed
+# a custom value, it is preserved.
+DEFAULT_OUTPUT_BASES = {"", "ftd_config", "pa_config", "fg_config"}
+
 DEFAULT_DIR = APP_DIR
 
 
@@ -207,7 +212,7 @@ _TAB_BG   = _t["tab_bg"]
 _OUT_BG   = _t["out_bg"]
 _OUT_FG   = _t["out_fg"]
 
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.6.2"
 
 
 class App(tk.Tk):
@@ -234,6 +239,11 @@ class App(tk.Tk):
         # Current platform selection
         self._current_platform = "Cisco FTD"
         self._current_source = "FortiGate"
+
+        # Import/Cleanup tab lockout state (set by _retitle_import_cleanup_tabs
+        # when target doesn't support API-based import/cleanup).
+        self._imp_locked_by_target = False
+        self._cln_locked_by_target = False
 
         # Track current theme
         self._current_theme = DEFAULT_THEME
@@ -494,6 +504,7 @@ class App(tk.Tk):
 
         notebook = ttk.Notebook(self)
         notebook.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+        self._notebook = notebook
 
         self._build_convert_tab(notebook)
         self._build_import_tab(notebook)
@@ -515,21 +526,21 @@ class App(tk.Tk):
 
         if source == "Cisco ASA":
             # When source is ASA, target must be Palo Alto PAN-OS
-            self.platform_combo.configure(values=["Palo Alto PAN-OS"])
+            self.platform_combo.configure(values=["Palo Alto PAN-OS"], state="disabled")
             self.platform_var.set("Palo Alto PAN-OS")
             self._on_platform_change()
             self.conv_input_label.configure(text="Input Config:")
             self.conv_browse_btn.configure(state=tk.NORMAL)
         elif source == "Palo Alto":
             # When source is Palo Alto, target must be FortiGate
-            self.platform_combo.configure(values=["FortiGate"])
+            self.platform_combo.configure(values=["FortiGate"], state="disabled")
             self.platform_var.set("FortiGate")
             self._on_platform_change()
             self.conv_input_label.configure(text="Input XML:")
             self.conv_browse_btn.configure(state=tk.NORMAL)
         elif source == "Cisco FTD":
             # FTD → FortiGate: default to live API mode
-            self.platform_combo.configure(values=["FortiGate"])
+            self.platform_combo.configure(values=["FortiGate"], state="disabled")
             self.platform_var.set("FortiGate")
             self._on_platform_change()
             self.conv_ftd_file_var.set(False)
@@ -537,7 +548,7 @@ class App(tk.Tk):
             self.conv_input_label.configure(text="FTD Host / IP:")
             self.conv_input_var.set("")
             self.conv_browse_btn.configure(state=tk.DISABLED)
-            self.conv_ha_label.configure(foreground=_FG)
+            self.conv_ha_label.configure(text="FTD Username:", foreground=_FG)
             self.conv_ha_entry.configure(state=tk.NORMAL)
             self.conv_ha_var.set("admin")
             self.conv_ha_hint.configure(text="FTD username (leave blank for 'admin')")
@@ -545,7 +556,9 @@ class App(tk.Tk):
             # FortiGate - restore FTD and PA targets (not FortiGate-as-target)
             self.conv_ftd_file_var.set(False)
             self.conv_ftd_file_check.grid_remove()  # hide FTD toggle
-            self.platform_combo.configure(values=["Cisco FTD", "Palo Alto PAN-OS"])
+            self.platform_combo.configure(
+                values=["Cisco FTD", "Palo Alto PAN-OS"], state="readonly",
+            )
             if self.platform_var.get() == "FortiGate":
                 self.platform_var.set("Cisco FTD")
                 self._on_platform_change()
@@ -560,7 +573,7 @@ class App(tk.Tk):
             self.conv_input_var.set("")
             self.conv_browse_btn.configure(state=tk.NORMAL)
             self.conv_ha_entry.configure(state=tk.DISABLED)
-            self.conv_ha_label.configure(foreground=_FG_DIM)
+            self.conv_ha_label.configure(text="FTD Username:", foreground=_FG_DIM)
             self.conv_ha_hint.configure(text="(username/password not needed for file mode)")
         else:
             # API mode — restore host/username fields, disable browse
@@ -568,7 +581,7 @@ class App(tk.Tk):
             self.conv_input_var.set("")
             self.conv_browse_btn.configure(state=tk.DISABLED)
             self.conv_ha_entry.configure(state=tk.NORMAL)
-            self.conv_ha_label.configure(foreground=_FG)
+            self.conv_ha_label.configure(text="FTD Username:", foreground=_FG)
             self.conv_ha_var.set("admin")
             self.conv_ha_hint.configure(text="FTD username (leave blank for 'admin')")
 
@@ -595,15 +608,17 @@ class App(tk.Tk):
             # Update Convert tab
             self.conv_model_combo.configure(values=PA_MODEL_LIST)
             self.conv_model_var.set("pa-440")
-            self.conv_output_var.set("pa_config")
+            if self.conv_output_var.get().strip() in DEFAULT_OUTPUT_BASES:
+                self.conv_output_var.set("pa_config")
             self.conv_ha_var.set("")
             self.conv_ha_entry.configure(state=tk.DISABLED)
-            self.conv_ha_label.configure(foreground=_FG_DIM)
+            self.conv_ha_label.configure(text="HA Port (optional):", foreground=_FG_DIM)
             self.conv_ha_hint.configure(text="(not applicable for PAN-OS)")
 
             # Update Import tab labels
             self.imp_host_label.configure(text="PAN-OS Host / IP:")
-            self.imp_base_var.set("pa_config")
+            if self.imp_base_var.get().strip() in DEFAULT_OUTPUT_BASES:
+                self.imp_base_var.set("pa_config")
             self.imp_workers_label.configure(foreground=_FG_DIM)
             self.imp_workers_spin.configure(state=tk.DISABLED)
             self.imp_deploy_cb.configure(text="Commit after import")
@@ -613,6 +628,8 @@ class App(tk.Tk):
             self.cln_model_combo.configure(values=PA_MODEL_LIST)
             self.cln_model_var.set("pa-440")
             self.cln_deploy_cb.configure(text="Commit after cleanup")
+
+            self._retitle_import_cleanup_tabs("PAN-OS")
 
             source = self._current_source
             if source == "Cisco ASA":
@@ -653,23 +670,25 @@ class App(tk.Tk):
             self.conv_model_combo.configure(values=["(not applicable)"])
             self.conv_model_var.set("(not applicable)")
             self.conv_model_combo.configure(state=tk.DISABLED)
-            self.conv_output_var.set("fg_config")
+            if self.conv_output_var.get().strip() in DEFAULT_OUTPUT_BASES:
+                self.conv_output_var.set("fg_config")
 
             if source == "Cisco FTD":
                 # HA entry repurposed as FTD username when FTD source
                 self.conv_ha_var.set("admin")
                 self.conv_ha_entry.configure(state=tk.NORMAL)
-                self.conv_ha_label.configure(foreground=_FG)
+                self.conv_ha_label.configure(text="FTD Username:", foreground=_FG)
                 self.conv_ha_hint.configure(text="FTD username (leave blank for 'admin')")
             else:
                 self.conv_ha_var.set("")
                 self.conv_ha_entry.configure(state=tk.DISABLED)
-                self.conv_ha_label.configure(foreground=_FG_DIM)
+                self.conv_ha_label.configure(text="HA Port (optional):", foreground=_FG_DIM)
                 self.conv_ha_hint.configure(text="(not applicable for FortiGate)")
 
             # Import/Cleanup not supported for FortiGate target
             self.imp_host_label.configure(text="FortiGate Host / IP:")
-            self.imp_base_var.set("fg_config")
+            if self.imp_base_var.get().strip() in DEFAULT_OUTPUT_BASES:
+                self.imp_base_var.set("fg_config")
             self.imp_workers_label.configure(foreground=_FG_DIM)
             self.imp_workers_spin.configure(state=tk.DISABLED)
             self.imp_deploy_cb.configure(text="(not applicable)")
@@ -678,6 +697,8 @@ class App(tk.Tk):
             self.cln_model_combo.configure(values=["(not applicable)"])
             self.cln_model_var.set("(not applicable)")
             self.cln_deploy_cb.configure(text="(not applicable)")
+
+            self._retitle_import_cleanup_tabs("FortiGate")
 
             source = self._current_source
             if source == "Cisco FTD":
@@ -690,13 +711,15 @@ class App(tk.Tk):
             self.conv_model_combo.configure(state="readonly")
             self.conv_model_combo.configure(values=FTD_MODEL_LIST)
             self.conv_model_var.set("ftd-3120")
-            self.conv_output_var.set("ftd_config")
+            if self.conv_output_var.get().strip() in DEFAULT_OUTPUT_BASES:
+                self.conv_output_var.set("ftd_config")
             self.conv_ha_entry.configure(state=tk.NORMAL)
-            self.conv_ha_label.configure(foreground=_FG)
+            self.conv_ha_label.configure(text="HA Port (optional):", foreground=_FG)
             self.conv_ha_hint.configure(text="e.g. Ethernet1/5  (leave blank = no HA port)")
 
             self.imp_host_label.configure(text="FTD Host / IP:")
-            self.imp_base_var.set("ftd_config")
+            if self.imp_base_var.get().strip() in DEFAULT_OUTPUT_BASES:
+                self.imp_base_var.set("ftd_config")
             self.imp_workers_label.configure(foreground=_FG)
             self.imp_workers_spin.configure(state=tk.NORMAL)
             self.imp_deploy_cb.configure(text="Deploy after import")
@@ -706,7 +729,65 @@ class App(tk.Tk):
             self.cln_model_var.set("ftd-3120")
             self.cln_deploy_cb.configure(text="Deploy after cleanup")
 
+            self._retitle_import_cleanup_tabs("FTD")
+
             self.title(f"FortiGate to Cisco FTD Converter v{APP_VERSION}")
+
+    def _retitle_import_cleanup_tabs(self, target):
+        """Update Import/Cleanup tab titles, section frame labels, and enabled state
+        for the target platform. When target is FortiGate, API-based import/cleanup
+        is not supported and the tab forms are disabled."""
+        if target == "FortiGate":
+            imp_tab_text = "  Import (N/A for FortiGate)  "
+            cln_tab_text = "  Cleanup (N/A for FortiGate)  "
+            imp_frame_text = "FortiGate Connection (not applicable)"
+            cln_frame_text = "FortiGate Connection (not applicable)"
+            tabs_locked = True
+        else:
+            imp_tab_text = f"  Import to {target}  "
+            cln_tab_text = f"  Cleanup {target}  "
+            imp_frame_text = f"{target} Connection & Import Options"
+            cln_frame_text = f"{target} Connection"
+            tabs_locked = False
+
+        self._notebook.tab(self._imp_tab, text=imp_tab_text)
+        self._notebook.tab(self._cln_tab, text=cln_tab_text)
+        self._imp_opts_frame.configure(text=imp_frame_text)
+        self._cln_opts_frame.configure(text=cln_frame_text)
+
+        self._imp_locked_by_target = tabs_locked
+        self._cln_locked_by_target = tabs_locked
+        self._set_tab_enabled(self._imp_tab, skip=(self.imp_output,), enabled=not tabs_locked)
+        self._set_tab_enabled(self._cln_tab, skip=(self.cln_output,), enabled=not tabs_locked)
+
+        # Reset-password button's enabled state depends on has_custom_password(),
+        # not on target lockout — restore it when unlocking.
+        if not tabs_locked:
+            self.cln_reset_pw_btn.configure(
+                state=tk.NORMAL if has_custom_password() else tk.DISABLED,
+            )
+
+    def _set_tab_enabled(self, tab, skip=(), enabled=True):
+        """Recursively enable/disable all interactive widgets in a tab.
+        `skip` holds widgets (like the output Text area) whose state is managed elsewhere.
+        Combobox widgets are restored to 'readonly' rather than 'normal' so the
+        dropdown arrow stays visible without allowing free-text editing."""
+        state = tk.NORMAL if enabled else tk.DISABLED
+
+        def walk(widget):
+            for child in widget.winfo_children():
+                if child in skip:
+                    continue
+                try:
+                    if isinstance(child, ttk.Combobox):
+                        child.configure(state="readonly" if enabled else tk.DISABLED)
+                    else:
+                        child.configure(state=state)
+                except tk.TclError:
+                    pass  # widget doesn't support 'state' (e.g. ttk.Frame, LabelFrame)
+                walk(child)
+
+        walk(tab)
 
     # ==================== CONVERT TAB ====================
     def _build_convert_tab(self, notebook):
@@ -803,9 +884,11 @@ class App(tk.Tk):
     def _build_import_tab(self, notebook):
         tab = ttk.Frame(notebook)
         notebook.add(tab, text="  Import to FTD  ")
+        self._imp_tab = tab
 
         opts = ttk.LabelFrame(tab, text="FTD Connection & Import Options", padding=10)
         opts.pack(fill=tk.X, padx=8, pady=(8, 4))
+        self._imp_opts_frame = opts
 
         # Connection settings
         self.imp_host_label = ttk.Label(opts, text="FTD Host / IP:")
@@ -921,9 +1004,11 @@ class App(tk.Tk):
     def _build_cleanup_tab(self, notebook):
         tab = ttk.Frame(notebook)
         notebook.add(tab, text="  Cleanup FTD  ")
+        self._cln_tab = tab
 
         opts = ttk.LabelFrame(tab, text="FTD Connection", padding=10)
         opts.pack(fill=tk.X, padx=8, pady=(8, 4))
+        self._cln_opts_frame = opts
 
         self.cln_host_label = ttk.Label(opts, text="FTD Host / IP:")
         self.cln_host_label.grid(row=0, column=0, sticky=tk.W, pady=3)
@@ -1696,12 +1781,23 @@ class App(tk.Tk):
             self.imp_dir_var.set(d)
 
     def _set_buttons_state(self, state):
-        """Enable or disable all run buttons (and toggle cancel buttons inversely)."""
+        """Enable or disable all run buttons (and toggle cancel buttons inversely).
+        Import/Cleanup run buttons stay disabled when the current target locks them out."""
         cancel_state = tk.DISABLED if state == tk.NORMAL else tk.NORMAL
-        for btn in (self.conv_run_btn, self.imp_run_btn, self.cln_run_btn):
-            btn.configure(state=state)
-        for btn in (self.conv_cancel_btn, self.imp_cancel_btn, self.cln_cancel_btn):
-            btn.configure(state=cancel_state)
+        self.conv_run_btn.configure(state=state)
+        self.imp_run_btn.configure(
+            state=tk.DISABLED if self._imp_locked_by_target else state,
+        )
+        self.cln_run_btn.configure(
+            state=tk.DISABLED if self._cln_locked_by_target else state,
+        )
+        self.conv_cancel_btn.configure(state=cancel_state)
+        self.imp_cancel_btn.configure(
+            state=tk.DISABLED if self._imp_locked_by_target else cancel_state,
+        )
+        self.cln_cancel_btn.configure(
+            state=tk.DISABLED if self._cln_locked_by_target else cancel_state,
+        )
 
     # ------------------------------------------------------------------
     # In-process execution engine
