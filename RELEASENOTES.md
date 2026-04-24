@@ -1,5 +1,60 @@
 # Release Notes
 
+## v1.6.0 - Cisco FTD → FortiGate Conversion Support
+
+### Overview
+
+Adds a live Cisco FTD to FortiGate conversion pipeline. The converter connects directly to the FTD Firepower Device Manager (FDM) REST API, reads the running configuration, and produces a single FortiGate CLI `.conf` file — no offline export required. Apply the output via CLI paste or the FortiGate web UI restore feature.
+
+---
+
+### New Features
+
+#### Cisco FTD → FortiGate Conversion Engine (`CiscoFTDToFortiGateTool/`)
+
+- **FDM API Reader** (`ftd_reader.py`) - Authenticates to the FTD FDM REST API (OAuth 2.0 password grant), reads all supported object types with automatic offset/limit pagination; handles 404 gracefully for object types not present on a given FTD version
+- **Address Objects** — FTD `networkobject` (`HOST`, `NETWORK`, `RANGE`, `FQDN`) → FortiGate `config firewall address`
+- **Address Groups** — FTD `networkgroup` (with inline literal expansion) → FortiGate `config firewall addrgrp`; inline IP/subnet literals auto-generate supplemental address objects
+- **Service Objects** — FTD TCP and UDP port objects → FortiGate `config firewall service custom`; `_TCP`/`_UDP` suffix pairs (produced by the reverse FG→PA converter) automatically merged back into dual-protocol FortiGate service objects
+- **Service Groups** — FTD port groups → FortiGate `config firewall service group`
+- **Interfaces** — Physical Ethernet and EtherChannel (LACP aggregate) interfaces → FortiGate `config system interface` with IP, admin state, and zone membership
+- **Zones** — FTD security zones → FortiGate `config system zone` with member interface lists
+- **Security Policies** — FTD access rules → FortiGate `config firewall policy`; maps source/destination zones, address objects, service objects, rule action (`PERMIT`→`accept`, `DENY`→`deny`), logging, and disabled state
+- **Static Routes** — FTD static routes from all virtual routers → FortiGate `config router static`
+- **Main Orchestrator** (`fg_ftd_converter.py`) - 8-phase pipeline; outputs a single timestamped `.conf` file with a header comment documenting the source host, generation time, and application notes
+
+#### GUI Updates
+
+- **"Cisco FTD" source option** added to the Source dropdown
+- Selecting Cisco FTD source automatically locks the Target to "FortiGate"
+- Input field repurposed as **FTD Host / IP** entry; file browse button disabled
+- HA port field repurposed as **FTD username** entry (defaults to `admin`)
+- Password collected via a secure dialog at convert time (not stored)
+- Model selector disabled (not applicable for FortiGate target)
+- Import and Cleanup buttons show an informational dialog for FortiGate targets
+- Title bar updates to "Cisco FTD to FortiGate Migration Tool"
+
+---
+
+### Files Added
+
+| File | Purpose |
+|------|---------|
+| `CiscoFTDToFortiGateTool/__init__.py` | Package marker |
+| `CiscoFTDToFortiGateTool/ftd_reader.py` | FDM REST API reader with pagination |
+| `CiscoFTDToFortiGateTool/fg_ftd_converter.py` | 8-phase conversion orchestrator |
+| `Firewall-Migration-Tool-v1.6.0.spec` | PyInstaller build spec |
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `gui_app.py` | Cisco FTD source option, FDM host/username input, secure password dialog, v1.6.0 |
+
+---
+
+---
+
 ## v1.5.0 - Palo Alto → FortiGate Conversion Support & Dependency Updates
 
 ### Overview

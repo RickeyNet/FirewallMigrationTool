@@ -12,7 +12,7 @@ Build:  see build.bat in the project root.
 """
 
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, simpledialog
 import threading
 import ctypes
 import sys
@@ -39,8 +39,9 @@ _FTD_DIR = os.path.join(APP_DIR, "FortiGateToFTDTool")
 _PA_DIR = os.path.join(APP_DIR, "FortiGateToPaloAltoTool")
 _ASA_DIR = os.path.join(APP_DIR, "CiscoASAToPaloAltoTool")
 _PA_TO_FG_DIR = os.path.join(APP_DIR, "PaloAltoToFortiGateTool")
+_FTD_TO_FG_DIR = os.path.join(APP_DIR, "CiscoFTDToFortiGateTool")
 
-for _d in (_FTD_DIR, _PA_DIR, _ASA_DIR, _PA_TO_FG_DIR, _PKG_DIR):
+for _d in (_FTD_DIR, _PA_DIR, _ASA_DIR, _PA_TO_FG_DIR, _FTD_TO_FG_DIR, _PKG_DIR):
     if os.path.isdir(_d) and _d not in sys.path:
         sys.path.insert(0, _d)
 
@@ -82,6 +83,15 @@ except ImportError as _e:
     _PA_TO_FG_AVAILABLE = False
     _PA_TO_FG_IMPORT_ERROR = str(_e)
 
+# Cisco FTD → FortiGate modules - optional
+_FTD_TO_FG_IMPORT_ERROR = ""
+try:
+    from fg_ftd_converter import main as ftd_to_fg_convert_main  # noqa: E402
+    _FTD_TO_FG_AVAILABLE = True
+except ImportError as _e:
+    _FTD_TO_FG_AVAILABLE = False
+    _FTD_TO_FG_IMPORT_ERROR = str(_e)
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -98,7 +108,7 @@ PA_MODEL_LIST = [
     "pa-5220",
 ]
 
-SOURCE_PLATFORM_LIST = ["FortiGate", "Cisco ASA", "Palo Alto"]
+SOURCE_PLATFORM_LIST = ["FortiGate", "Cisco ASA", "Palo Alto", "Cisco FTD"]
 
 PLATFORM_LIST = ["Cisco FTD", "Palo Alto PAN-OS", "FortiGate"]
 
@@ -197,7 +207,7 @@ _TAB_BG   = _t["tab_bg"]
 _OUT_BG   = _t["out_bg"]
 _OUT_FG   = _t["out_fg"]
 
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.6.0"
 
 
 class App(tk.Tk):
@@ -509,12 +519,25 @@ class App(tk.Tk):
             self.platform_var.set("Palo Alto PAN-OS")
             self._on_platform_change()
             self.conv_input_label.configure(text="Input Config:")
+            self.conv_browse_btn.configure(state=tk.NORMAL)
         elif source == "Palo Alto":
             # When source is Palo Alto, target must be FortiGate
             self.platform_combo.configure(values=["FortiGate"])
             self.platform_var.set("FortiGate")
             self._on_platform_change()
             self.conv_input_label.configure(text="Input XML:")
+            self.conv_browse_btn.configure(state=tk.NORMAL)
+        elif source == "Cisco FTD":
+            # FTD → FortiGate: no input file — connect via FDM API
+            self.platform_combo.configure(values=["FortiGate"])
+            self.platform_var.set("FortiGate")
+            self._on_platform_change()
+            self.conv_input_label.configure(text="FTD Host / IP:")
+            self.conv_browse_btn.configure(state=tk.DISABLED)
+            self.conv_ha_label.configure(foreground=_FG)
+            self.conv_ha_entry.configure(state=tk.NORMAL)
+            self.conv_ha_var.set("admin")
+            self.conv_ha_hint.configure(text="FTD username (leave blank for 'admin')")
         else:
             # FortiGate - restore FTD and PA targets (not FortiGate-as-target)
             self.platform_combo.configure(values=["Cisco FTD", "Palo Alto PAN-OS"])
@@ -522,6 +545,7 @@ class App(tk.Tk):
                 self.platform_var.set("Cisco FTD")
                 self._on_platform_change()
             self.conv_input_label.configure(text="Input YAML:")
+            self.conv_browse_btn.configure(state=tk.NORMAL)
 
     def _on_platform_change(self, event=None):
         """Handle platform selector change - update model lists and labels."""
@@ -572,17 +596,25 @@ class App(tk.Tk):
                 self.title(f"FortiGate to Palo Alto PAN-OS Migration Tool v{APP_VERSION}")
 
         elif platform == "FortiGate":
-            if not _PA_TO_FG_AVAILABLE:
-                detail = (
-                    f"\n\nError: {_PA_TO_FG_IMPORT_ERROR}"
-                    if _PA_TO_FG_IMPORT_ERROR else ""
+            source = self._current_source
+            # FTD→FG needs its own converter; PA→FG needs a different one
+            needed_available = (
+                _FTD_TO_FG_AVAILABLE if source == "Cisco FTD" else _PA_TO_FG_AVAILABLE
+            )
+            if not needed_available:
+                err = (
+                    _FTD_TO_FG_IMPORT_ERROR if source == "Cisco FTD"
+                    else _PA_TO_FG_IMPORT_ERROR
                 )
+                searched = (
+                    _FTD_TO_FG_DIR if source == "Cisco FTD" else _PA_TO_FG_DIR
+                )
+                label = "FTD→FG" if source == "Cisco FTD" else "PA→FG"
                 messagebox.showwarning(
-                    "PA→FG Modules Missing",
-                    "Palo Alto to FortiGate converter modules not found.\n\n"
-                    f"Searched: {_PA_TO_FG_DIR}\n"
-                    "Make sure the PaloAltoToFortiGateTool directory exists "
-                    f"with all required .py files.{detail}",
+                    f"{label} Modules Missing",
+                    f"{label} converter modules not found.\n\n"
+                    f"Searched: {searched}\n"
+                    f"Error: {err}",
                 )
                 self.source_var.set("FortiGate")
                 self._current_source = "FortiGate"
@@ -592,15 +624,23 @@ class App(tk.Tk):
                 self._on_platform_change()
                 return
 
-            # Update Convert tab — no model or HA port needed for FortiGate target
+            # Update Convert tab — no model needed for FortiGate target
             self.conv_model_combo.configure(values=["(not applicable)"])
             self.conv_model_var.set("(not applicable)")
             self.conv_model_combo.configure(state=tk.DISABLED)
             self.conv_output_var.set("fg_config")
-            self.conv_ha_var.set("")
-            self.conv_ha_entry.configure(state=tk.DISABLED)
-            self.conv_ha_label.configure(foreground=_FG_DIM)
-            self.conv_ha_hint.configure(text="(not applicable for FortiGate)")
+
+            if source == "Cisco FTD":
+                # HA entry repurposed as FTD username when FTD source
+                self.conv_ha_var.set("admin")
+                self.conv_ha_entry.configure(state=tk.NORMAL)
+                self.conv_ha_label.configure(foreground=_FG)
+                self.conv_ha_hint.configure(text="FTD username (leave blank for 'admin')")
+            else:
+                self.conv_ha_var.set("")
+                self.conv_ha_entry.configure(state=tk.DISABLED)
+                self.conv_ha_label.configure(foreground=_FG_DIM)
+                self.conv_ha_hint.configure(text="(not applicable for FortiGate)")
 
             # Import/Cleanup not supported for FortiGate target
             self.imp_host_label.configure(text="FortiGate Host / IP:")
@@ -614,7 +654,11 @@ class App(tk.Tk):
             self.cln_model_var.set("(not applicable)")
             self.cln_deploy_cb.configure(text="(not applicable)")
 
-            self.title(f"Palo Alto to FortiGate Migration Tool v{APP_VERSION}")
+            source = self._current_source
+            if source == "Cisco FTD":
+                self.title(f"Cisco FTD to FortiGate Migration Tool v{APP_VERSION}")
+            else:
+                self.title(f"Palo Alto to FortiGate Migration Tool v{APP_VERSION}")
 
         else:
             # Restore FTD defaults — also re-enable model combo if it was disabled
@@ -654,9 +698,8 @@ class App(tk.Tk):
         ttk.Entry(opts, textvariable=self.conv_input_var, width=60).grid(
             row=0, column=1, sticky=tk.EW, padx=4,
         )
-        ttk.Button(opts, text="Browse...", command=self._browse_yaml).grid(
-            row=0, column=2, padx=4,
-        )
+        self.conv_browse_btn = ttk.Button(opts, text="Browse...", command=self._browse_yaml)
+        self.conv_browse_btn.grid(row=0, column=2, padx=4)
 
         # Row 1: Output directory
         ttk.Label(opts, text="Output Directory:").grid(row=1, column=0, sticky=tk.W, pady=3)
@@ -1582,6 +1625,8 @@ class App(tk.Tk):
                     ("All files", "*.*"),
                 ],
             )
+        elif self._current_source == "Cisco FTD":
+            return  # No file browse for FTD — uses live API connection
         else:
             path = filedialog.askopenfilename(
                 title="Select FortiGate YAML Configuration",
@@ -1696,11 +1741,50 @@ class App(tk.Tk):
     # Run commands
     # ------------------------------------------------------------------
     def _run_convert(self):
-        input_file = self.conv_input_var.get().strip()
         is_asa = self._current_source == "Cisco ASA"
         is_pa_source = self._current_source == "Palo Alto"
+        is_ftd_source = self._current_source == "Cisco FTD"
         is_fg_target = self._current_platform == "FortiGate"
+        is_pa = self._current_platform == "Palo Alto PAN-OS"
 
+        input_field = self.conv_input_var.get().strip()
+
+        # ── FTD → FortiGate (API-based: no input file) ─────────────────
+        if is_ftd_source and is_fg_target:
+            host = input_field
+            if not host:
+                messagebox.showerror("Missing Field", "Please enter the FTD host / IP address.")
+                return
+            if not _FTD_TO_FG_AVAILABLE:
+                messagebox.showerror(
+                    "FTD→FG Modules Missing",
+                    f"Cisco FTD to FortiGate converter modules not found.\n\n"
+                    f"Searched: {_FTD_TO_FG_DIR}\n"
+                    f"Error: {_FTD_TO_FG_IMPORT_ERROR}",
+                )
+                return
+            username = self.conv_ha_var.get().strip() or "admin"
+            password = simpledialog.askstring(
+                "FTD Password",
+                f"Enter FDM password for {username}@{host}:",
+                show="*",
+                parent=self,
+            )
+            if password is None:  # User cancelled
+                return
+            if not password:
+                messagebox.showerror("Missing Field", "Password cannot be empty.")
+                return
+            outdir = self.conv_outdir_var.get().strip()
+            base = self.conv_output_var.get().strip() or "fg_config"
+            full_base = os.path.join(outdir, base) if outdir else base
+            argv = ["--host", host, "--username", username, "--password", password,
+                    "-o", full_base, "--no-ssl-verify"]
+            self._run_in_thread(ftd_to_fg_convert_main, argv, self.conv_output, "Convert")
+            return
+
+        # ── File-based conversions ──────────────────────────────────────
+        input_file = input_field
         if not input_file:
             if is_asa:
                 file_type = "Cisco ASA config"
@@ -1710,8 +1794,6 @@ class App(tk.Tk):
                 file_type = "FortiGate YAML"
             messagebox.showerror("Missing Input", f"Please select a {file_type} file.")
             return
-
-        is_pa = self._current_platform == "Palo Alto PAN-OS"
 
         outdir = self.conv_outdir_var.get().strip()
         if is_pa:
@@ -1765,7 +1847,7 @@ class App(tk.Tk):
 
     def _run_import(self):
         # Import to FortiGate via API is not supported — config is applied manually
-        if self._current_platform == "FortiGate":
+        if self._current_platform == "FortiGate" or self._current_source == "Cisco FTD":
             messagebox.showinfo(
                 "Not Applicable",
                 "Direct import to FortiGate is not supported.\n\n"
