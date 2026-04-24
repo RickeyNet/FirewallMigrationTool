@@ -1,5 +1,114 @@
 # Release Notes
 
+## v1.5.0 - Palo Alto → FortiGate Conversion Support & Dependency Updates
+
+### Overview
+
+Adds a full Palo Alto PAN-OS to FortiGate conversion pipeline. A PAN-OS XML running configuration (exported from the device or retrieved via the XML API) is parsed and converted to a single FortiGate CLI `.conf` file that can be applied directly via CLI paste or the FortiGate web UI restore feature. Also updates all runtime and build dependencies to their latest versions.
+
+---
+
+### New Features
+
+#### Palo Alto → FortiGate Conversion Engine (`PaloAltoToFortiGateTool/`)
+
+- **PAN-OS XML Parser** (`fg_pa_parser.py`) - Parses PAN-OS XML running configs including device exports, `show config running` output, and XML API responses; supports both NGFW (vsys1) and Panorama shared-object layouts
+- **Address Objects** (`fg_address_converter.py`) - `ip-netmask` (subnet/host), `ip-range`, and `fqdn` types → FortiGate `firewall address`
+- **Address Groups** (`fg_address_group_converter.py`) - Static groups → FortiGate `firewall addrgrp`; nested groups preserved natively (no flattening required)
+- **Service Objects** (`fg_service_converter.py`) - TCP and UDP service objects → FortiGate `firewall service custom`; companion `_TCP`/`_UDP` pairs (produced by the reverse FG→PA converter) are automatically detected and merged back into a single dual-protocol FortiGate object
+- **Service Groups** (`fg_service_group_converter.py`) - Service groups → FortiGate `firewall service group` with name-map resolution for merged service objects
+- **Security Policies** (`fg_policy_converter.py`) - Security rules → FortiGate `firewall policy`; maps zones to `srcintf`/`dstintf`, PAN-OS `any` address to FortiGate `all`, `application-default` service to `ALL`, action deny/drop/reset-* to FortiGate `deny`, and preserves disabled rule state
+- **Static Routes** (`fg_route_converter.py`) - Static routes → FortiGate `router static`; CIDR notation converted to IP + netmask pairs
+- **Interfaces & Zones** (`fg_interface_converter.py`) - Physical, VLAN, and loopback interfaces → FortiGate `system interface`; PAN-OS zones → FortiGate `system zone`
+- **Main Orchestrator** (`fg_converter.py`) - Runs all 7 phases in dependency order and writes a single timestamped `.conf` file with a header block documenting the source file, generation time, and application notes
+
+#### GUI Updates
+
+- **"Palo Alto" source option** added to the Source dropdown
+- Selecting Palo Alto source automatically locks the Target to "FortiGate" and sets the input file browser to filter for `.xml` files
+- Model selector and HA port field are disabled (not applicable for FortiGate target)
+- Import and Cleanup buttons show an informational dialog explaining how to apply the `.conf` file manually
+- Title bar updates to "Palo Alto to FortiGate Migration Tool"
+
+---
+
+### How to Apply the Output
+
+The converter produces a single `<output_base>.conf` file. Apply it using either method:
+
+**FortiGate CLI** — paste sections directly (granular, section-by-section):
+```
+config firewall address
+    edit "webserver"
+        set subnet 10.10.20.100 255.255.255.255
+    next
+end
+```
+
+**Web UI restore** — go to **System > Configuration > Restore**, upload the `.conf` file. FortiGate merges the commands into the running configuration automatically.
+
+> **Note:** Interface-to-physical-port assignments must be reviewed and adjusted to match the target FortiGate hardware after applying the configuration.
+
+---
+
+### Dependency Updates
+
+All runtime and build dependencies updated to latest versions:
+
+| Package | Previous | Updated |
+|---------|----------|---------|
+| certifi | 2025.11.12 | 2026.4.22 |
+| charset-normalizer | 3.4.4 | 3.4.7 |
+| cryptography | 42.0.8 | 43.0.3 |
+| idna | 3.11 | 3.13 |
+| invoke | 2.2.1 | 3.0.3 |
+| packaging | 26.0 | 26.1 |
+| pydantic | 2.12.5 | 2.13.3 |
+| pydantic_core | 2.41.5 | 2.46.3 |
+| Pygments | 2.19.2 | 2.20.0 |
+| pyinstaller | 6.19.0 | 6.20.0 |
+| pyinstaller-hooks-contrib | 2026.3 | 2026.4 |
+| PyNaCl | 1.6.1 | 1.6.2 |
+| rich | 14.2.0 | 15.0.0 |
+| ruamel.yaml | 0.18.16 | 0.19.1 |
+| setuptools | 80.9.0 | 82.0.1 |
+| tomli | 2.4.0 | 2.4.1 |
+| urllib3 | 2.6.0 | 2.6.3 |
+| wheel | 0.45.1 | 0.47.0 |
+| zipp | 3.23.0 | 3.23.1 |
+
+`requirements.txt` minimum versions updated to reflect the currently tested versions (`pyyaml>=6.0.3`, `requests>=2.32.5`, `urllib3>=2.6.3`).
+
+---
+
+### Files Added
+
+| File | Purpose |
+|------|---------|
+| `PaloAltoToFortiGateTool/__init__.py` | Package marker |
+| `PaloAltoToFortiGateTool/fg_common.py` | Shared utilities (CIDR↔netmask, name sanitization) |
+| `PaloAltoToFortiGateTool/fg_pa_parser.py` | PAN-OS XML configuration parser |
+| `PaloAltoToFortiGateTool/fg_address_converter.py` | Address object converter |
+| `PaloAltoToFortiGateTool/fg_address_group_converter.py` | Address group converter |
+| `PaloAltoToFortiGateTool/fg_service_converter.py` | Service object converter with TCP+UDP merge |
+| `PaloAltoToFortiGateTool/fg_service_group_converter.py` | Service group converter |
+| `PaloAltoToFortiGateTool/fg_policy_converter.py` | Security policy converter |
+| `PaloAltoToFortiGateTool/fg_route_converter.py` | Static route converter |
+| `PaloAltoToFortiGateTool/fg_interface_converter.py` | Interface and zone converter |
+| `PaloAltoToFortiGateTool/fg_converter.py` | Main orchestrator |
+| `Firewall-Migration-Tool-v1.5.0.spec` | PyInstaller build spec |
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `gui_app.py` | Palo Alto source option, FortiGate target handling, XML file browser, v1.5.0 |
+| `requirements.txt` | Minimum version bumps for pyyaml, requests, urllib3 |
+
+---
+
+---
+
 ## v1.4.0 - Update Existing Objects, Cleanup Password Protection, Python 3.14
 
 ### Overview
