@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PAN-OS Interface and Zone Converter — FortiGate Target
+"""PAN-OS Interface and Zone Converter - FortiGate Target
 ==========================================================
 Converts PAN-OS interfaces and zones to FortiGate ``system interface``
 and ``system zone`` CLI config.
@@ -54,7 +54,7 @@ class FGInterfaceConverter:
         """Convert all interfaces and return FortiGate ``system interface`` block.
 
         Returns an empty string if no interface data is present (interface
-        config is optional — policies can reference zone names instead).
+        config is optional - policies can reference zone names instead).
         """
         interfaces = self.pa_config.get("interfaces", [])
         if not interfaces:

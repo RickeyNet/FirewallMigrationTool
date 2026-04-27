@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PAN-OS Security Rule Converter — FortiGate Target
+"""PAN-OS Security Rule Converter - FortiGate Target
 ======================================================
 Converts PAN-OS security rules to FortiGate ``firewall policy`` CLI config.
 

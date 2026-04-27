@@ -4,7 +4,7 @@
 
 ### Overview
 
-Follow-up to v1.6.1 addressing the highest-priority Source/Target UX issues. The Target combobox now visually reflects when it's locked to a single choice, custom Output Base Names survive platform switches, and the Import/Cleanup tab forms are fully disabled — not just retitled — when the target doesn't support API-based operations.
+Follow-up to v1.6.1 addressing the highest-priority Source/Target UX issues. The Target combobox now visually reflects when it's locked to a single choice, custom Output Base Names survive platform switches, and the Import/Cleanup tab forms are fully disabled - not just retitled - when the target doesn't support API-based operations.
 
 ---
 
@@ -20,7 +20,7 @@ Follow-up to v1.6.1 addressing the highest-priority Source/Target UX issues. The
 
 #### Import & Cleanup Forms Disabled for FortiGate Target
 
-- Previously the Import and Cleanup tabs were retitled "(N/A for FortiGate)" but the full form was still clickable — users could type into fields and press Start only to hit a "not applicable" popup. Now the entire tab contents (entries, checkboxes, spinboxes, comboboxes, and the Start/Cancel buttons) are disabled when the target is FortiGate. Output text areas remain visible for reviewing prior logs, and the Clear Output button was intentionally disabled as well (use Cancel/Clear once the tab is re-enabled).
+- Previously the Import and Cleanup tabs were retitled "(N/A for FortiGate)" but the full form was still clickable - users could type into fields and press Start only to hit a "not applicable" popup. Now the entire tab contents (entries, checkboxes, spinboxes, comboboxes, and the Start/Cancel buttons) are disabled when the target is FortiGate. Output text areas remain visible for reviewing prior logs, and the Clear Output button was intentionally disabled as well (use Cancel/Clear once the tab is re-enabled).
 - Lockout state is respected by the shared `_set_buttons_state()` helper so Convert-tab operations don't accidentally re-enable the Import/Cleanup run buttons mid-run.
 - The Cleanup password reset button correctly re-syncs with `has_custom_password()` when the tab is unlocked.
 
@@ -46,17 +46,17 @@ Fixes GUI labeling bugs introduced in v1.6.0 where the HA Port field label and t
 
 ### Bug Fixes
 
-#### Convert Tab — HA Port / FTD Username Label
+#### Convert Tab - HA Port / FTD Username Label
 
 - The field next to the username entry now correctly reads **"FTD Username:"** when Cisco FTD is selected as the source. Previously, the label stayed as "HA Port (optional):" while the helper text below read "FTD username (leave blank for 'admin')", producing a contradictory UI.
 - Label text now updates alongside the hint text in all five state transitions: FTD source (API mode), FTD source (JSON file mode), PAN-OS target, FortiGate target with non-FTD source, and FTD target.
 
-#### Import & Cleanup Tabs — Dynamic Tab Titles
+#### Import & Cleanup Tabs - Dynamic Tab Titles
 
 - The Import and Cleanup tab titles and section frame headers now update based on the selected target platform instead of being hard-coded to "FTD":
   - **FTD target**: "Import to FTD" / "Cleanup FTD"
   - **PAN-OS target**: "Import to PAN-OS" / "Cleanup PAN-OS"
-  - **FortiGate target**: "Import (N/A for FortiGate)" / "Cleanup (N/A for FortiGate)" — reflects that API-based import/cleanup is not supported for FortiGate (config must be applied manually)
+  - **FortiGate target**: "Import (N/A for FortiGate)" / "Cleanup (N/A for FortiGate)" - reflects that API-based import/cleanup is not supported for FortiGate (config must be applied manually)
 - The top `LabelFrame` section headers on both tabs (e.g. "FTD Connection & Import Options") are retitled to match.
 
 ---
@@ -75,7 +75,7 @@ Fixes GUI labeling bugs introduced in v1.6.0 where the HA Port field label and t
 
 ### Overview
 
-Adds a live Cisco FTD to FortiGate conversion pipeline. The converter connects directly to the FTD Firepower Device Manager (FDM) REST API, reads the running configuration, and produces a single FortiGate CLI `.conf` file — no offline export required. Apply the output via CLI paste or the FortiGate web UI restore feature.
+Adds a live Cisco FTD to FortiGate conversion pipeline. The converter connects directly to the FTD Firepower Device Manager (FDM) REST API, reads the running configuration, and produces a single FortiGate CLI `.conf` file - no offline export required. Apply the output via CLI paste or the FortiGate web UI restore feature.
 
 ---
 
@@ -84,14 +84,14 @@ Adds a live Cisco FTD to FortiGate conversion pipeline. The converter connects d
 #### Cisco FTD → FortiGate Conversion Engine (`CiscoFTDToFortiGateTool/`)
 
 - **FDM API Reader** (`ftd_reader.py`) - Authenticates to the FTD FDM REST API (OAuth 2.0 password grant), reads all supported object types with automatic offset/limit pagination; handles 404 gracefully for object types not present on a given FTD version
-- **Address Objects** — FTD `networkobject` (`HOST`, `NETWORK`, `RANGE`, `FQDN`) → FortiGate `config firewall address`
-- **Address Groups** — FTD `networkgroup` (with inline literal expansion) → FortiGate `config firewall addrgrp`; inline IP/subnet literals auto-generate supplemental address objects
-- **Service Objects** — FTD TCP and UDP port objects → FortiGate `config firewall service custom`; `_TCP`/`_UDP` suffix pairs (produced by the reverse FG→PA converter) automatically merged back into dual-protocol FortiGate service objects
-- **Service Groups** — FTD port groups → FortiGate `config firewall service group`
-- **Interfaces** — Physical Ethernet and EtherChannel (LACP aggregate) interfaces → FortiGate `config system interface` with IP, admin state, and zone membership
-- **Zones** — FTD security zones → FortiGate `config system zone` with member interface lists
-- **Security Policies** — FTD access rules → FortiGate `config firewall policy`; maps source/destination zones, address objects, service objects, rule action (`PERMIT`→`accept`, `DENY`→`deny`), logging, and disabled state
-- **Static Routes** — FTD static routes from all virtual routers → FortiGate `config router static`
+- **Address Objects** - FTD `networkobject` (`HOST`, `NETWORK`, `RANGE`, `FQDN`) → FortiGate `config firewall address`
+- **Address Groups** - FTD `networkgroup` (with inline literal expansion) → FortiGate `config firewall addrgrp`; inline IP/subnet literals auto-generate supplemental address objects
+- **Service Objects** - FTD TCP and UDP port objects → FortiGate `config firewall service custom`; `_TCP`/`_UDP` suffix pairs (produced by the reverse FG→PA converter) automatically merged back into dual-protocol FortiGate service objects
+- **Service Groups** - FTD port groups → FortiGate `config firewall service group`
+- **Interfaces** - Physical Ethernet and EtherChannel (LACP aggregate) interfaces → FortiGate `config system interface` with IP, admin state, and zone membership
+- **Zones** - FTD security zones → FortiGate `config system zone` with member interface lists
+- **Security Policies** - FTD access rules → FortiGate `config firewall policy`; maps source/destination zones, address objects, service objects, rule action (`PERMIT`→`accept`, `DENY`→`deny`), logging, and disabled state
+- **Static Routes** - FTD static routes from all virtual routers → FortiGate `config router static`
 - **Main Orchestrator** (`fg_ftd_converter.py`) - 8-phase pipeline; outputs a single timestamped `.conf` file with a header comment documenting the source host, generation time, and application notes
 
 #### GUI Updates
@@ -162,7 +162,7 @@ Adds a full Palo Alto PAN-OS to FortiGate conversion pipeline. A PAN-OS XML runn
 
 The converter produces a single `<output_base>.conf` file. Apply it using either method:
 
-**FortiGate CLI** — paste sections directly (granular, section-by-section):
+**FortiGate CLI** - paste sections directly (granular, section-by-section):
 ```
 config firewall address
     edit "webserver"
@@ -171,7 +171,7 @@ config firewall address
 end
 ```
 
-**Web UI restore** — go to **System > Configuration > Restore**, upload the `.conf` file. FortiGate merges the commands into the running configuration automatically.
+**Web UI restore** - go to **System > Configuration > Restore**, upload the `.conf` file. FortiGate merges the commands into the running configuration automatically.
 
 > **Note:** Interface-to-physical-port assignments must be reviewed and adjusted to match the target FortiGate hardware after applying the configuration.
 

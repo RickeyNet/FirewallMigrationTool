@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PAN-OS Service Group Converter — FortiGate Target
+"""PAN-OS Service Group Converter - FortiGate Target
 ======================================================
 Converts PAN-OS service groups to FortiGate ``firewall service group``
 CLI config.

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""PAN-OS Address Group Converter — FortiGate Target
+"""PAN-OS Address Group Converter - FortiGate Target
 ======================================================
 Converts PAN-OS address groups to FortiGate ``firewall addrgrp`` CLI config.
 
-PAN-OS supports nested address groups natively, as does FortiGate — no
+PAN-OS supports nested address groups natively, as does FortiGate - no
 flattening is required (unlike the FTD converter which must flatten).
 
 FortiGate CLI output format:

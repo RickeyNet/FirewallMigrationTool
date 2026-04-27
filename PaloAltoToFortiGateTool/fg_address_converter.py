@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PAN-OS Address Object Converter — FortiGate Target
+"""PAN-OS Address Object Converter - FortiGate Target
 ======================================================
 Converts PAN-OS address objects to FortiGate ``firewall address`` CLI config.
 

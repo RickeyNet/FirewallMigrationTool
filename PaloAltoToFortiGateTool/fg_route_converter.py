@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PAN-OS Static Route Converter — FortiGate Target
+"""PAN-OS Static Route Converter - FortiGate Target
 ====================================================
 Converts PAN-OS static routes to FortiGate ``router static`` CLI config.
 

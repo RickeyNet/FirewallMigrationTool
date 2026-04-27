@@ -151,7 +151,7 @@ def _parse_addresses(vsys: ET.Element) -> List[Dict[str, Any]]:
             addr_type = "fqdn"
             value = fqdn.text.strip()
         else:
-            continue  # Unknown type — skip
+            continue  # Unknown type - skip
 
         addresses.append({
             "name": name,
@@ -416,7 +416,7 @@ def _extract_layer3_info(entry: ET.Element) -> Dict[str, Any]:
     if comment is not None and comment.text:
         result["description"] = comment.text.strip()
 
-    # Layer3 IP — try common paths
+    # Layer3 IP - try common paths
     for ip_path in ("./layer3/ip/entry", "./ip/entry"):
         ip_entry = entry.find(ip_path)
         if ip_entry is not None:

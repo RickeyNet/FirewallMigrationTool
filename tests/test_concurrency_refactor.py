@@ -375,7 +375,7 @@ def test_cleanup_validate_endpoints_partial_fail():
 # --- concurrency helper edge-case tests ---
 
 def test_run_with_retry_max_attempts_one(monkeypatch):
-    """max_attempts=1 means no retry — one call, immediate result."""
+    """max_attempts=1 means no retry - one call, immediate result."""
     monkeypatch.setattr(concurrency_utils.time, "sleep", lambda _s: None)
     monkeypatch.setattr(concurrency_utils.random, "uniform", lambda _a, _b: 0.0)
 

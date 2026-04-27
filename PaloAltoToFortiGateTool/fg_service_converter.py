@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PAN-OS Service Object Converter — FortiGate Target
+"""PAN-OS Service Object Converter - FortiGate Target
 ======================================================
 Converts PAN-OS service objects to FortiGate ``firewall service custom``
 CLI config.
@@ -63,7 +63,7 @@ def _convert_pa_ports(port_str: str) -> str:
     """
     if not port_str:
         return ""
-    # Replace commas with spaces — FG uses space-separated port/range entries
+    # Replace commas with spaces - FG uses space-separated port/range entries
     return port_str.replace(",", " ").strip()
 
 
@@ -140,7 +140,7 @@ class FGServiceConverter:
                     "pa_names": [tcp_name, protos["udp"][0]],
                 })
             else:
-                # Only one protocol — treat as standalone
+                # Only one protocol - treat as standalone
                 for proto, (pa_name, port, desc) in protos.items():
                     standalone.append({
                         "name": pa_name,

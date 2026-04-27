@@ -52,7 +52,7 @@ from ftd_api_cleanup import main as cleanup_main       # noqa: E402
 from cleanup_auth import (                              # noqa: E402
     set_password, verify_password,
     has_custom_password, reset_to_default,
-)  # stdlib only — no third-party deps, portable across machines
+)  # stdlib only - no third-party deps, portable across machines
 
 # Palo Alto modules - optional (only needed when PA platform is selected)
 _PA_IMPORT_ERROR = ""
@@ -568,7 +568,7 @@ class App(tk.Tk):
     def _on_ftd_mode_change(self):
         """Toggle between live FDM API and JSON file input for Cisco FTD source."""
         if self.conv_ftd_file_var.get():
-            # File mode — enable browse, update labels, hide username field
+            # File mode - enable browse, update labels, hide username field
             self.conv_input_label.configure(text="FTD Config JSON:")
             self.conv_input_var.set("")
             self.conv_browse_btn.configure(state=tk.NORMAL)
@@ -576,7 +576,7 @@ class App(tk.Tk):
             self.conv_ha_label.configure(text="FTD Username:", foreground=_FG_DIM)
             self.conv_ha_hint.configure(text="(username/password not needed for file mode)")
         else:
-            # API mode — restore host/username fields, disable browse
+            # API mode - restore host/username fields, disable browse
             self.conv_input_label.configure(text="FTD Host / IP:")
             self.conv_input_var.set("")
             self.conv_browse_btn.configure(state=tk.DISABLED)
@@ -666,7 +666,7 @@ class App(tk.Tk):
                 self._on_platform_change()
                 return
 
-            # Update Convert tab — no model needed for FortiGate target
+            # Update Convert tab - no model needed for FortiGate target
             self.conv_model_combo.configure(values=["(not applicable)"])
             self.conv_model_var.set("(not applicable)")
             self.conv_model_combo.configure(state=tk.DISABLED)
@@ -707,7 +707,7 @@ class App(tk.Tk):
                 self.title(f"Palo Alto to FortiGate Migration Tool v{APP_VERSION}")
 
         else:
-            # Restore FTD defaults — also re-enable model combo if it was disabled
+            # Restore FTD defaults - also re-enable model combo if it was disabled
             self.conv_model_combo.configure(state="readonly")
             self.conv_model_combo.configure(values=FTD_MODEL_LIST)
             self.conv_model_var.set("ftd-3120")
@@ -761,7 +761,7 @@ class App(tk.Tk):
         self._set_tab_enabled(self._cln_tab, skip=(self.cln_output,), enabled=not tabs_locked)
 
         # Reset-password button's enabled state depends on has_custom_password(),
-        # not on target lockout — restore it when unlocking.
+        # not on target lockout - restore it when unlocking.
         if not tabs_locked:
             self.cln_reset_pw_btn.configure(
                 state=tk.NORMAL if has_custom_password() else tk.DISABLED,
@@ -1399,195 +1399,284 @@ class App(tk.Tk):
 
         # ----- Overview -----
         put("Overview\n", "h1")
-        put("This tool converts firewall configurations from a source platform "
-            "(FortiGate or Cisco ASA) into JSON files, then imports them into a "
-            "target platform (Cisco FTD or Palo Alto PAN-OS) via API. The workflow "
-            "has three phases: Convert, Import, and Cleanup. Each phase has its own "
-            "tab in this application.\n\n")
+        put("This tool converts firewall configurations between vendors. Pick a "
+            "source platform and a supported target platform, run a Convert pass "
+            "to produce vendor-ready output, then either Import via API "
+            "(FTD / PAN-OS) or restore the generated CLI file (FortiGate). Each "
+            "phase has its own tab.\n\n")
+
+        put("Supported Source \u2192 Target Pairs\n", "h2")
+        put("\u2022  ", "bullet")
+        put("FortiGate", "bold")
+        put(" (YAML) \u2192 ", "bullet")
+        put("Cisco FTD", "bold")
+        put(" (FDM REST API)\n", "bullet")
+        put("\u2022  ", "bullet")
+        put("FortiGate", "bold")
+        put(" (YAML) \u2192 ", "bullet")
+        put("Palo Alto PAN-OS", "bold")
+        put(" (XML API)\n", "bullet")
+        put("\u2022  ", "bullet")
+        put("Cisco ASA", "bold")
+        put(" (text) \u2192 ", "bullet")
+        put("Palo Alto PAN-OS", "bold")
+        put(" (XML API)\n", "bullet")
+        put("\u2022  ", "bullet")
+        put("Palo Alto", "bold")
+        put(" (XML export) \u2192 ", "bullet")
+        put("FortiGate", "bold")
+        put(" (CLI .conf, restored on the device)\n", "bullet")
+        put("\u2022  ", "bullet")
+        put("Cisco FTD", "bold")
+        put(" (live FDM API or exported JSON) \u2192 ", "bullet")
+        put("FortiGate", "bold")
+        put(" (CLI .conf)\n\n", "bullet")
+        put("Note: ", "warning")
+        put("When the target is FortiGate, the Import and Cleanup tabs are "
+            "disabled \u2014 FortiGate output is a CLI .conf file you restore "
+            "from the FortiGate GUI (System \u2192 Configuration \u2192 Restore).\n\n",
+            "italic")
 
         # ----- Getting Started -----
         put("Getting Started\n", "h1")
         put("=" * 70 + "\n\n", "separator")
 
-        put("Step 1: Select Your Platforms\n", "h2")
-        put("Use the toolbar at the top of the window to choose your source and target:\n\n")
-        put("\u2022  Source: ", "bullet")
-        put("FortiGate", "bold")
-        put(" (YAML config) or ", "bullet")
-        put("Cisco ASA", "bold")
-        put(" (text config)\n", "bullet")
-        put("\u2022  Target: ", "bullet")
-        put("Cisco FTD", "bold")
-        put(" (FDM REST API) or ", "bullet")
-        put("Palo Alto PAN-OS", "bold")
-        put(" (XML API)\n\n", "bullet")
-        put("Note: ", "warning")
-        put("Selecting Cisco ASA as the source automatically sets the target to "
-            "Palo Alto PAN-OS.\n\n", "italic")
+        put("Step 1: Select Source and Target\n", "h2")
+        put("Use the toolbar at the top of the window. The Target dropdown "
+            "auto-narrows based on the Source you pick (e.g., choosing Palo Alto "
+            "as source locks Target to FortiGate).\n\n")
 
-        put("Step 2: Convert Your Configuration\n", "h2")
-        put("Go to the ", "")
-        put("Convert", "bold")
-        put(" tab (see details below).\n\n", "")
+        put("Step 2: Convert\n", "h2")
+        put("Run the Convert tab to produce JSON files (FTD / PAN-OS targets) "
+            "or a .conf file (FortiGate target).\n\n")
 
-        put("Step 3: Import to the Target Device\n", "h2")
-        put("Go to the ", "")
-        put("Import", "bold")
-        put(" tab (see details below).\n\n", "")
+        put("Step 3: Deliver to the Target Device\n", "h2")
+        put("\u2022  ", "bullet")
+        put("FTD or PAN-OS target: ", "bold")
+        put("use the Import tab to push via API.\n", "bullet")
+        put("\u2022  ", "bullet")
+        put("FortiGate target: ", "bold")
+        put("upload the generated .conf via the FortiGate GUI's Restore feature. "
+            "No Import tab is used.\n\n", "bullet")
 
-        put("Step 4: Verify and Review\n", "h2")
+        put("Step 4: Verify\n", "h2")
         put("Use the ", "")
         put("Config Viewer", "bold")
-        put(" tab to browse generated JSON files.\n\n", "")
+        put(" tab to browse JSON output. (Not used for FortiGate .conf output.)\n\n", "")
 
         put("Step 5: Rollback if Needed\n", "h2")
         put("Use the ", "")
         put("Cleanup", "bold")
-        put(" tab to delete imported objects from the target device.\n\n", "")
+        put(" tab to delete imported objects from FTD or PAN-OS. (Not available "
+            "when the target is FortiGate.)\n\n", "")
 
         # ----- Convert Tab -----
         put("Tab 1: Convert\n", "h1")
         put("=" * 70 + "\n\n", "separator")
-        put("Converts your source firewall configuration file into JSON files "
-            "ready for API import.\n\n")
+        put("Converts your source configuration into the format the target "
+            "platform expects.\n\n")
 
-        put("Fields\n", "h2")
-        put("\u2022  Input YAML / Input Config: ", "bullet")
-        put("Path to your source configuration file. Click ", "bullet")
-        put("Browse...", "code")
-        put(" to select it. FortiGate uses YAML format; Cisco ASA uses "
-            "plain text (.txt, .cfg, .conf).\n", "bullet")
+        put("Input Field by Source\n", "h2")
+        put("The Convert tab's input field changes based on the selected source:\n\n")
+        put("\u2022  ", "bullet")
+        put("FortiGate: ", "bold")
+        put("Input YAML \u2014 path to a FortiGate config exported as YAML.\n", "bullet")
+        put("\u2022  ", "bullet")
+        put("Cisco ASA: ", "bold")
+        put("Input Config \u2014 plain-text ASA config (.txt, .cfg, .conf).\n", "bullet")
+        put("\u2022  ", "bullet")
+        put("Palo Alto: ", "bold")
+        put("Input XML \u2014 a PAN-OS configuration export (running-config XML).\n", "bullet")
+        put("\u2022  ", "bullet")
+        put("Cisco FTD: ", "bold")
+        put("two modes \u2014 ", "bullet")
+        put("live API", "italic")
+        put(" (enter FTD Host / IP plus FTD username, then a password prompt) "
+            "or ", "bullet")
+        put("file mode", "italic")
+        put(" (check the toggle and browse to an exported FTD config JSON).\n\n",
+            "bullet")
+
+        put("Other Convert Fields\n", "h2")
         put("\u2022  Output Directory: ", "bullet")
-        put("Folder where generated JSON files will be saved. Automatically "
-            "set to the input file's directory when you browse for the input.\n", "bullet")
+        put("Where generated files are saved. Auto-set to the input file's "
+            "folder when you browse.\n", "bullet")
         put("\u2022  Output Base Name: ", "bullet")
-        put("Prefix for all generated files. For example, ", "bullet")
+        put("Prefix for output files. Defaults: ", "bullet")
         put("ftd_config", "code")
-        put(" produces files like ", "bullet")
-        put("ftd_config_address_objects.json", "code")
-        put(". Defaults to ", "bullet")
-        put("ftd_config", "code")
-        put(" for FTD or ", "bullet")
+        put(" (FTD target), ", "bullet")
         put("pa_config", "code")
-        put(" for PAN-OS.\n", "bullet")
+        put(" (PAN-OS target), ", "bullet")
+        put("fg_config", "code")
+        put(" (FortiGate target).\n", "bullet")
         put("\u2022  Target Model: ", "bullet")
-        put("The specific hardware model you are migrating to. This controls "
-            "interface port mapping and available port count.\n", "bullet")
-        put("\u2022  HA Port (optional): ", "bullet")
-        put("The port reserved for High Availability (FTD only). Enter as ", "bullet")
+        put("Hardware model for the target appliance \u2014 controls interface "
+            "port mapping and port count. Not applicable when the target is "
+            "FortiGate.\n", "bullet")
+        put("\u2022  HA Port / FTD Username: ", "bullet")
+        put("This field is repurposed by source/target. With FTD as ", "bullet")
+        put("target", "italic")
+        put(" it is the optional HA port (e.g. ", "bullet")
         put("Ethernet1/X", "code")
-        put(". Leave blank if not using HA. Disabled for PAN-OS targets.\n", "bullet")
+        put("). With FTD as ", "bullet")
+        put("source", "italic")
+        put(" (live API mode) it is the FTD username. Disabled otherwise.\n", "bullet")
         put("\u2022  Pretty-print JSON output: ", "bullet")
-        put("Formats JSON with indentation for readability. Enabled by default.\n\n", "bullet")
+        put("Formats JSON with indentation. Enabled by default.\n\n", "bullet")
+
+        put("Output Format\n", "h2")
+        put("\u2022  ", "bullet")
+        put("FTD or PAN-OS target: ", "bold")
+        put("multiple JSON files (e.g. ", "bullet")
+        put("{base}_address_objects.json", "code")
+        put(", ", "bullet")
+        put("{base}_access_rules.json", "code")
+        put(") consumed by the Import tab.\n", "bullet")
+        put("\u2022  ", "bullet")
+        put("FortiGate target: ", "bold")
+        put("a single ", "bullet")
+        put("{base}.conf", "code")
+        put(" CLI file you restore from the FortiGate GUI (System \u2192 "
+            "Configuration \u2192 Restore).\n\n", "bullet")
 
         put("How to Run\n", "h2")
-        put("1.  Click ", "bullet")
-        put("Browse...", "code")
-        put(" to select your source config file.\n", "bullet")
-        put("2.  Verify or change the output directory and base name.\n", "bullet")
-        put("3.  Select your target model from the dropdown.\n", "bullet")
-        put("4.  (FTD only) Enter an HA port if needed.\n", "bullet")
+        put("1.  Pick Source and Target in the toolbar.\n", "bullet")
+        put("2.  Provide the input (browse to a file, or for FTD live mode "
+            "enter Host / IP and username).\n", "bullet")
+        put("3.  Verify the output directory and base name.\n", "bullet")
+        put("4.  Select the target model (when applicable).\n", "bullet")
         put("5.  Click ", "bullet")
         put("Run Conversion", "bold")
-        put(".\n", "bullet")
-        put("6.  Watch the output console for progress and warnings.\n", "bullet")
-        put("7.  When done, the console shows a summary of converted objects.\n\n", "bullet")
+        put(". Watch the console for progress, warnings, and the final summary.\n\n",
+            "bullet")
 
         # ----- Import Tab -----
         put("Tab 2: Import\n", "h1")
         put("=" * 70 + "\n\n", "separator")
-        put("Imports the converted JSON files into the target firewall appliance "
-            "via its management API.\n\n")
+        put("Pushes the converted JSON files to a Cisco FTD or Palo Alto PAN-OS "
+            "appliance via its management API. ", "")
+        put("Disabled when the target is FortiGate", "warning")
+        put(" \u2014 use the FortiGate GUI's Restore feature instead.\n\n", "")
 
         put("Connection Fields\n", "h2")
         put("\u2022  Host / IP: ", "bullet")
-        put("Management IP address or hostname of the target appliance.\n", "bullet")
+        put("Management IP or hostname of the target appliance.\n", "bullet")
         put("\u2022  Username: ", "bullet")
-        put("Admin account username (default: ", "bullet")
+        put("Admin account (default: ", "bullet")
         put("admin", "code")
         put(").\n", "bullet")
         put("\u2022  Password: ", "bullet")
         put("Admin password.\n", "bullet")
         put("\u2022  Config Directory: ", "bullet")
-        put("Folder containing the JSON files from the Convert step. Must match "
-            "the output directory used during conversion.\n", "bullet")
+        put("Folder containing the JSON files from Convert.\n", "bullet")
         put("\u2022  JSON Base Name: ", "bullet")
         put("Must match the base name used during conversion.\n", "bullet")
         put("\u2022  Workers: ", "bullet")
-        put("Number of concurrent API threads (1-32, default 6). Higher values "
-            "speed up large imports. FTD only; disabled for PAN-OS.\n", "bullet")
+        put("Concurrent API threads (1-32, default 6). FTD only; disabled "
+            "for PAN-OS.\n", "bullet")
         put("\u2022  Deploy / Commit after import: ", "bullet")
-        put("Automatically activate the configuration on the appliance after "
-            "import completes.\n", "bullet")
+        put("Activate the configuration on the appliance after import "
+            "completes.\n", "bullet")
         put("\u2022  Debug mode: ", "bullet")
         put("Prints full API request/response payloads to the console.\n\n", "bullet")
 
         put("Selective Import\n", "h2")
         put("By default (no boxes checked), all object types are imported in "
-            "dependency order. To import only specific types, check one or more:\n\n")
+            "dependency order. Check one or more to import only those types:\n\n")
         put("\u2022  Physical Interfaces", "bullet")
-        put(" - Port configurations (IP, name, enabled state)\n", "bullet")
+        put(" \u2014 port configurations (IP, name, enabled state)\n", "bullet")
         put("\u2022  EtherChannels", "bullet")
-        put(" - Port-channel / LACP bond configurations\n", "bullet")
+        put(" \u2014 port-channel / LACP bond configurations\n", "bullet")
         put("\u2022  Subinterfaces", "bullet")
-        put(" - VLAN subinterface configurations\n", "bullet")
+        put(" \u2014 VLAN subinterface configurations\n", "bullet")
         put("\u2022  Bridge Groups", "bullet")
-        put(" - Bridge group / BVI configurations\n", "bullet")
+        put(" \u2014 bridge group / BVI configurations\n", "bullet")
         put("\u2022  Security Zones", "bullet")
-        put(" - Zone definitions\n", "bullet")
+        put(" \u2014 zone definitions\n", "bullet")
         put("\u2022  Address Objects", "bullet")
-        put(" - Host, network, range, and FQDN objects\n", "bullet")
+        put(" \u2014 host, network, range, FQDN\n", "bullet")
         put("\u2022  Address Groups", "bullet")
-        put(" - Groups of address objects\n", "bullet")
+        put(" \u2014 groups of address objects\n", "bullet")
         put("\u2022  Service Objects", "bullet")
-        put(" - TCP/UDP port objects\n", "bullet")
+        put(" \u2014 TCP/UDP port objects\n", "bullet")
         put("\u2022  Service Groups", "bullet")
-        put(" - Groups of service objects\n", "bullet")
+        put(" \u2014 groups of service objects\n", "bullet")
         put("\u2022  Static Routes", "bullet")
-        put(" - IPv4 static route entries\n", "bullet")
+        put(" \u2014 IPv4 static route entries\n", "bullet")
         put("\u2022  Access Rules", "bullet")
-        put(" - Firewall policy / access control rules\n\n", "bullet")
+        put(" \u2014 firewall policy / access control rules\n\n", "bullet")
+
+        put("How Existing Objects Are Handled\n", "h2")
+        put("\u2022  ", "bullet")
+        put("Cisco FTD target: ", "bold")
+        put("when an object with the same name already exists, the importer "
+            "issues a PUT to update it to the new payload. This is the default "
+            "(", "bullet")
+        put("update_existing=True", "code")
+        put("); the older skip-on-conflict behavior is available only via the "
+            "CLI flag ", "bullet")
+        put("--skip-existing", "code")
+        put(".\n", "bullet")
+        put("\u2022  ", "bullet")
+        put("Palo Alto PAN-OS target: ", "bold")
+        put("the XML API ", "bullet")
+        put("set", "code")
+        put(" action natively merges into existing entries, so re-running an "
+            "import keeps existing objects in sync without an explicit update "
+            "step.\n", "bullet")
+        put("\u2022  ", "bullet")
+        put("Physical interfaces (FTD): ", "bold")
+        put("always PUT \u2014 they pre-exist on the device.\n\n", "bullet")
+        put("Tip: ", "tip")
+        put("Imports are safe to re-run. Existing objects are updated in place "
+            "(FTD) or merged (PAN-OS) rather than skipped, so the target stays "
+            "in sync with your source config.\n\n")
 
         put("How to Run\n", "h2")
-        put("1.  Enter the target appliance ", "bullet")
+        put("1.  Enter ", "bullet")
         put("Host / IP", "bold")
         put(", ", "bullet")
         put("Username", "bold")
-        put(", and ", "bullet")
+        put(", ", "bullet")
         put("Password", "bold")
         put(".\n", "bullet")
-        put("2.  Set the Config Directory to the folder with your JSON files.\n", "bullet")
+        put("2.  Set the Config Directory to your Convert output folder.\n", "bullet")
         put("3.  Verify the JSON Base Name matches the conversion output.\n", "bullet")
-        put("4.  (Optional) Check specific object types to import selectively.\n", "bullet")
+        put("4.  (Optional) Check specific object types for selective import.\n", "bullet")
         put("5.  (Optional) Check ", "bullet")
         put("Deploy/Commit after import", "bold")
         put(" to activate immediately.\n", "bullet")
         put("6.  Click ", "bullet")
         put("Start Import", "bold")
-        put(".\n", "bullet")
-        put("7.  Monitor the console. Each object is reported as created or "
-            "skipped (if it already exists).\n\n", "bullet")
-        put("Tip: ", "tip")
-        put("Imports are idempotent. If an object already exists on the target, "
-            "it is skipped without error. You can safely re-run an import.\n\n")
+        put(" and monitor the console.\n\n", "bullet")
 
         # ----- Cleanup Tab -----
         put("Tab 3: Cleanup / Rollback\n", "h1")
         put("=" * 70 + "\n\n", "separator")
-        put("Deletes imported objects from the target appliance. Useful for "
-            "rollback or starting a fresh migration.\n\n")
+        put("Deletes imported objects from a Cisco FTD or PAN-OS appliance. ", "")
+        put("Disabled when the target is FortiGate", "warning")
+        put(".\n\n", "")
+        put("Cleanup Password: ", "warning")
+        put("Cleanup is gated by a password to prevent accidental destructive "
+            "runs. The first time you use Cleanup, enter the built-in default "
+            "password when prompted, then use the ", "italic")
+        put("Change Password", "bold")
+        put(" button next to the Cleanup form to set your own. ", "italic")
+        put("Reset Password", "bold")
+        put(" reverts to the default (and requires the current password to do "
+            "so).\n\n", "italic")
 
         put("Connection Fields\n", "h2")
         put("\u2022  Host / IP, Username, Password: ", "bullet")
         put("Same as the Import tab.\n", "bullet")
         put("\u2022  Target Model: ", "bullet")
-        put("The model of the appliance being cleaned.\n", "bullet")
+        put("Model of the appliance being cleaned.\n", "bullet")
         put("\u2022  Workers: ", "bullet")
         put("Concurrent threads for deletion (1-32, default 6).\n\n", "bullet")
 
         put("What to Delete\n", "h2")
         put("\u2022  Delete ALL custom objects: ", "bullet")
-        put("Master checkbox that selects all object types.\n", "bullet")
+        put("Master checkbox that selects every object type.\n", "bullet")
         put("\u2022  Individual checkboxes: ", "bullet")
         put("Delete specific types: Access Rules, Static Routes, Subinterfaces, "
             "EtherChannels, Security Zones, Bridge Groups, Service Groups, "
@@ -1596,7 +1685,7 @@ class App(tk.Tk):
 
         put("Flags\n", "h2")
         put("\u2022  Dry run (preview only): ", "bullet")
-        put("Shows what would be deleted without actually deleting anything. ", "bullet")
+        put("Shows what would be deleted without actually deleting. ", "bullet")
         put("Always use this first.\n", "warning")
         put("\u2022  Deploy / Commit after cleanup: ", "bullet")
         put("Activate the changes on the appliance after deletion.\n\n", "bullet")
@@ -1606,25 +1695,27 @@ class App(tk.Tk):
         put("2.  Select the Target Model.\n", "bullet")
         put("3.  Check ", "bullet")
         put("Delete ALL custom objects", "bold")
-        put(" for a full rollback, or check individual types.\n", "bullet")
+        put(" or individual types.\n", "bullet")
         put("4.  Check ", "bullet")
         put("Dry run", "bold")
-        put(" first to preview what will be deleted.\n", "bullet")
+        put(" first to preview.\n", "bullet")
         put("5.  Click ", "bullet")
         put("Start Cleanup", "bold")
-        put(" and review the dry-run output.\n", "bullet")
-        put("6.  Once satisfied, uncheck Dry run and run again to perform "
-            "the actual deletion.\n", "bullet")
-        put("7.  A confirmation dialog appears before destructive operations.\n\n", "bullet")
+        put(" \u2014 you will be prompted for the cleanup password.\n", "bullet")
+        put("6.  Review the dry-run output, then uncheck Dry run and run again "
+            "to perform the deletion.\n", "bullet")
+        put("7.  A confirmation dialog appears before destructive operations.\n\n",
+            "bullet")
         put("Important: ", "warning")
-        put("Objects are deleted in reverse dependency order (rules first, "
-            "then routes, then interfaces, etc.) to avoid reference errors.\n\n")
+        put("Objects are deleted in reverse dependency order (rules first, then "
+            "routes, then interfaces, etc.) to avoid reference errors.\n\n")
 
         # ----- Config Viewer Tab -----
         put("Tab 4: Config Viewer\n", "h1")
         put("=" * 70 + "\n\n", "separator")
-        put("Browse and search the generated JSON configuration files without "
-            "leaving the application.\n\n")
+        put("Browse and search the generated JSON files without leaving the "
+            "application. (Designed for FTD / PAN-OS JSON output; FortiGate "
+            ".conf output is plain text and is not displayed here.)\n\n")
 
         put("How to Use\n", "h2")
         put("1.  Set the Config Directory to the folder with your JSON files.\n", "bullet")
@@ -1647,14 +1738,13 @@ class App(tk.Tk):
         # ----- Theme Selector -----
         put("Theme Selector\n", "h1")
         put("=" * 70 + "\n\n", "separator")
-        put("The theme dropdown in the top-right corner switches the color scheme "
-            "instantly. No restart required.\n\n")
-        put("\u2022  Coral: ", "bullet")
-        put("Dark teal background with coral accents. Professional and easy on "
-            "the eyes. (Default)\n", "bullet")
+        put("The theme dropdown in the top-right corner switches the color "
+            "scheme instantly. No restart required.\n\n")
+        put("\u2022  Coral (default): ", "bullet")
+        put("Dark teal background with coral accents. Professional and easy "
+            "on the eyes.\n", "bullet")
         put("\u2022  Sandstone: ", "bullet")
-        put("Sandstone background with Red accents. Professional and easy on "
-            "the eyes. (Default)\n", "bullet")
+        put("Sandstone background with red accents. Lighter, warm tones.\n", "bullet")
         put("\u2022  Chris: ", "bullet")
         put("Hot pink background with neon green accents. High contrast and "
             "vibrant.\n\n", "bullet")
@@ -1748,7 +1838,7 @@ class App(tk.Tk):
             )
         elif self._current_source == "Cisco FTD":
             if not self.conv_ftd_file_var.get():
-                return  # API mode — no file to browse
+                return  # API mode - no file to browse
             path = filedialog.askopenfilename(
                 title="Select FTD FDM JSON Config File",
                 filetypes=[
@@ -2007,7 +2097,7 @@ class App(tk.Tk):
         self._run_in_thread(main_fn, argv, self.conv_output, "Convert")
 
     def _run_import(self):
-        # Import to FortiGate via API is not supported — config is applied manually
+        # Import to FortiGate via API is not supported - config is applied manually
         if self._current_platform == "FortiGate" or self._current_source == "Cisco FTD":
             messagebox.showinfo(
                 "Not Applicable",

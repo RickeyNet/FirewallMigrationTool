@@ -847,9 +847,9 @@ The cleanup feature is password-protected to prevent accidental deletion of fire
 
 **How it works:**
 
-1. A **built-in default password** is baked into the application at build time (stored as a PBKDF2-HMAC-SHA256 hash — not plaintext).
+1. A **built-in default password** is baked into the application at build time (stored as a PBKDF2-HMAC-SHA256 hash - not plaintext).
 2. If a user clicks **Change Cleanup Password** in the GUI, a `cleanup_auth.json` file is created next to the application. This override takes priority over the built-in default.
-3. If `cleanup_auth.json` is deleted, the application automatically falls back to the built-in default password — users are never locked out.
+3. If `cleanup_auth.json` is deleted, the application automatically falls back to the built-in default password - users are never locked out.
 
 **GUI buttons:**
 
@@ -876,7 +876,7 @@ python set_cleanup_password.py MyNewPassword
 build.bat
 ```
 
-The script only modifies the hash — the plaintext password is never stored in the source code.
+The script only modifies the hash - the plaintext password is never stored in the source code.
 
 ---
 

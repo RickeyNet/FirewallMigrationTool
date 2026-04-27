@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Palo Alto PAN-OS to FortiGate Configuration Converter — Main Script
+Palo Alto PAN-OS to FortiGate Configuration Converter - Main Script
 ====================================================================
 Orchestrates the conversion of a PAN-OS XML running configuration to
 FortiGate CLI config format.
@@ -10,17 +10,17 @@ that can be pasted directly into the FortiGate CLI or restored via:
     System > Configuration > Restore (select the .conf file)
 
 OUTPUT FILE:
-    {output_base}.conf    — FortiGate CLI configuration
+    {output_base}.conf    - FortiGate CLI configuration
 
 SECTIONS GENERATED (in order):
-    1. config system interface   — Physical and VLAN interfaces
-    2. config system zone        — Security zones
-    3. config firewall address   — Address objects
-    4. config firewall addrgrp   — Address groups
-    5. config firewall service custom  — Service objects
-    6. config firewall service group   — Service groups
-    7. config firewall policy    — Security policies
-    8. config router static      — Static routes
+    1. config system interface   - Physical and VLAN interfaces
+    2. config system zone        - Security zones
+    3. config firewall address   - Address objects
+    4. config firewall addrgrp   - Address groups
+    5. config firewall service custom  - Service objects
+    6. config firewall service group   - Service groups
+    7. config firewall policy    - Security policies
+    8. config router static      - Static routes
 
 HOW TO RUN:
     python fg_converter.py panos_running.xml
