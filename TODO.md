@@ -242,11 +242,12 @@ source→target pairs but several UI elements still carry FTD-centric defaults o
   - Follow-up (still open): add a "→" arrow label between Source and Target on
     the top bar. Low priority cosmetic.
 
-- [ ] Surface the supported conversion matrix in the UI
-  - Scope: Add a short hint line near the Source/Target selectors listing supported pairs
-    (FG↔FTD, FG↔PAN-OS, ASA→PAN-OS, PA→FG, FTD→FG). Today, users only discover
-    unsupported pairs by trying them.
-  - Priority: Medium.
+- [x] Surface the supported conversion matrix in the UI
+  - Done: Added a dim hint line directly under the Source/Target bar in
+    `gui_app.py` listing the supported pairs
+    ("FortiGate ↔ Cisco FTD | FortiGate ↔ Palo Alto PAN-OS | Cisco ASA → Palo Alto PAN-OS").
+    The bidirectional arrows cover FG→FTD/FTD→FG and FG→PAN-OS/PA→FG without
+    enumerating each direction separately.
 
 - [x] Preserve user-edited "Output Base Name" across source/target changes
   - Done (v1.6.2): Added `DEFAULT_OUTPUT_BASES = {"", "ftd_config", "pa_config",

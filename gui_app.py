@@ -502,6 +502,19 @@ class App(tk.Tk):
         theme_combo.bind("<<ComboboxSelected>>", self._on_theme_change)
         ttk.Label(platform_frame, text="Theme:").pack(side=tk.RIGHT)
 
+        # Supported conversion matrix hint
+        matrix_frame = ttk.Frame(self)
+        matrix_frame.pack(fill=tk.X, padx=6, pady=(2, 0))
+        ttk.Label(
+            matrix_frame,
+            text=(
+                "Supported pairs:  FortiGate ↔ Cisco FTD   |   "
+                "FortiGate ↔ Palo Alto PAN-OS   |   "
+                "Cisco ASA → Palo Alto PAN-OS"
+            ),
+            foreground=_FG_DIM,
+        ).pack(side=tk.LEFT, padx=(4, 0))
+
         notebook = ttk.Notebook(self)
         notebook.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
         self._notebook = notebook
