@@ -14,6 +14,8 @@ import time
 import urllib3
 from typing import Optional, Tuple
 
+from flair import flair
+
 # Disable SSL warnings for self-signed certificates
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -117,15 +119,15 @@ class FTDBaseClient:
                     "Accept": "application/json",
                 })
 
-                print("Authentication successful!")
+                print(flair("auth", "OK"))
                 return True
             else:
-                print(f"[FAIL] Authentication failed: {response.status_code}")
+                print(flair("auth", "FAIL", detail=f"HTTP {response.status_code}"))
                 print(f"  Response: {response.text}")
                 return False
 
         except requests.exceptions.RequestException as e:
-            print(f"[FAIL] Connection error: {e}")
+            print(flair("auth", "FAIL", detail=f"connection error: {e}"))
             return False
 
     # ------------------------------------------------------------------
@@ -218,12 +220,12 @@ class FTDBaseClient:
                 if resp.status_code == 200:
                     data = resp.json()
                     count = data.get("paging", {}).get("count", "?")
-                    print(f"  [OK]   {label:<25} ({count} objects)")
+                    print(f"  {flair('validate', 'OK', f'{label:<25}', f'{count} objects')}")
                 else:
-                    print(f"  [FAIL] {label:<25} HTTP {resp.status_code}")
+                    print(f"  {flair('validate', 'FAIL', f'{label:<25}', f'HTTP {resp.status_code}')}")
                     all_ok = False
             except requests.exceptions.RequestException as e:
-                print(f"  [FAIL] {label:<25} {e}")
+                print(f"  {flair('validate', 'FAIL', f'{label:<25}', str(e))}")
                 all_ok = False
 
         print(f"{'='*60}")

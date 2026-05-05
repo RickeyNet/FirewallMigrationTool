@@ -96,6 +96,7 @@ echo.
 py -3.14 -m PyInstaller --onefile --windowed ^
     --name "Firewall-Migration-Tool-v%APP_VERSION%" ^
     --icon "app_icon.ico" ^
+    --add-data "app_icon.ico;." ^
     --paths "FortiGateToFTDTool" ^
     --paths "FortiGateToPaloAltoTool" ^
     --paths "CiscoASAToPaloAltoTool" ^

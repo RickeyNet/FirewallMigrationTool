@@ -212,7 +212,7 @@ _TAB_BG   = _t["tab_bg"]
 _OUT_BG   = _t["out_bg"]
 _OUT_FG   = _t["out_fg"]
 
-APP_VERSION = "1.6.2"
+APP_VERSION = "1.7.0"
 
 
 class App(tk.Tk):
@@ -224,13 +224,15 @@ class App(tk.Tk):
         self.geometry("960x720")
         self.minsize(800, 600)
 
-        # Window icon
-        if getattr(sys, "frozen", False):
-            self.iconbitmap(sys.executable)
-        else:
-            icon_path = os.path.join(APP_DIR, "app_icon.ico")
+        # Window icon — load from bundle dir when frozen, project dir otherwise.
+        # Wrapped because a bad/missing .ico must never crash the GUI.
+        try:
+            base = getattr(sys, "_MEIPASS", APP_DIR) if getattr(sys, "frozen", False) else APP_DIR
+            icon_path = os.path.join(base, "app_icon.ico")
             if os.path.isfile(icon_path):
                 self.iconbitmap(icon_path)
+        except tk.TclError:
+            pass
 
         self._running = False
         self._worker_thread: threading.Thread | None = None

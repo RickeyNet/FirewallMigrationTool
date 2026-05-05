@@ -45,6 +45,7 @@ from typing import Dict, List, Optional, Tuple
 from concurrency_utils import run_with_retry, run_indexed_thread_pool
 from platform_profiles import is_ftd_1000, is_ftd_3100
 from ftd_api_base import FTDBaseClient
+from flair import flair
 
 # Disable SSL warnings for self-signed certificates
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -195,7 +196,7 @@ class FTDBulkDelete(FTDBaseClient):
 
         success, vr_id_or_error = self.get_default_virtual_router_id()
         if not success:
-            print(f"  [FAIL] Failed to resolve virtual router: {vr_id_or_error}")
+            print(f"  {flair('validate', 'FAIL', 'virtual router lookup', vr_id_or_error)}")
             return False
 
         vr_id = vr_id_or_error
@@ -240,7 +241,7 @@ class FTDBulkDelete(FTDBaseClient):
 
             if not obj_id:
                 with print_lock:
-                    print(f"  [{idx+1}/{len(routes)}] Skipping: {name} [FAIL] missing id", flush=True)
+                    print(f"  [{idx+1}/{len(routes)}] {flair('delete', 'FAIL', name, 'missing id')}", flush=True)
                     counters["failed"] += 1
                 failure_flag[0] = True
                 return
@@ -253,12 +254,12 @@ class FTDBulkDelete(FTDBaseClient):
             )
             if ok:
                 with print_lock:
-                    print(f"  [{idx+1}/{len(routes)}] Deleting: {name}... [OK]", flush=True)
+                    print(f"  [{idx+1}/{len(routes)}] {flair('delete', 'OK', name)}", flush=True)
                     counters["deleted"] += 1
                 return
 
             with print_lock:
-                print(f"  [{idx+1}/{len(routes)}] Deleting: {name}... [FAIL] {err}", flush=True)
+                print(f"  [{idx+1}/{len(routes)}] {flair('delete', 'FAIL', name, err)}", flush=True)
                 counters["failed"] += 1
                 failed_objects.append((name, err))
             failure_flag[0] = True
@@ -412,7 +413,7 @@ class FTDBulkDelete(FTDBaseClient):
 
             if not obj_id:
                 with print_lock:
-                    print(f"  [{idx+1}/{len(custom_objects)}] Deleting: {name}... [FAIL] missing id", flush=True)
+                    print(f"  [{idx+1}/{len(custom_objects)}] {flair('delete', 'FAIL', name, 'missing id')}", flush=True)
                     counters["failed"] += 1
                 failure_flag[0] = True
                 return
@@ -426,13 +427,13 @@ class FTDBulkDelete(FTDBaseClient):
 
             if success:
                 with print_lock:
-                    status = "[SKIP] already deleted" if error_msg == "already deleted" else "[OK]"
-                    print(f"  [{idx+1}/{len(custom_objects)}] Deleting: {name}... {status}", flush=True)
+                    outcome = "SKIP" if error_msg == "already deleted" else "OK"
+                    print(f"  [{idx+1}/{len(custom_objects)}] {flair('delete', outcome, name)}", flush=True)
                     counters["deleted"] += 1
                 return
 
             with print_lock:
-                print(f"  [{idx+1}/{len(custom_objects)}] Deleting: {name}... [FAIL] {error_msg}", flush=True)
+                print(f"  [{idx+1}/{len(custom_objects)}] {flair('delete', 'FAIL', name, error_msg)}", flush=True)
                 counters["failed"] += 1
                 failed_objects.append((name, error_msg))
             failure_flag[0] = True
@@ -721,15 +722,13 @@ class FTDBulkDelete(FTDBaseClient):
                 print(f"  [{i}/{len(configured_interfaces)}] Would reset: {hardware} ({name})")
                 success_count += 1
             else:
-                print(f"  [{i}/{len(configured_interfaces)}] Resetting: {hardware} ({name})...", end=" ")
-                
                 success, error_msg = self.reset_physical_interface(intf, dry_run)
-                
+                subject = f"{hardware} ({name})"
                 if success:
-                    print("[OK]")
+                    print(f"  [{i}/{len(configured_interfaces)}] {flair('update', 'OK', subject)}")
                     success_count += 1
                 else:
-                    print(f"[FAIL] {error_msg}")
+                    print(f"  [{i}/{len(configured_interfaces)}] {flair('update', 'FAIL', subject, error_msg)}")
                     fail_count += 1
                 
                 time.sleep(delay)
@@ -914,12 +913,12 @@ class FTDBulkDelete(FTDBaseClient):
             )
             if ok:
                 with print_lock:
-                    print(f"  [{idx+1}/{len(all_subinterfaces)}] Deleting: {name}... [OK]", flush=True)
+                    print(f"  [{idx+1}/{len(all_subinterfaces)}] {flair('delete', 'OK', name)}", flush=True)
                     counters["deleted"] += 1
                 return
 
             with print_lock:
-                print(f"  [{idx+1}/{len(all_subinterfaces)}] Deleting: {name}... [FAIL] {err}", flush=True)
+                print(f"  [{idx+1}/{len(all_subinterfaces)}] {flair('delete', 'FAIL', name, err)}", flush=True)
                 counters["failed"] += 1
                 failed_objects.append((name, err))
             failure_flag[0] = True
@@ -1059,14 +1058,14 @@ class FTDBulkDelete(FTDBaseClient):
                 print(f"  [{i}/{len(all_etherchannels)}] Would delete: {name} ({hardware})")
                 success_count += 1
             else:
-                print(f"  [{i}/{len(all_etherchannels)}] Deleting: {name} ({hardware})...", end=" ")
+                subject = f"{name} ({hardware})"
 
                 # --- Disable HA monitoring so the DELETE is allowed -----------
                 ha_ok, ha_err = self._disable_ha_monitor(
                     "/devices/default/etherchannelinterfaces", obj_id, name  # pyright: ignore[reportArgumentType]
                 )
                 if not ha_ok:
-                    print(f"[FAIL] Could not disable HA monitor: {ha_err}")
+                    print(f"  [{i}/{len(all_etherchannels)}] {flair('delete', 'FAIL', subject, f'HA monitor still latched on: {ha_err}')}")
                     fail_count += 1
                     time.sleep(delay)
                     continue
@@ -1075,10 +1074,10 @@ class FTDBulkDelete(FTDBaseClient):
                 success, error_msg = self.delete_object("/devices/default/etherchannelinterfaces", obj_id)  # pyright: ignore[reportArgumentType]
 
                 if success:
-                    print("[OK]")
+                    print(f"  [{i}/{len(all_etherchannels)}] {flair('delete', 'OK', subject)}")
                     success_count += 1
                 else:
-                    print(f"[FAIL] {error_msg}")
+                    print(f"  [{i}/{len(all_etherchannels)}] {flair('delete', 'FAIL', subject, error_msg)}")
                     fail_count += 1
 
                 time.sleep(delay)
@@ -1143,14 +1142,12 @@ class FTDBulkDelete(FTDBaseClient):
                 print(f"  [{i}/{len(all_bridge_groups)}] Would delete: {name}")
                 success_count += 1
             else:
-                print(f"  [{i}/{len(all_bridge_groups)}] Deleting: {name}...", end=" ")
-
                 # --- Disable HA monitoring so the DELETE is allowed -----------
                 ha_ok, ha_err = self._disable_ha_monitor(
                     "/devices/default/bridgegroupinterfaces", obj_id, name  # pyright: ignore[reportArgumentType]
                 )
                 if not ha_ok:
-                    print(f"[FAIL] Could not disable HA monitor: {ha_err}")
+                    print(f"  [{i}/{len(all_bridge_groups)}] {flair('delete', 'FAIL', name, f'HA monitor still latched on: {ha_err}')}")
                     fail_count += 1
                     time.sleep(delay)
                     continue
@@ -1159,10 +1156,10 @@ class FTDBulkDelete(FTDBaseClient):
                 success, error_msg = self.delete_object("/devices/default/bridgegroupinterfaces", obj_id)  # pyright: ignore[reportArgumentType]
 
                 if success:
-                    print("[OK]")
+                    print(f"  [{i}/{len(all_bridge_groups)}] {flair('delete', 'OK', name)}")
                     success_count += 1
                 else:
-                    print(f"[FAIL] {error_msg}")
+                    print(f"  [{i}/{len(all_bridge_groups)}] {flair('delete', 'FAIL', name, error_msg)}")
                     fail_count += 1
 
                 time.sleep(delay)
@@ -1187,15 +1184,15 @@ class FTDBulkDelete(FTDBaseClient):
             response = self.session.post(endpoint, json={}, timeout=30)
             
             if response.status_code in [200, 201, 202]:
-                print("[OK] Deployment initiated")
+                print(flair("deploy", "OK", "configuration changes"))
                 print("  (Deployment may take several minutes)")
                 return True
             else:
-                print(f"[FAIL] Deployment failed: {response.status_code}")
+                print(flair("deploy", "FAIL", "configuration changes", f"HTTP {response.status_code}"))
                 return False
-                
+
         except requests.exceptions.RequestException as e:
-            print(f"[FAIL] Deployment error: {e}")
+            print(flair("deploy", "FAIL", "configuration changes", str(e)))
             return False
 
 
@@ -1540,9 +1537,9 @@ Examples:
             "outcome": outcome,
         }
         if FTDBulkDelete.write_json_report(args.json_report, report_payload):
-            print(f"[OK] JSON report written: {args.json_report}")
+            print(flair("report", "OK", args.json_report))
         else:
-            print(f"[FAIL] Could not write JSON report: {args.json_report}")
+            print(flair("report", "FAIL", args.json_report))
 
     print(f"\n{'='*60}")
     if args.dry_run:
