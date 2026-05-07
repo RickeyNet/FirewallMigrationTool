@@ -1,5 +1,81 @@
 # Release Notes
 
+## v1.7.1 - FDM Token Auto-Refresh on Long Imports
+
+### Overview
+
+Bug-fix release for long FTD imports that were failing partway through with HTTP 401 ("JWT expired") once the FDM access token's ~30-minute lifetime ran out mid-run. The base client already supported `refresh_access_token()`, but the importer's many direct `self.session.*` call sites never invoked it, so any unlucky request after expiry surfaced a `[FAIL]` line and aborted that object.
+
+---
+
+### Bug Fixes
+
+#### Automatic 401 Retry Across Every API Call
+
+- Installed a `requests` session-level response hook on `FTDBaseClient` that catches 401 responses, calls the existing thread-safe `refresh_access_token()`, rewrites the `Authorization` header on the original request, and resends it once.
+- The hook skips the `/fdm/token` endpoint itself (so a refresh attempt cannot recurse during a refresh) and tags retried requests with an internal `_ftd_retried` flag so a genuine post-refresh 401 surfaces normally instead of looping.
+- Because the hook lives on the shared session, every current and future `self.session.{get,post,put,delete}` call in both the importer and cleanup paths inherits the retry without per-call-site changes.
+
+---
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `FortiGateToFTDTool/ftd_api_base.py` | Session response hook `_auto_refresh_hook` registered in `__init__`; refreshes the FDM token on 401 and re-sends the original request once with the new bearer header |
+| `gui_app.py` | Version bumped to 1.7.1 |
+
+---
+
+---
+
+## v1.7.0 - Flair Output & Frozen-Exe Icon Fix
+
+### Overview
+
+Adds personality to operator output across the FTD cleanup and shared FTD API base while preserving the strict `[OK] / [SKIP] / [FAIL]` bracket tags that JSON reports, exit-code logic, and grep-based log scraping depend on. Also fixes a crash on frozen Windows builds where the GUI failed to start with `failed to execute script 'gui_app' due to unhandled exception: bitmap`.
+
+---
+
+### Improvements
+
+#### Flair Phrase System
+
+- New `FortiGateToFTDTool/flair.py` module exposes `flair(action, outcome, subject, detail)` returning lines like `[OK] Yeeted into the void: net-obj-foo` or `[FAIL] Bounced: rule-42 — 422 duplicate name`.
+- Phrase pools are keyed by `(action, outcome)` tuples (`create`, `delete`, `update`, `convert`, `auth`, `validate`, `deploy`, `report`) with random selection per call. Unknown keys fall back to a generic pool so callers never crash on a typo.
+- The leading bracket tag is preserved verbatim — only the message body becomes flavorful — so existing log-parsing tooling continues to work unchanged.
+
+#### Flair Wired Into FTD Cleanup and Shared Base
+
+- `ftd_api_cleanup.py` now emits flair-tagged lines for all delete sites (static routes, custom objects, physical interface resets, subinterfaces, etherchannels, bridge groups, deploy, JSON report).
+- `ftd_api_base.py` emits flair lines for `authenticate()` and per-endpoint `validate_endpoints()` results — and because the FTD importer inherits from `FTDBaseClient`, those lines appear during imports too. Propagation to the importer's own per-object output and to the other five conversion pipelines is staged for a follow-up.
+
+---
+
+### Bug Fixes
+
+#### Frozen-Exe `bitmap` Crash on GUI Start
+
+- `gui_app.py` previously called `self.iconbitmap(sys.executable)` when frozen, which raised `_tkinter.TclError: bitmap "...exe" not defined` on some Windows builds and caused PyInstaller to surface "failed to execute script 'gui_app' due to unhandled exception: bitmap" before the main window appeared.
+- Icon load now resolves `app_icon.ico` from `sys._MEIPASS` when frozen (and from the project directory in dev), and is wrapped in a `try/except tk.TclError` so a missing or unreadable icon can never kill the GUI.
+- `build.bat` adds `--add-data "app_icon.ico;."` so the icon is actually present inside the onefile bundle at runtime — `--icon` alone only sets the exe's shell icon and does not bundle the file.
+
+---
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `FortiGateToFTDTool/flair.py` | **New.** Phrase pools and `flair()` formatter |
+| `FortiGateToFTDTool/ftd_api_cleanup.py` | All 13 `[OK]/[SKIP]/[FAIL]` print sites routed through `flair()` |
+| `FortiGateToFTDTool/ftd_api_base.py` | `authenticate()` and `validate_endpoints()` use `flair()` |
+| `gui_app.py` | Window-icon load uses `sys._MEIPASS` when frozen; wrapped in `try/except tk.TclError`; version bumped to 1.7.0 |
+| `build.bat` | Added `--add-data "app_icon.ico;."` so the icon is bundled into the onefile exe |
+
+---
+
+---
+
 ## v1.6.2 - GUI Source/Target Matrix Polish
 
 ### Overview
