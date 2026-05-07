@@ -1,5 +1,41 @@
 # Release Notes
 
+## v1.7.5 - Security: Redact Password From Command-Line Echo
+
+### Overview
+
+**Security fix.** The fix in this release closes the actual leak the user reported — every previous v1.7.x release still exposed the password the same way. When the GUI launched the importer, cleanup, or converter, it echoed the full argv to the output window as a banner line: `> Import --host 10.10.63.2 --username admin --password Hunter2 ...`. The `--password` value was the operator's plain-text admin password.
+
+This was the root cause of the "password printing in plain text" report. The v1.7.3 / v1.7.4 fixes had cleaned up response bodies and exception strings — but the offender was a one-line `' '.join(argv)` that ran *before* any of those code paths.
+
+---
+
+### Bug Fixes
+
+#### Argv Echo Now Redacts Sensitive Flag Values
+
+- New module-level helper `_redact_argv()` walks the argv list and replaces the value following any flag in `_SENSITIVE_FLAGS = {"--password", "-p", "--api-key", "--token"}` with `***REDACTED***`.
+- `_run_in_thread()` now passes argv through `_redact_argv()` before joining and writing the banner line. The redaction is purely cosmetic — the actual `argv` handed to the worker function is unchanged, so the importer / cleanup / converter still see the real password.
+- The set is centralized so any future credential-bearing CLI flag can be added in one spot.
+
+---
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `gui_app.py` | New `_SENSITIVE_FLAGS` constant and `_redact_argv()` helper at module scope; `_run_in_thread()` uses them when echoing the command-line banner; version bumped to 1.7.5 |
+
+---
+
+### Action Recommended
+
+If you ran any v1.7.x release (or earlier) and the GUI output window may have been visible to anyone else (screen-sharing, screenshots, log files saved from the output, screen recordings), **rotate the affected admin passwords**. The argv echo printed on every single run, regardless of whether anything failed.
+
+---
+
+---
+
 ## v1.7.4 - Security: Codebase-Wide Credential Leak Audit
 
 ### Overview

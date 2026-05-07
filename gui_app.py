@@ -121,6 +121,33 @@ DEFAULT_DIR = APP_DIR
 
 
 # ---------------------------------------------------------------------------
+# argv redaction
+# ---------------------------------------------------------------------------
+# Flags whose immediate value is sensitive and must never be echoed to the
+# output window or logs. Add to this set if a new credential-bearing flag is
+# introduced anywhere the GUI shells out.
+_SENSITIVE_FLAGS = frozenset({"--password", "-p", "--api-key", "--token"})
+
+
+def _redact_argv(argv):
+    """Return a copy of ``argv`` with values following sensitive flags
+    replaced by ``***REDACTED***``. Used before echoing the command line to
+    the GUI output widget so admin passwords don't leak into the run log.
+    """
+    out = []
+    redact_next = False
+    for token in argv:
+        if redact_next:
+            out.append("***REDACTED***")
+            redact_next = False
+            continue
+        out.append(token)
+        if token in _SENSITIVE_FLAGS:
+            redact_next = True
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Stdout / stderr redirection
 # ---------------------------------------------------------------------------
 class _QueueWriter(io.TextIOBase):
@@ -212,7 +239,7 @@ _TAB_BG   = _t["tab_bg"]
 _OUT_BG   = _t["out_bg"]
 _OUT_FG   = _t["out_fg"]
 
-APP_VERSION = "1.7.4"
+APP_VERSION = "1.7.5"
 
 
 class App(tk.Tk):
@@ -1919,7 +1946,7 @@ class App(tk.Tk):
             return
 
         self._clear_output(text_widget)
-        self._append_output(text_widget, f"> {label} {' '.join(argv)}\n\n")
+        self._append_output(text_widget, f"> {label} {' '.join(_redact_argv(argv))}\n\n")
         self._set_buttons_state(tk.DISABLED)
         self._running = True
         self.status_var.set(f"Running: {label}...")
