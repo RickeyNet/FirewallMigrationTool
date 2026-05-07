@@ -63,6 +63,8 @@ class FTDBaseClient:
 
         self.session = requests.Session()
         self.session.verify = verify_ssl
+        # Auto-refresh on 401 for every request made through this session.
+        self.session.hooks["response"].append(self._auto_refresh_hook)
 
         self.access_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
@@ -73,6 +75,39 @@ class FTDBaseClient:
         # Epoch time of the last successful token refresh so threads that
         # wake up after another thread already refreshed don't refresh again.
         self._last_refresh_time: float = 0.0
+
+    # ------------------------------------------------------------------
+    # 401 auto-retry hook
+    # ------------------------------------------------------------------
+    def _auto_refresh_hook(self, response, *args, **kwargs):
+        """Session hook: on 401, refresh the token once and retry the request.
+
+        Skips the auth endpoint itself (refreshing during refresh would loop)
+        and any request already retried (marked via the ``_ftd_retried`` attr).
+        """
+        if response.status_code != 401:
+            return response
+        if getattr(response.request, "_ftd_retried", False):
+            return response
+        if response.request.url and response.request.url.endswith("/fdm/token"):
+            return response
+
+        if not self.refresh_access_token():
+            return response
+
+        new_req = response.request.copy()
+        new_req.headers["Authorization"] = self.session.headers.get("Authorization", "")
+        new_req._ftd_retried = True
+        # Reuse the original send settings (verify, cert, proxies, timeout).
+        send_kwargs = {
+            "verify": kwargs.get("verify", self.session.verify),
+            "cert": kwargs.get("cert", self.session.cert),
+            "proxies": kwargs.get("proxies"),
+            "timeout": kwargs.get("timeout"),
+            "allow_redirects": kwargs.get("allow_redirects", True),
+            "stream": kwargs.get("stream", False),
+        }
+        return self.session.send(new_req, **send_kwargs)
 
     # ------------------------------------------------------------------
     # Authentication
