@@ -157,13 +157,40 @@ class FTDBaseClient:
                 print(flair("auth", "OK"))
                 return True
             else:
-                print(flair("auth", "FAIL", detail=f"HTTP {response.status_code}"))
-                print(f"  Response: {response.text}")
+                # Never dump raw response.text — FDM error replies can echo
+                # submitted form fields including the password. Extract the
+                # description if it's structured JSON; otherwise just the code.
+                detail = self._safe_auth_error(response)
+                print(flair("auth", "FAIL", detail=f"HTTP {response.status_code}: {detail}"))
                 return False
 
         except requests.exceptions.RequestException as e:
-            print(flair("auth", "FAIL", detail=f"connection error: {e}"))
+            print(flair("auth", "FAIL", detail=f"connection error: {self._scrub_secrets(str(e))}"))
             return False
+
+    def _safe_auth_error(self, response) -> str:
+        """Extract a short error description from an FDM auth response.
+
+        Avoids dumping the full body because FDM error replies sometimes
+        include the submitted credentials. Falls back to a generic string
+        if parsing fails or the description would leak the password.
+        """
+        try:
+            data = response.json()
+            messages = data.get("error", {}).get("messages", [])
+            if messages and isinstance(messages[0], dict):
+                desc = str(messages[0].get("description", "")).strip()
+                if desc and (not self.password or self.password not in desc):
+                    return desc
+        except (ValueError, TypeError):
+            pass
+        return "authentication failed"
+
+    def _scrub_secrets(self, text: str) -> str:
+        """Remove the configured password from arbitrary text before logging."""
+        if self.password and text:
+            return text.replace(self.password, "***REDACTED***")
+        return text
 
     # ------------------------------------------------------------------
     # Token refresh

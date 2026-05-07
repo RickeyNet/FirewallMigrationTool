@@ -94,9 +94,12 @@ class PANOSBaseClient:
         print(f"{'=' * 60}")
 
         try:
-            resp = self.session.get(
+            # POST the credentials in the form body, never in the URL query
+            # string — otherwise the password appears in connection-error
+            # tracebacks, proxy logs, and any tool that echoes request URLs.
+            resp = self.session.post(
                 self.base_url,
-                params={
+                data={
                     "type": "keygen",
                     "user": self.username,
                     "password": self.password,
@@ -118,15 +121,25 @@ class PANOSBaseClient:
                     print("Authentication successful!")
                     return True
 
-            # Parse error message
+            # Parse error message — never fall through to raw resp.text since
+            # PAN-OS error replies sometimes echo submitted parameters.
             msg_elem = root.find(".//msg") or root.find(".//line")
-            msg = msg_elem.text if msg_elem is not None else resp.text
+            msg = msg_elem.text if msg_elem is not None else "auth failed"
             print(f"[FAIL] Authentication failed: {msg}")
             return False
 
         except requests.exceptions.RequestException as e:
-            print(f"[FAIL] Connection error: {e}")
+            # Defense-in-depth: scrub any password value that might appear in
+            # the exception string (e.g. if a future caller reverts to GET or
+            # an underlying library echoes the URL).
+            print(f"[FAIL] Connection error: {self._scrub_secrets(str(e))}")
             return False
+
+    def _scrub_secrets(self, text: str) -> str:
+        """Remove the configured password from arbitrary text before logging."""
+        if self.password and text:
+            return text.replace(self.password, "***REDACTED***")
+        return text
 
     # ------------------------------------------------------------------
     # Configuration operations
@@ -364,11 +377,19 @@ class PANOSBaseClient:
                     print("Connection validated successfully.")
                     return True
 
-            print(f"  [FAIL] Unexpected response: {resp.text[:200]}")
+            # Don't dump raw resp.text — PAN-OS error replies can echo input
+            # parameters. Extract the <msg>/<line> element if available.
+            try:
+                root = ET.fromstring(resp.text)
+                msg_elem = root.find(".//msg") or root.find(".//line")
+                msg = msg_elem.text if msg_elem is not None and msg_elem.text else "unexpected response"
+            except ET.ParseError:
+                msg = "unexpected response"
+            print(f"  [FAIL] {msg}")
             return False
 
         except requests.exceptions.RequestException as e:
-            print(f"  [FAIL] Connection error: {e}")
+            print(f"  [FAIL] Connection error: {self._scrub_secrets(str(e))}")
             return False
 
     @staticmethod

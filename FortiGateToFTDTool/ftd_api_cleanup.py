@@ -166,7 +166,15 @@ class FTDBulkDelete(FTDBaseClient):
                 else:
                     print(f"    Warning: HTTP {response.status_code}")
                     if self.debug:
-                        print(f"    Response: {response.text[:200]}")
+                        # Only print the parsed error description, never the
+                        # raw body — FDM error replies can echo submitted form
+                        # fields including credentials.
+                        try:
+                            err = response.json().get("error", {}).get("messages", [{}])[0].get("description", "")
+                            if err:
+                                print(f"    Response: {err}")
+                        except (ValueError, TypeError, KeyError):
+                            pass
                     break
             
             print(f"  Total retrieved: {len(all_items)} objects")

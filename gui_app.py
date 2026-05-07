@@ -212,7 +212,7 @@ _TAB_BG   = _t["tab_bg"]
 _OUT_BG   = _t["out_bg"]
 _OUT_FG   = _t["out_fg"]
 
-APP_VERSION = "1.7.1"
+APP_VERSION = "1.7.4"
 
 
 class App(tk.Tk):
@@ -1942,10 +1942,16 @@ class App(tk.Tk):
                     (text_widget, f"\n--- Finished (exit code {code}) ---\n"),
                 )
             except Exception as exc:
+                # Scrub any operator passwords typed into the GUI before
+                # surfacing the exception or traceback — defense in depth in
+                # case a future code path puts credentials into a URL or body
+                # that ends up in a network exception string.
+                err_text = self._scrub_secrets(str(exc))
+                tb_text = self._scrub_secrets(traceback.format_exc())
                 self._output_queue.put(
-                    (text_widget, f"\n--- ERROR: {exc} ---\n"),
+                    (text_widget, f"\n--- ERROR: {err_text} ---\n"),
                 )
-                self._output_queue.put((text_widget, traceback.format_exc()))
+                self._output_queue.put((text_widget, tb_text))
             finally:
                 sys.stdout = old_stdout
                 sys.stderr = old_stderr
@@ -1954,6 +1960,27 @@ class App(tk.Tk):
         self._worker_thread = threading.Thread(target=_worker, daemon=True)
         self._worker_thread.start()
         self._poll_output()
+
+    def _scrub_secrets(self, text: str) -> str:
+        """Redact any operator passwords typed into the GUI from arbitrary text.
+
+        Used on exception strings and tracebacks before they are written to
+        the output window, so a network error that happens to embed
+        credentials in a URL never shows them in plaintext.
+        """
+        if not text:
+            return text
+        for var_name in ("imp_pass_var", "cln_pass_var"):
+            var = getattr(self, var_name, None)
+            if var is None:
+                continue
+            try:
+                pw = var.get()
+            except tk.TclError:
+                continue
+            if pw and len(pw) >= 1:
+                text = text.replace(pw, "***REDACTED***")
+        return text
 
     def _poll_output(self):
         """Drain the output queue and schedule the next poll."""

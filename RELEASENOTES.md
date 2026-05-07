@@ -1,5 +1,137 @@
 # Release Notes
 
+## v1.7.4 - Security: Codebase-Wide Credential Leak Audit
+
+### Overview
+
+Follow-up to v1.7.3. After fixing the two confirmed leaks in PAN-OS keygen and FTD authenticate, an audit across all five conversion pipelines and the GUI surfaced eight more spots where raw `response.text` could reach the output window. None were as severe as the v1.7.3 finds (most were post-auth and only a leak risk if the FDM/PAN-OS response happened to echo submitted form fields), but they were closed for defense in depth. The GUI's catch-all exception handler now also scrubs any password typed into the Import or Cleanup tabs before writing the exception or traceback to the output window.
+
+---
+
+### Bug Fixes
+
+#### FTD Importer — Eight Sites Routed Through `_extract_error_message`
+
+- `_create_api_object` 4xx/5xx fallback ([ftd_api_importer.py:394](FortiGateToFTDTool/ftd_api_importer.py#L394))
+- Interface-list fetch warning ([ftd_api_importer.py:657](FortiGateToFTDTool/ftd_api_importer.py#L657))
+- Deployment failure response ([ftd_api_importer.py:2032](FortiGateToFTDTool/ftd_api_importer.py#L2032))
+- Interface lookup pagination error ([ftd_api_importer.py:980](FortiGateToFTDTool/ftd_api_importer.py#L980))
+- Interface PUT 422/non-200 returns ([ftd_api_importer.py:1410-1412](FortiGateToFTDTool/ftd_api_importer.py#L1410-L1412))
+- Subinterface POST 422/non-200 returns ([ftd_api_importer.py:1594-1597](FortiGateToFTDTool/ftd_api_importer.py#L1594-L1597))
+
+All now emit only the parsed FDM `error.messages[0].description` instead of dumping the raw response body.
+
+#### FTD Cleanup — Debug Response Print Sanitized
+
+- `ftd_api_cleanup.py` debug-mode print now extracts only the FDM error description; the raw `response.text[:200]` dump is gone.
+
+#### Cisco FTD → FortiGate Reader — Pagination Warning Sanitized
+
+- `CiscoFTDToFortiGateTool/ftd_reader.py` HTTP-error warning during paginated GETs now extracts only the parsed error description.
+
+#### PAN-OS Validation — Unexpected-Response Print Parsed
+
+- `panos_api_base.py` validation path no longer dumps `resp.text[:200]`. It now parses the `<msg>` / `<line>` element and only that. The connection-error branch on the same path uses `_scrub_secrets()` for symmetry with `authenticate()`.
+
+#### GUI Exception Handler — Output Scrubbed
+
+- `gui_app.py` catch-all `except Exception` now passes both the exception string and the full traceback through a new `_scrub_secrets()` helper that replaces any text matching `imp_pass_var` or `cln_pass_var` with `***REDACTED***`. Backstop for any future code path that might surface credentials in a URL or request body.
+
+---
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `FortiGateToFTDTool/ftd_api_importer.py` | 8 `response.text` print/return sites routed through `_extract_error_message()` |
+| `FortiGateToFTDTool/ftd_api_cleanup.py` | Debug-gated response print parses error description instead of raw body |
+| `CiscoFTDToFortiGateTool/ftd_reader.py` | Paginated-GET warning extracts FDM error description; raw body never printed |
+| `FortiGateToPaloAltoTool/panos_api_base.py` | Validation `[FAIL]` path parses `<msg>`/`<line>` only; connection error uses `_scrub_secrets()` |
+| `gui_app.py` | New `_scrub_secrets()` helper; catch-all exception handler scrubs both `str(exc)` and `traceback.format_exc()` before queueing them to the output widget; version bumped to 1.7.4 |
+
+---
+
+---
+
+## v1.7.3 - Security: Stop Leaking Passwords to the Output Window
+
+### Overview
+
+**Security fix.** Two paths in the authentication flow could leak the user-supplied admin password into the GUI output window in plain text:
+
+1. **PAN-OS keygen** sent `user` and `password` as URL **query string** parameters via HTTP GET. On a connection error, `requests.exceptions.RequestException`'s string form includes the full URL — so the password ended up in the `[FAIL] Connection error:` line printed to the output window.
+2. **FTD authenticate** dumped the raw `response.text` on a non-200 reply. FDM error responses can echo the submitted form payload (including the password) back in the body, so a wrong-password attempt could surface the typed password in the output.
+
+Anyone with access to the GUI window, a copy of a screen recording, or a log file from a failed run could read the credentials in plain text. Upgrade and rotate any passwords that may have appeared in shared output.
+
+---
+
+### Bug Fixes
+
+#### PAN-OS Keygen No Longer Puts the Password in the URL
+
+- `panos_api_base.py` now POSTs `user` / `password` / `type=keygen` as form data instead of GETting them as URL query parameters. The credentials never appear in the request line, so connection-error tracebacks, proxy logs, and `requests` exception strings can no longer expose them.
+- The auth-failure branch no longer falls through to raw `resp.text` — only the parsed `<msg>` / `<line>` element is printed, with a generic `"auth failed"` fallback if parsing fails.
+- Connection-error messages are passed through a `_scrub_secrets()` helper that replaces any occurrence of the configured password with `***REDACTED***` as a defense-in-depth backstop.
+
+#### FTD Authenticate No Longer Dumps Raw Response Bodies
+
+- `ftd_api_base.py` no longer prints `response.text` on auth failure. A new `_safe_auth_error()` helper extracts only the FDM error description from the structured JSON reply, refuses to print the description if it contains the password, and falls back to `"authentication failed"` if anything looks off. The HTTP status code is still surfaced.
+- The `RequestException` branch now scrubs the configured password out of the exception string before printing, mirroring the PAN-OS path.
+
+---
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `FortiGateToPaloAltoTool/panos_api_base.py` | `authenticate()` switched from GET-with-query-params to POST-with-form-body; removed raw `resp.text` fallback in error message; added `_scrub_secrets()` helper used on the connection-error branch |
+| `FortiGateToFTDTool/ftd_api_base.py` | Removed `print(f"  Response: {response.text}")` on auth failure; new `_safe_auth_error()` extracts the FDM error description without leaking; new `_scrub_secrets()` helper redacts the password from connection-error strings |
+| `gui_app.py` | Version bumped to 1.7.3 |
+
+---
+
+### Action Recommended
+
+If any operator passwords were typed into the tool while running 1.7.2 or earlier and the run produced a `[FAIL] Connection error:` or `[FAIL] HTTP ...` line during authentication that anyone else might have seen, **rotate those passwords**.
+
+---
+
+---
+
+## v1.7.2 - Skip Updates That Wouldn't Change Anything
+
+### Overview
+
+Bug-fix release for FTD imports that produced a flood of `[FAIL] Update failed:` lines on address objects (and other object types) that already existed on the target FDM. With `update_existing` enabled, the importer was unconditionally PUTting every duplicate, which FDM frequently rejects when the payload is semantically identical to the existing object. The importer now compares first and only updates when something actually changed.
+
+---
+
+### Bug Fixes
+
+#### Pre-Update Equality Check
+
+- `_update_existing_object` now strips FDM bookkeeping fields (`id`, `version`, `links`, `self`, `metadata`, `isSystemDefined`, `kind`) from both sides and compares the remaining value-bearing fields. If every field present in the new payload already matches the existing object, the importer records `_skipped` and returns `[SKIP] identical to existing '<name>'` without ever issuing the PUT.
+- Applies to every object type that flows through `_update_existing_object` — network objects and groups, port objects and groups, access rules, and static routes.
+- `type` is intentionally **not** stripped from the comparison because it is part of the object's identity (e.g. `HOST` vs `NETWORK` vs `RANGE` on a NetworkObject); a change there means a genuinely different object even if the name and value happened to match.
+
+#### More Useful Update-Failure Messages
+
+- When an update genuinely does fail, the error line now leads with the HTTP status code: `[FAIL] Update failed (HTTP 422): <description>` instead of just `[FAIL] Update failed: <description>`. Makes debugging future failures actionable at a glance without digging into logs.
+
+---
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `FortiGateToFTDTool/ftd_api_importer.py` | New `_payload_matches_existing()` helper and `_FDM_META_KEYS` constant; `_update_existing_object()` short-circuits to SKIP when the payload would be a no-op; failure message includes HTTP status |
+| `gui_app.py` | Version bumped to 1.7.2 |
+
+---
+
+---
+
 ## v1.7.1 - FDM Token Auto-Refresh on Long Imports
 
 ### Overview

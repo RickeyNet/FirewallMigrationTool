@@ -236,6 +236,36 @@ class FTDAPIClient(FTDBaseClient):
         except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
             return False, str(e)
 
+    # FDM bookkeeping fields that are present on every GET response but never
+    # part of the converter's create payload. Excluded from the
+    # equality check so two semantically identical objects compare equal.
+    _FDM_META_KEYS = frozenset({
+        "id", "version", "links", "self", "metadata",
+        "isSystemDefined", "kind",  # "type" is intentionally NOT in here:
+                                    # it's part of the object's identity (e.g.
+                                    # HOST vs NETWORK vs RANGE for NetworkObject)
+    })
+
+    def _payload_matches_existing(self, existing: Dict, payload: Dict) -> bool:
+        """
+        Return True if ``payload`` would not actually change ``existing``.
+
+        Compares value-bearing fields only — FDM bookkeeping (id, version,
+        links, metadata, ...) is dropped from both sides. For any field
+        present in the new payload, the existing value must match. Existing
+        fields not mentioned in the payload are tolerated (FDM defaults).
+        """
+        def _strip(d: Dict) -> Dict:
+            return {k: v for k, v in d.items() if k not in self._FDM_META_KEYS}
+
+        existing_clean = _strip(existing)
+        payload_clean = _strip(payload)
+
+        for key, new_val in payload_clean.items():
+            if existing_clean.get(key) != new_val:
+                return False
+        return True
+
     def _update_existing_object(
         self,
         endpoint: str,
@@ -272,6 +302,14 @@ class FTDAPIClient(FTDBaseClient):
                 self.record_stat(f"{stat_prefix}_failed")
             return False, f"Existing object has no ID: {obj_name}"
 
+        # Short-circuit: if every value-bearing field already matches what we
+        # would PUT, treat as SKIP — no need to hit the API and no risk of an
+        # FDM "no changes detected" rejection.
+        if self._payload_matches_existing(existing, payload):
+            if track_stats:
+                self.record_stat(f"{stat_prefix}_skipped")
+            return True, f"SKIPPED: identical to existing '{obj_name}'"
+
         # Merge: keep the existing id/version, apply new payload on top
         update_payload = dict(existing)
         update_payload.update(payload)
@@ -290,7 +328,7 @@ class FTDAPIClient(FTDBaseClient):
             if track_stats:
                 self.record_stat(f"{stat_prefix}_failed")
             error_msg = self._extract_error_message(response, response.text)
-            return False, f"Update failed: {error_msg}"
+            return False, f"Update failed (HTTP {response.status_code}): {error_msg}"
         except requests.exceptions.RequestException as e:
             if track_stats:
                 self.record_stat(f"{stat_prefix}_failed")
@@ -353,7 +391,7 @@ class FTDAPIClient(FTDBaseClient):
 
             if track_stats:
                 self.record_stat(f"{stat_prefix}_failed")
-            return False, response.text
+            return False, self._extract_error_message(response)
 
         except requests.exceptions.RequestException as e:
             if track_stats:
@@ -616,7 +654,7 @@ class FTDAPIClient(FTDBaseClient):
 
                 if response.status_code != 200:
                     print(f"[WARN] Could not fetch interfaces list: {response.status_code}")
-                    print(f"       {response.text}")
+                    print(f"       {self._extract_error_message(response)}")
                     return
 
                 data = response.json()
@@ -939,8 +977,8 @@ class FTDAPIClient(FTDBaseClient):
                     
                     offset += limit
                 else:
-                    return False, f"HTTP {response.status_code}: {response.text}"
-            
+                    return False, f"HTTP {response.status_code}: {self._extract_error_message(response)}"
+
             # Search for the interface (case-insensitive)
             for intf in all_interfaces:
                 intf_hardware = intf.get('hardwareName', '').lower().strip()
@@ -1364,14 +1402,10 @@ class FTDAPIClient(FTDBaseClient):
             if response.status_code in [200, 201]:
                 return True, ""
             elif response.status_code == 422:
-                try:
-                    error_data = response.json()
-                    error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', 'Unknown error')
-                    return False, error_msg
-                except:
-                    return False, f"HTTP 422: {response.text[:200]}"
+                error_msg = self._extract_error_message(response)
+                return False, f"HTTP 422: {error_msg}"
             else:
-                return False, f"HTTP {response.status_code}: {response.text[:200]}"
+                return False, f"HTTP {response.status_code}: {self._extract_error_message(response)}"
                 
         except requests.exceptions.RequestException as e:
             return False, str(e)
@@ -1553,10 +1587,10 @@ class FTDAPIClient(FTDBaseClient):
                     return False, f"422: {error_msg}"
                 except (ValueError, TypeError, KeyError):
                     self.stats["subinterfaces_failed"] += 1
-                    return False, f"422: {response.text[:300]}"
+                    return False, f"422: {self._extract_error_message(response)}"
             else:
                 self.stats["subinterfaces_failed"] += 1
-                return False, f"HTTP {response.status_code}: {response.text[:300]}"
+                return False, f"HTTP {response.status_code}: {self._extract_error_message(response)}"
                 
         except requests.exceptions.RequestException as e:
             self.stats["subinterfaces_failed"] += 1
@@ -1991,7 +2025,7 @@ class FTDAPIClient(FTDBaseClient):
                 return True
             else:
                 print(f"FAIL Deployment failed: {response.status_code}")
-                print(f"  Response: {response.text}")
+                print(f"  Response: {self._extract_error_message(response)}")
                 return False
                 
         except requests.exceptions.RequestException as e:
