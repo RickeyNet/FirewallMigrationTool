@@ -14,7 +14,7 @@ OUTPUT FILES (same schema as the FortiGate→PAN-OS converter):
     {basename}_security_rules.json
     {basename}_static_routes.json
     {basename}_zones.json
-    {basename}_nat_rules.json        (ASA NAT — for manual review)
+    {basename}_nat_rules.json        (ASA NAT - for manual review)
     {basename}_metadata.json
     {basename}_summary.json
 
@@ -57,7 +57,7 @@ def write_json_file(path: str, data: object, pretty: bool = False) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Conversion functions — each mirrors the PAN-OS JSON output schema
+# Conversion functions - each mirrors the PAN-OS JSON output schema
 # ═══════════════════════════════════════════════════════════════════════════
 
 def convert_interfaces(
@@ -274,7 +274,7 @@ def convert_service_objects(
         dst_port = svc.get("dst_port", "")
 
         if not protocol or protocol in ("icmp", "icmp6", "ip"):
-            print(f"  Skipped: {svc_name} (protocol '{protocol}' — "
+            print(f"  Skipped: {svc_name} (protocol '{protocol}' - "
                   f"no PAN-OS service equivalent)")
             continue
 
@@ -483,7 +483,7 @@ def convert_security_rules(
             protocol = ace.get("protocol", "")
             desc_parts = [f"ASA ACL: {acl_name}"]
             if protocol == "icmp":
-                desc_parts.append("(ICMP — review application setting)")
+                desc_parts.append("(ICMP - review application setting)")
             description = " ".join(desc_parts)
 
             rule: Dict[str, Any] = {
@@ -556,7 +556,7 @@ def _resolve_ace_service(
     if protocol in ("ip", ""):
         return ["any"]
 
-    # ICMP — no port-based service object
+    # ICMP - no port-based service object
     if protocol in ("icmp", "icmp6"):
         return ["any"]
 
@@ -606,7 +606,7 @@ def _resolve_port_spec(
         elif ptype == "lt":
             port_val = f"1-{int(port) - 1}" if port.isdigit() else port
         else:
-            port_val = port  # neq — approximate
+            port_val = port  # neq - approximate
         svc_name = sanitize_name(f"{protocol}_{ptype}_{port}")
         if svc_name not in inline_services:
             inline_services[svc_name] = {
@@ -640,7 +640,7 @@ def _dedup_name(name: str, used: Set[str]) -> str:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def main(argv=None):
-    """Main function — parse ASA config and produce PAN-OS JSON files."""
+    """Main function - parse ASA config and produce PAN-OS JSON files."""
 
     parser = argparse.ArgumentParser(
         description="Convert Cisco ASA configuration to Palo Alto PAN-OS format",
@@ -918,7 +918,7 @@ Examples:
     if nat_rules:
         print(f"\n  NOTE: {len(nat_rules)} NAT rule(s) saved to "
               f"{base}_nat_rules.json")
-        print("        NAT requires manual review — PAN-OS NAT differs "
+        print("        NAT requires manual review - PAN-OS NAT differs "
               "significantly from ASA.")
 
     print("\n" + "=" * 60)

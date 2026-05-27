@@ -157,7 +157,7 @@ class FTDBaseClient:
                 print(flair("auth", "OK"))
                 return True
             else:
-                # Never dump raw response.text — FDM error replies can echo
+                # Never dump raw response.text - FDM error replies can echo
                 # submitted form fields including the password. Extract the
                 # description if it's structured JSON; otherwise just the code.
                 detail = self._safe_auth_error(response)

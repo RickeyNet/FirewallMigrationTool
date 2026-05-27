@@ -54,7 +54,7 @@ class PANOSBaseClient:
     """Shared base for PAN-OS XML API clients.
 
     Provides:
-        - ``authenticate()`` — obtain API key
+        - ``authenticate()`` - obtain API key
         - ``config_set()`` / ``config_get()`` / ``config_delete()``
         - ``commit()`` with job polling
         - ``validate_connection()``
@@ -95,7 +95,7 @@ class PANOSBaseClient:
 
         try:
             # POST the credentials in the form body, never in the URL query
-            # string — otherwise the password appears in connection-error
+            # string - otherwise the password appears in connection-error
             # tracebacks, proxy logs, and any tool that echoes request URLs.
             resp = self.session.post(
                 self.base_url,
@@ -121,7 +121,7 @@ class PANOSBaseClient:
                     print("Authentication successful!")
                     return True
 
-            # Parse error message — never fall through to raw resp.text since
+            # Parse error message - never fall through to raw resp.text since
             # PAN-OS error replies sometimes echo submitted parameters.
             msg_elem = root.find(".//msg") or root.find(".//line")
             msg = msg_elem.text if msg_elem is not None else "auth failed"
@@ -377,7 +377,7 @@ class PANOSBaseClient:
                     print("Connection validated successfully.")
                     return True
 
-            # Don't dump raw resp.text — PAN-OS error replies can echo input
+            # Don't dump raw resp.text - PAN-OS error replies can echo input
             # parameters. Extract the <msg>/<line> element if available.
             try:
                 root = ET.fromstring(resp.text)

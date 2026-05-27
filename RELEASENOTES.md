@@ -4,9 +4,9 @@
 
 ### Overview
 
-**Security fix.** The fix in this release closes the actual leak the user reported — every previous v1.7.x release still exposed the password the same way. When the GUI launched the importer, cleanup, or converter, it echoed the full argv to the output window as a banner line: `> Import --host 10.10.63.2 --username admin --password Hunter2 ...`. The `--password` value was the operator's plain-text admin password.
+**Security fix.** The fix in this release closes the actual leak the user reported - every previous v1.7.x release still exposed the password the same way. When the GUI launched the importer, cleanup, or converter, it echoed the full argv to the output window as a banner line: `> Import --host 10.10.63.2 --username admin --password Hunter2 ...`. The `--password` value was the operator's plain-text admin password.
 
-This was the root cause of the "password printing in plain text" report. The v1.7.3 / v1.7.4 fixes had cleaned up response bodies and exception strings — but the offender was a one-line `' '.join(argv)` that ran *before* any of those code paths.
+This was the root cause of the "password printing in plain text" report. The v1.7.3 / v1.7.4 fixes had cleaned up response bodies and exception strings - but the offender was a one-line `' '.join(argv)` that ran *before* any of those code paths.
 
 ---
 
@@ -15,7 +15,7 @@ This was the root cause of the "password printing in plain text" report. The v1.
 #### Argv Echo Now Redacts Sensitive Flag Values
 
 - New module-level helper `_redact_argv()` walks the argv list and replaces the value following any flag in `_SENSITIVE_FLAGS = {"--password", "-p", "--api-key", "--token"}` with `***REDACTED***`.
-- `_run_in_thread()` now passes argv through `_redact_argv()` before joining and writing the banner line. The redaction is purely cosmetic — the actual `argv` handed to the worker function is unchanged, so the importer / cleanup / converter still see the real password.
+- `_run_in_thread()` now passes argv through `_redact_argv()` before joining and writing the banner line. The redaction is purely cosmetic - the actual `argv` handed to the worker function is unchanged, so the importer / cleanup / converter still see the real password.
 - The set is centralized so any future credential-bearing CLI flag can be added in one spot.
 
 ---
@@ -46,7 +46,7 @@ Follow-up to v1.7.3. After fixing the two confirmed leaks in PAN-OS keygen and F
 
 ### Bug Fixes
 
-#### FTD Importer — Eight Sites Routed Through `_extract_error_message`
+#### FTD Importer - Eight Sites Routed Through `_extract_error_message`
 
 - `_create_api_object` 4xx/5xx fallback ([ftd_api_importer.py:394](FortiGateToFTDTool/ftd_api_importer.py#L394))
 - Interface-list fetch warning ([ftd_api_importer.py:657](FortiGateToFTDTool/ftd_api_importer.py#L657))
@@ -57,19 +57,19 @@ Follow-up to v1.7.3. After fixing the two confirmed leaks in PAN-OS keygen and F
 
 All now emit only the parsed FDM `error.messages[0].description` instead of dumping the raw response body.
 
-#### FTD Cleanup — Debug Response Print Sanitized
+#### FTD Cleanup - Debug Response Print Sanitized
 
 - `ftd_api_cleanup.py` debug-mode print now extracts only the FDM error description; the raw `response.text[:200]` dump is gone.
 
-#### Cisco FTD → FortiGate Reader — Pagination Warning Sanitized
+#### Cisco FTD → FortiGate Reader - Pagination Warning Sanitized
 
 - `CiscoFTDToFortiGateTool/ftd_reader.py` HTTP-error warning during paginated GETs now extracts only the parsed error description.
 
-#### PAN-OS Validation — Unexpected-Response Print Parsed
+#### PAN-OS Validation - Unexpected-Response Print Parsed
 
 - `panos_api_base.py` validation path no longer dumps `resp.text[:200]`. It now parses the `<msg>` / `<line>` element and only that. The connection-error branch on the same path uses `_scrub_secrets()` for symmetry with `authenticate()`.
 
-#### GUI Exception Handler — Output Scrubbed
+#### GUI Exception Handler - Output Scrubbed
 
 - `gui_app.py` catch-all `except Exception` now passes both the exception string and the full traceback through a new `_scrub_secrets()` helper that replaces any text matching `imp_pass_var` or `cln_pass_var` with `***REDACTED***`. Backstop for any future code path that might surface credentials in a URL or request body.
 
@@ -95,7 +95,7 @@ All now emit only the parsed FDM `error.messages[0].description` instead of dump
 
 **Security fix.** Two paths in the authentication flow could leak the user-supplied admin password into the GUI output window in plain text:
 
-1. **PAN-OS keygen** sent `user` and `password` as URL **query string** parameters via HTTP GET. On a connection error, `requests.exceptions.RequestException`'s string form includes the full URL — so the password ended up in the `[FAIL] Connection error:` line printed to the output window.
+1. **PAN-OS keygen** sent `user` and `password` as URL **query string** parameters via HTTP GET. On a connection error, `requests.exceptions.RequestException`'s string form includes the full URL - so the password ended up in the `[FAIL] Connection error:` line printed to the output window.
 2. **FTD authenticate** dumped the raw `response.text` on a non-200 reply. FDM error responses can echo the submitted form payload (including the password) back in the body, so a wrong-password attempt could surface the typed password in the output.
 
 Anyone with access to the GUI window, a copy of a screen recording, or a log file from a failed run could read the credentials in plain text. Upgrade and rotate any passwords that may have appeared in shared output.
@@ -107,7 +107,7 @@ Anyone with access to the GUI window, a copy of a screen recording, or a log fil
 #### PAN-OS Keygen No Longer Puts the Password in the URL
 
 - `panos_api_base.py` now POSTs `user` / `password` / `type=keygen` as form data instead of GETting them as URL query parameters. The credentials never appear in the request line, so connection-error tracebacks, proxy logs, and `requests` exception strings can no longer expose them.
-- The auth-failure branch no longer falls through to raw `resp.text` — only the parsed `<msg>` / `<line>` element is printed, with a generic `"auth failed"` fallback if parsing fails.
+- The auth-failure branch no longer falls through to raw `resp.text` - only the parsed `<msg>` / `<line>` element is printed, with a generic `"auth failed"` fallback if parsing fails.
 - Connection-error messages are passed through a `_scrub_secrets()` helper that replaces any occurrence of the configured password with `***REDACTED***` as a defense-in-depth backstop.
 
 #### FTD Authenticate No Longer Dumps Raw Response Bodies
@@ -148,7 +148,7 @@ Bug-fix release for FTD imports that produced a flood of `[FAIL] Update failed:`
 #### Pre-Update Equality Check
 
 - `_update_existing_object` now strips FDM bookkeeping fields (`id`, `version`, `links`, `self`, `metadata`, `isSystemDefined`, `kind`) from both sides and compares the remaining value-bearing fields. If every field present in the new payload already matches the existing object, the importer records `_skipped` and returns `[SKIP] identical to existing '<name>'` without ever issuing the PUT.
-- Applies to every object type that flows through `_update_existing_object` — network objects and groups, port objects and groups, access rules, and static routes.
+- Applies to every object type that flows through `_update_existing_object` - network objects and groups, port objects and groups, access rules, and static routes.
 - `type` is intentionally **not** stripped from the comparison because it is part of the object's identity (e.g. `HOST` vs `NETWORK` vs `RANGE` on a NetworkObject); a change there means a genuinely different object even if the name and value happened to match.
 
 #### More Useful Update-Failure Messages
@@ -209,14 +209,14 @@ Adds personality to operator output across the FTD cleanup and shared FTD API ba
 
 #### Flair Phrase System
 
-- New `FortiGateToFTDTool/flair.py` module exposes `flair(action, outcome, subject, detail)` returning lines like `[OK] Yeeted into the void: net-obj-foo` or `[FAIL] Bounced: rule-42 — 422 duplicate name`.
+- New `FortiGateToFTDTool/flair.py` module exposes `flair(action, outcome, subject, detail)` returning lines like `[OK] Yeeted into the void: net-obj-foo` or `[FAIL] Bounced: rule-42 - 422 duplicate name`.
 - Phrase pools are keyed by `(action, outcome)` tuples (`create`, `delete`, `update`, `convert`, `auth`, `validate`, `deploy`, `report`) with random selection per call. Unknown keys fall back to a generic pool so callers never crash on a typo.
-- The leading bracket tag is preserved verbatim — only the message body becomes flavorful — so existing log-parsing tooling continues to work unchanged.
+- The leading bracket tag is preserved verbatim - only the message body becomes flavorful - so existing log-parsing tooling continues to work unchanged.
 
 #### Flair Wired Into FTD Cleanup and Shared Base
 
 - `ftd_api_cleanup.py` now emits flair-tagged lines for all delete sites (static routes, custom objects, physical interface resets, subinterfaces, etherchannels, bridge groups, deploy, JSON report).
-- `ftd_api_base.py` emits flair lines for `authenticate()` and per-endpoint `validate_endpoints()` results — and because the FTD importer inherits from `FTDBaseClient`, those lines appear during imports too. Propagation to the importer's own per-object output and to the other five conversion pipelines is staged for a follow-up.
+- `ftd_api_base.py` emits flair lines for `authenticate()` and per-endpoint `validate_endpoints()` results - and because the FTD importer inherits from `FTDBaseClient`, those lines appear during imports too. Propagation to the importer's own per-object output and to the other five conversion pipelines is staged for a follow-up.
 
 ---
 
@@ -226,7 +226,7 @@ Adds personality to operator output across the FTD cleanup and shared FTD API ba
 
 - `gui_app.py` previously called `self.iconbitmap(sys.executable)` when frozen, which raised `_tkinter.TclError: bitmap "...exe" not defined` on some Windows builds and caused PyInstaller to surface "failed to execute script 'gui_app' due to unhandled exception: bitmap" before the main window appeared.
 - Icon load now resolves `app_icon.ico` from `sys._MEIPASS` when frozen (and from the project directory in dev), and is wrapped in a `try/except tk.TclError` so a missing or unreadable icon can never kill the GUI.
-- `build.bat` adds `--add-data "app_icon.ico;."` so the icon is actually present inside the onefile bundle at runtime — `--icon` alone only sets the exe's shell icon and does not bundle the file.
+- `build.bat` adds `--add-data "app_icon.ico;."` so the icon is actually present inside the onefile bundle at runtime - `--icon` alone only sets the exe's shell icon and does not bundle the file.
 
 ---
 

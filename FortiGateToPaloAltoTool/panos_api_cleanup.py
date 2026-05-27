@@ -216,7 +216,7 @@ class PANOSBulkDelete(PANOSBaseClient):
     def _reset_ethernet_interfaces(self) -> None:
         """Reset ethernet interfaces by removing layer3 config and comments.
 
-        Physical ethernet interfaces can't be deleted on PAN-OS — they're
+        Physical ethernet interfaces can't be deleted on PAN-OS - they're
         hardware entries. Instead we remove the layer3 config (IP, MTU, etc.)
         and any comments/aggregate-group assignments.
         """
@@ -331,7 +331,7 @@ Examples:
     )
 
     if args.dry_run:
-        print("\n*** DRY-RUN MODE — no changes will be made ***\n")
+        print("\n*** DRY-RUN MODE - no changes will be made ***\n")
 
     # Authenticate (even for dry-run, we need to read existing objects)
     if not client.authenticate():

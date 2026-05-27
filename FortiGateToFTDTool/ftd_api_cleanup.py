@@ -167,7 +167,7 @@ class FTDBulkDelete(FTDBaseClient):
                     print(f"    Warning: HTTP {response.status_code}")
                     if self.debug:
                         # Only print the parsed error description, never the
-                        # raw body — FDM error replies can echo submitted form
+                        # raw body - FDM error replies can echo submitted form
                         # fields including credentials.
                         try:
                             err = response.json().get("error", {}).get("messages", [{}])[0].get("description", "")
@@ -902,7 +902,7 @@ class FTDBulkDelete(FTDBaseClient):
             print("\n  Summary: 0 deleted, 0 failed")
             return True
 
-        max_workers = 1  # Force sequential — FTD API returns 423 with concurrent subinterface deletes
+        max_workers = 1  # Force sequential - FTD API returns 423 with concurrent subinterface deletes
         print(f"\n  Deleting {len(all_subinterfaces)} subinterfaces with up to {max_workers} workers.")
 
         print_lock = threading.Lock()
@@ -987,12 +987,12 @@ class FTDBulkDelete(FTDBaseClient):
 
             # --- Step 2: Check if HA monitoring is enabled --------------------
             if not obj_data.get("monitorInterface", False):
-                # Already off — nothing to do
+                # Already off - nothing to do
                 return True, ""
 
             # --- Step 3: PUT with monitorInterface = false --------------------
             obj_data["monitorInterface"] = False
-            # Also disable propagateSecurityGroupTag if present — it can
+            # Also disable propagateSecurityGroupTag if present - it can
             # cause the API to reject the PUT with HTTP 423.
             if "propagateSecurityGroupTag" in obj_data:
                 obj_data["propagateSecurityGroupTag"] = False

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-FortiGate Address Group Converter — Palo Alto PAN-OS Target
+FortiGate Address Group Converter - Palo Alto PAN-OS Target
 ============================================================
 Converts FortiGate ``firewall_addrgrp`` entries to PAN-OS address groups.
 

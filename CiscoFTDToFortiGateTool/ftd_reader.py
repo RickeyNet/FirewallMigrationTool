@@ -51,7 +51,7 @@ class FTDReader(FTDBaseClient):
             if response.status_code == 404:
                 return []
             if response.status_code != 200:
-                # Print only the parsed FDM error description — never the raw
+                # Print only the parsed FDM error description - never the raw
                 # body, since error replies can echo submitted form fields.
                 try:
                     err = response.json().get("error", {}).get("messages", [{}])[0].get("description", "")

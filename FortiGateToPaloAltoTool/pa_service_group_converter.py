@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-FortiGate Service Group Converter — Palo Alto PAN-OS Target
+FortiGate Service Group Converter - Palo Alto PAN-OS Target
 ============================================================
 Converts FortiGate ``firewall_service_group`` entries to PAN-OS service groups.
 
@@ -98,7 +98,7 @@ class PAServiceGroupConverter:
                         if pa_name not in resolved_members:
                             resolved_members.append(pa_name)
                 elif sanitized_member in group_lookup:
-                    # Nested group reference — keep as-is (PAN-OS supports nesting)
+                    # Nested group reference - keep as-is (PAN-OS supports nesting)
                     if sanitized_member not in resolved_members:
                         resolved_members.append(sanitized_member)
                 else:

@@ -251,7 +251,7 @@ class App(tk.Tk):
         self.geometry("960x720")
         self.minsize(800, 600)
 
-        # Window icon — load from bundle dir when frozen, project dir otherwise.
+        # Window icon - load from bundle dir when frozen, project dir otherwise.
         # Wrapped because a bad/missing .ico must never crash the GUI.
         try:
             base = getattr(sys, "_MEIPASS", APP_DIR) if getattr(sys, "frozen", False) else APP_DIR
@@ -1970,7 +1970,7 @@ class App(tk.Tk):
                 )
             except Exception as exc:
                 # Scrub any operator passwords typed into the GUI before
-                # surfacing the exception or traceback — defense in depth in
+                # surfacing the exception or traceback - defense in depth in
                 # case a future code path puts credentials into a URL or body
                 # that ends up in a network exception string.
                 err_text = self._scrub_secrets(str(exc))

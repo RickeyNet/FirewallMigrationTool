@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-FortiGate Service Object Converter — Palo Alto PAN-OS Target
+FortiGate Service Object Converter - Palo Alto PAN-OS Target
 =============================================================
 Converts FortiGate ``firewall_service_custom`` entries to PAN-OS service objects.
 
 PAN-OS rules:
     - Each service object supports ONE protocol (tcp OR udp, not both)
     - A single service can have a port range (e.g., 8000-8999) or comma-
-      separated ports are NOT supported — must use port range or multiple objects
+      separated ports are NOT supported - must use port range or multiple objects
     - FortiGate services with both TCP and UDP → two PAN-OS objects
     - FortiGate services with multiple disjoint port entries → separate objects
 
@@ -209,13 +209,13 @@ class PAServiceConverter:
             - 80           (int or str)
             - "80"
             - "80-443"     (range with hyphen)
-            - "80:443"     (range with colon — FortiGate alternative)
+            - "80:443"     (range with colon - FortiGate alternative)
             - [80, "443", "8000-8999"]  (list)
 
         PAN-OS port format:
             - "80"         (single port)
             - "80-443"     (range with hyphen)
-            - "80,443"     (NOT supported in a single object — each becomes separate)
+            - "80,443"     (NOT supported in a single object - each becomes separate)
         """
         if raw is None:
             return []
@@ -228,7 +228,7 @@ class PAServiceConverter:
             if not raw:
                 return []
             # Handle colon-separated source:dest port notation
-            # FortiGate uses "destport:sourceport" — we only care about dest
+            # FortiGate uses "destport:sourceport" - we only care about dest
             if ":" in raw and "-" not in raw:
                 parts = raw.split(":")
                 return [parts[0].strip()]
