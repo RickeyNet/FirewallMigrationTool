@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FortiGate to FTD - Data Flow</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, sans-serif;
+      margin: 2rem;
+      background: #fafafa;
+      color: #111;
+      max-width: 960px;
+    }
+    h1 { font-size: 1.25rem; margin-bottom: 0.25rem; }
+    h2 { font-size: 1rem; margin: 2rem 0 0.5rem; color: #333; }
+    p { color: #444; margin-top: 0; }
+    .diagram {
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 1.5rem 1rem;
+      overflow: auto;
+    }
+  </style>
+</head>
+<body>
+  <h1>FortiGate to Cisco FTD - Data flow</h1>
+  <p>Open in any browser. Source: <code>FORTIGATE_TO_FTD_CODE_GUIDE.md</code></p>
+
+  <h2>End-to-end pipeline</h2>
+  <div class="diagram mermaid">
+flowchart LR
+    YAML[FortiGate YAML backup]
+    FC[fortigate_converter.py]
+    JSON[13 JSON files]
+    IMP[ftd_api_importer.py]
+    API[FTD HTTPS API]
+    CLN[ftd_api_cleanup.py]
+
+    YAML --> FC
+    FC --> JSON
+    JSON --> IMP
+    IMP --> API
+    JSON -. optional rollback .-> CLN
+    CLN --> API
+  </div>
+
+  <h2>Conversion module order</h2>
+  <div class="diagram mermaid">
+flowchart TB
+    IC[interface_converter]
+    AC[address_converter]
+    AG[address_group_converter]
+    SC[service_converter]
+    SG[service_group_converter]
+    PC[policy_converter]
+    RC[route_converter]
+    OUT[Write JSON files]
+
+    IC --> AC --> AG --> SC --> SG --> PC --> RC --> OUT
+  </div>
+
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: "neutral",
+      flowchart: { curve: "linear", htmlLabels: true },
+    });
+  </script>
+</body>
+</html>
