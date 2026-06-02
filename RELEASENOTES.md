@@ -1,481 +1,67 @@
 # Release Notes
 
-## v1.7.5 - Security: Redact Password From Command-Line Echo
+## v1.5.0 - Major Release (since v1.4.0)
 
 ### Overview
 
-**Security fix.** The fix in this release closes the actual leak the user reported — every previous v1.7.x release still exposed the password the same way. When the GUI launched the importer, cleanup, or converter, it echoed the full argv to the output window as a banner line: `> Import --host 10.10.63.2 --username admin --password Hunter2 ...`. The `--password` value was the operator's plain-text admin password.
+Public release following v1.4.0. Adds Palo Alto and Cisco FTD → FortiGate conversion paths, GUI source/target improvements, FTD import reliability fixes, and security hardening around credential handling in the GUI output window.
 
-This was the root cause of the "password printing in plain text" report. The v1.7.3 / v1.7.4 fixes had cleaned up response bodies and exception strings — but the offender was a one-line `' '.join(argv)` that ran *before* any of those code paths.
+### Security
 
----
+Several paths could expose operator passwords in the GUI output window:
 
-### Bug Fixes
+- **Command-line echo** — The GUI printed the full argv on every run, including `--password` values, as a banner line before the worker started.
+- **PAN-OS authentication** — Keygen used HTTP GET with credentials in the URL query string; connection-error tracebacks could include the full URL.
+- **FTD authentication** — Failed auth responses dumped raw `response.text`, which FDM can echo back including the submitted password.
+- **API error output** — Additional sites across the FTD importer, cleanup, FTD→FortiGate reader, and PAN-OS validation could print raw response bodies instead of parsed error descriptions.
+- **Exception handler** — Uncaught exceptions could surface Import/Cleanup tab passwords in tracebacks.
 
-#### Argv Echo Now Redacts Sensitive Flag Values
+Fixes applied:
 
-- New module-level helper `_redact_argv()` walks the argv list and replaces the value following any flag in `_SENSITIVE_FLAGS = {"--password", "-p", "--api-key", "--token"}` with `***REDACTED***`.
-- `_run_in_thread()` now passes argv through `_redact_argv()` before joining and writing the banner line. The redaction is purely cosmetic — the actual `argv` handed to the worker function is unchanged, so the importer / cleanup / converter still see the real password.
-- The set is centralized so any future credential-bearing CLI flag can be added in one spot.
+- `_redact_argv()` replaces values for `--password`, `-p`, `--api-key`, and `--token` with `***REDACTED***` in echoed command lines (the worker still receives real credentials).
+- PAN-OS keygen switched to POST form body; auth and connection errors use parsed messages and `_scrub_secrets()`.
+- FTD auth uses `_safe_auth_error()` instead of raw response dumps; connection errors are scrubbed.
+- FTD/PAN-OS error paths emit parsed FDM/PAN-OS error descriptions only; the GUI catch-all handler scrubs Import/Cleanup passwords from exceptions and tracebacks.
 
----
-
-### Files Modified
-
-| File | Changes |
-|------|---------|
-| `gui_app.py` | New `_SENSITIVE_FLAGS` constant and `_redact_argv()` helper at module scope; `_run_in_thread()` uses them when echoing the command-line banner; version bumped to 1.7.5 |
-
----
-
-### Action Recommended
-
-If you ran any v1.7.x release (or earlier) and the GUI output window may have been visible to anyone else (screen-sharing, screenshots, log files saved from the output, screen recordings), **rotate the affected admin passwords**. The argv echo printed on every single run, regardless of whether anything failed.
-
----
-
----
-
-## v1.7.4 - Security: Codebase-Wide Credential Leak Audit
-
-### Overview
-
-Follow-up to v1.7.3. After fixing the two confirmed leaks in PAN-OS keygen and FTD authenticate, an audit across all five conversion pipelines and the GUI surfaced eight more spots where raw `response.text` could reach the output window. None were as severe as the v1.7.3 finds (most were post-auth and only a leak risk if the FDM/PAN-OS response happened to echo submitted form fields), but they were closed for defense in depth. The GUI's catch-all exception handler now also scrubs any password typed into the Import or Cleanup tabs before writing the exception or traceback to the output window.
-
----
-
-### Bug Fixes
-
-#### FTD Importer — Eight Sites Routed Through `_extract_error_message`
-
-- `_create_api_object` 4xx/5xx fallback ([ftd_api_importer.py:394](FortiGateToFTDTool/ftd_api_importer.py#L394))
-- Interface-list fetch warning ([ftd_api_importer.py:657](FortiGateToFTDTool/ftd_api_importer.py#L657))
-- Deployment failure response ([ftd_api_importer.py:2032](FortiGateToFTDTool/ftd_api_importer.py#L2032))
-- Interface lookup pagination error ([ftd_api_importer.py:980](FortiGateToFTDTool/ftd_api_importer.py#L980))
-- Interface PUT 422/non-200 returns ([ftd_api_importer.py:1410-1412](FortiGateToFTDTool/ftd_api_importer.py#L1410-L1412))
-- Subinterface POST 422/non-200 returns ([ftd_api_importer.py:1594-1597](FortiGateToFTDTool/ftd_api_importer.py#L1594-L1597))
-
-All now emit only the parsed FDM `error.messages[0].description` instead of dumping the raw response body.
-
-#### FTD Cleanup — Debug Response Print Sanitized
-
-- `ftd_api_cleanup.py` debug-mode print now extracts only the FDM error description; the raw `response.text[:200]` dump is gone.
-
-#### Cisco FTD → FortiGate Reader — Pagination Warning Sanitized
-
-- `CiscoFTDToFortiGateTool/ftd_reader.py` HTTP-error warning during paginated GETs now extracts only the parsed error description.
-
-#### PAN-OS Validation — Unexpected-Response Print Parsed
-
-- `panos_api_base.py` validation path no longer dumps `resp.text[:200]`. It now parses the `<msg>` / `<line>` element and only that. The connection-error branch on the same path uses `_scrub_secrets()` for symmetry with `authenticate()`.
-
-#### GUI Exception Handler — Output Scrubbed
-
-- `gui_app.py` catch-all `except Exception` now passes both the exception string and the full traceback through a new `_scrub_secrets()` helper that replaces any text matching `imp_pass_var` or `cln_pass_var` with `***REDACTED***`. Backstop for any future code path that might surface credentials in a URL or request body.
-
----
-
-### Files Modified
-
-| File | Changes |
-|------|---------|
-| `FortiGateToFTDTool/ftd_api_importer.py` | 8 `response.text` print/return sites routed through `_extract_error_message()` |
-| `FortiGateToFTDTool/ftd_api_cleanup.py` | Debug-gated response print parses error description instead of raw body |
-| `CiscoFTDToFortiGateTool/ftd_reader.py` | Paginated-GET warning extracts FDM error description; raw body never printed |
-| `FortiGateToPaloAltoTool/panos_api_base.py` | Validation `[FAIL]` path parses `<msg>`/`<line>` only; connection error uses `_scrub_secrets()` |
-| `gui_app.py` | New `_scrub_secrets()` helper; catch-all exception handler scrubs both `str(exc)` and `traceback.format_exc()` before queueing them to the output widget; version bumped to 1.7.4 |
-
----
-
----
-
-## v1.7.3 - Security: Stop Leaking Passwords to the Output Window
-
-### Overview
-
-**Security fix.** Two paths in the authentication flow could leak the user-supplied admin password into the GUI output window in plain text:
-
-1. **PAN-OS keygen** sent `user` and `password` as URL **query string** parameters via HTTP GET. On a connection error, `requests.exceptions.RequestException`'s string form includes the full URL — so the password ended up in the `[FAIL] Connection error:` line printed to the output window.
-2. **FTD authenticate** dumped the raw `response.text` on a non-200 reply. FDM error responses can echo the submitted form payload (including the password) back in the body, so a wrong-password attempt could surface the typed password in the output.
-
-Anyone with access to the GUI window, a copy of a screen recording, or a log file from a failed run could read the credentials in plain text. Upgrade and rotate any passwords that may have appeared in shared output.
-
----
-
-### Bug Fixes
-
-#### PAN-OS Keygen No Longer Puts the Password in the URL
-
-- `panos_api_base.py` now POSTs `user` / `password` / `type=keygen` as form data instead of GETting them as URL query parameters. The credentials never appear in the request line, so connection-error tracebacks, proxy logs, and `requests` exception strings can no longer expose them.
-- The auth-failure branch no longer falls through to raw `resp.text` — only the parsed `<msg>` / `<line>` element is printed, with a generic `"auth failed"` fallback if parsing fails.
-- Connection-error messages are passed through a `_scrub_secrets()` helper that replaces any occurrence of the configured password with `***REDACTED***` as a defense-in-depth backstop.
-
-#### FTD Authenticate No Longer Dumps Raw Response Bodies
-
-- `ftd_api_base.py` no longer prints `response.text` on auth failure. A new `_safe_auth_error()` helper extracts only the FDM error description from the structured JSON reply, refuses to print the description if it contains the password, and falls back to `"authentication failed"` if anything looks off. The HTTP status code is still surfaced.
-- The `RequestException` branch now scrubs the configured password out of the exception string before printing, mirroring the PAN-OS path.
-
----
-
-### Files Modified
-
-| File | Changes |
-|------|---------|
-| `FortiGateToPaloAltoTool/panos_api_base.py` | `authenticate()` switched from GET-with-query-params to POST-with-form-body; removed raw `resp.text` fallback in error message; added `_scrub_secrets()` helper used on the connection-error branch |
-| `FortiGateToFTDTool/ftd_api_base.py` | Removed `print(f"  Response: {response.text}")` on auth failure; new `_safe_auth_error()` extracts the FDM error description without leaking; new `_scrub_secrets()` helper redacts the password from connection-error strings |
-| `gui_app.py` | Version bumped to 1.7.3 |
-
----
-
-### Action Recommended
-
-If any operator passwords were typed into the tool while running 1.7.2 or earlier and the run produced a `[FAIL] Connection error:` or `[FAIL] HTTP ...` line during authentication that anyone else might have seen, **rotate those passwords**.
-
----
-
----
-
-## v1.7.2 - Skip Updates That Wouldn't Change Anything
-
-### Overview
-
-Bug-fix release for FTD imports that produced a flood of `[FAIL] Update failed:` lines on address objects (and other object types) that already existed on the target FDM. With `update_existing` enabled, the importer was unconditionally PUTting every duplicate, which FDM frequently rejects when the payload is semantically identical to the existing object. The importer now compares first and only updates when something actually changed.
-
----
-
-### Bug Fixes
-
-#### Pre-Update Equality Check
-
-- `_update_existing_object` now strips FDM bookkeeping fields (`id`, `version`, `links`, `self`, `metadata`, `isSystemDefined`, `kind`) from both sides and compares the remaining value-bearing fields. If every field present in the new payload already matches the existing object, the importer records `_skipped` and returns `[SKIP] identical to existing '<name>'` without ever issuing the PUT.
-- Applies to every object type that flows through `_update_existing_object` — network objects and groups, port objects and groups, access rules, and static routes.
-- `type` is intentionally **not** stripped from the comparison because it is part of the object's identity (e.g. `HOST` vs `NETWORK` vs `RANGE` on a NetworkObject); a change there means a genuinely different object even if the name and value happened to match.
-
-#### More Useful Update-Failure Messages
-
-- When an update genuinely does fail, the error line now leads with the HTTP status code: `[FAIL] Update failed (HTTP 422): <description>` instead of just `[FAIL] Update failed: <description>`. Makes debugging future failures actionable at a glance without digging into logs.
-
----
-
-### Files Modified
-
-| File | Changes |
-|------|---------|
-| `FortiGateToFTDTool/ftd_api_importer.py` | New `_payload_matches_existing()` helper and `_FDM_META_KEYS` constant; `_update_existing_object()` short-circuits to SKIP when the payload would be a no-op; failure message includes HTTP status |
-| `gui_app.py` | Version bumped to 1.7.2 |
-
----
-
----
-
-## v1.7.1 - FDM Token Auto-Refresh on Long Imports
-
-### Overview
-
-Bug-fix release for long FTD imports that were failing partway through with HTTP 401 ("JWT expired") once the FDM access token's ~30-minute lifetime ran out mid-run. The base client already supported `refresh_access_token()`, but the importer's many direct `self.session.*` call sites never invoked it, so any unlucky request after expiry surfaced a `[FAIL]` line and aborted that object.
-
----
-
-### Bug Fixes
-
-#### Automatic 401 Retry Across Every API Call
-
-- Installed a `requests` session-level response hook on `FTDBaseClient` that catches 401 responses, calls the existing thread-safe `refresh_access_token()`, rewrites the `Authorization` header on the original request, and resends it once.
-- The hook skips the `/fdm/token` endpoint itself (so a refresh attempt cannot recurse during a refresh) and tags retried requests with an internal `_ftd_retried` flag so a genuine post-refresh 401 surfaces normally instead of looping.
-- Because the hook lives on the shared session, every current and future `self.session.{get,post,put,delete}` call in both the importer and cleanup paths inherits the retry without per-call-site changes.
-
----
-
-### Files Modified
-
-| File | Changes |
-|------|---------|
-| `FortiGateToFTDTool/ftd_api_base.py` | Session response hook `_auto_refresh_hook` registered in `__init__`; refreshes the FDM token on 401 and re-sends the original request once with the new bearer header |
-| `gui_app.py` | Version bumped to 1.7.1 |
-
----
-
----
-
-## v1.7.0 - Flair Output & Frozen-Exe Icon Fix
-
-### Overview
-
-Adds personality to operator output across the FTD cleanup and shared FTD API base while preserving the strict `[OK] / [SKIP] / [FAIL]` bracket tags that JSON reports, exit-code logic, and grep-based log scraping depend on. Also fixes a crash on frozen Windows builds where the GUI failed to start with `failed to execute script 'gui_app' due to unhandled exception: bitmap`.
-
----
-
-### Improvements
-
-#### Flair Phrase System
-
-- New `FortiGateToFTDTool/flair.py` module exposes `flair(action, outcome, subject, detail)` returning lines like `[OK] Yeeted into the void: net-obj-foo` or `[FAIL] Bounced: rule-42 — 422 duplicate name`.
-- Phrase pools are keyed by `(action, outcome)` tuples (`create`, `delete`, `update`, `convert`, `auth`, `validate`, `deploy`, `report`) with random selection per call. Unknown keys fall back to a generic pool so callers never crash on a typo.
-- The leading bracket tag is preserved verbatim — only the message body becomes flavorful — so existing log-parsing tooling continues to work unchanged.
-
-#### Flair Wired Into FTD Cleanup and Shared Base
-
-- `ftd_api_cleanup.py` now emits flair-tagged lines for all delete sites (static routes, custom objects, physical interface resets, subinterfaces, etherchannels, bridge groups, deploy, JSON report).
-- `ftd_api_base.py` emits flair lines for `authenticate()` and per-endpoint `validate_endpoints()` results — and because the FTD importer inherits from `FTDBaseClient`, those lines appear during imports too. Propagation to the importer's own per-object output and to the other five conversion pipelines is staged for a follow-up.
-
----
-
-### Bug Fixes
-
-#### Frozen-Exe `bitmap` Crash on GUI Start
-
-- `gui_app.py` previously called `self.iconbitmap(sys.executable)` when frozen, which raised `_tkinter.TclError: bitmap "...exe" not defined` on some Windows builds and caused PyInstaller to surface "failed to execute script 'gui_app' due to unhandled exception: bitmap" before the main window appeared.
-- Icon load now resolves `app_icon.ico` from `sys._MEIPASS` when frozen (and from the project directory in dev), and is wrapped in a `try/except tk.TclError` so a missing or unreadable icon can never kill the GUI.
-- `build.bat` adds `--add-data "app_icon.ico;."` so the icon is actually present inside the onefile bundle at runtime — `--icon` alone only sets the exe's shell icon and does not bundle the file.
-
----
-
-### Files Modified
-
-| File | Changes |
-|------|---------|
-| `FortiGateToFTDTool/flair.py` | **New.** Phrase pools and `flair()` formatter |
-| `FortiGateToFTDTool/ftd_api_cleanup.py` | All 13 `[OK]/[SKIP]/[FAIL]` print sites routed through `flair()` |
-| `FortiGateToFTDTool/ftd_api_base.py` | `authenticate()` and `validate_endpoints()` use `flair()` |
-| `gui_app.py` | Window-icon load uses `sys._MEIPASS` when frozen; wrapped in `try/except tk.TclError`; version bumped to 1.7.0 |
-| `build.bat` | Added `--add-data "app_icon.ico;."` so the icon is bundled into the onefile exe |
-
----
-
----
-
-## v1.6.2 - GUI Source/Target Matrix Polish
-
-### Overview
-
-Follow-up to v1.6.1 addressing the highest-priority Source/Target UX issues. The Target combobox now visually reflects when it's locked to a single choice, custom Output Base Names survive platform switches, and the Import/Cleanup tab forms are fully disabled - not just retitled - when the target doesn't support API-based operations.
-
----
-
-### Improvements
-
-#### Target Combobox Locks Visually
-
-- When the source platform forces a single target (Cisco ASA → PAN-OS only; Palo Alto → FortiGate only; Cisco FTD → FortiGate only), the Target combobox now switches to `disabled` state so it clearly reads as locked. Switching back to FortiGate as source restores `readonly` state with the full set of choices.
-
-#### Custom Output Base Name Preserved Across Platform Changes
-
-- `Output Base Name` (Convert tab) and `JSON Base Name` (Import tab) no longer overwrite a user-typed value when the source or target changes. Overwrites now only happen when the field still holds one of the known auto-generated defaults (`""`, `"ftd_config"`, `"pa_config"`, `"fg_config"`). A custom name like `"prod_migration_q2"` survives any number of selector changes.
-
-#### Import & Cleanup Forms Disabled for FortiGate Target
-
-- Previously the Import and Cleanup tabs were retitled "(N/A for FortiGate)" but the full form was still clickable - users could type into fields and press Start only to hit a "not applicable" popup. Now the entire tab contents (entries, checkboxes, spinboxes, comboboxes, and the Start/Cancel buttons) are disabled when the target is FortiGate. Output text areas remain visible for reviewing prior logs, and the Clear Output button was intentionally disabled as well (use Cancel/Clear once the tab is re-enabled).
-- Lockout state is respected by the shared `_set_buttons_state()` helper so Convert-tab operations don't accidentally re-enable the Import/Cleanup run buttons mid-run.
-- The Cleanup password reset button correctly re-syncs with `has_custom_password()` when the tab is unlocked.
-
----
-
-### Files Modified
-
-| File | Changes |
-|------|---------|
-| `gui_app.py` | Target combobox `state` toggled alongside `values` in `_on_source_change`; added `DEFAULT_OUTPUT_BASES` guard around `conv_output_var` / `imp_base_var` resets; new `_set_tab_enabled()` helper walks tab descendants and disables interactive widgets; `_retitle_import_cleanup_tabs()` applies the lockout; `_set_buttons_state()` respects per-tab lockout flags; version bumped to 1.6.2 |
-
----
-
----
-
-## v1.6.1 - GUI Label & Tab Fixes
-
-### Overview
-
-Fixes GUI labeling bugs introduced in v1.6.0 where the HA Port field label and the Import/Cleanup tab titles remained locked to FTD wording regardless of the selected source or target platform.
-
----
-
-### Bug Fixes
-
-#### Convert Tab - HA Port / FTD Username Label
-
-- The field next to the username entry now correctly reads **"FTD Username:"** when Cisco FTD is selected as the source. Previously, the label stayed as "HA Port (optional):" while the helper text below read "FTD username (leave blank for 'admin')", producing a contradictory UI.
-- Label text now updates alongside the hint text in all five state transitions: FTD source (API mode), FTD source (JSON file mode), PAN-OS target, FortiGate target with non-FTD source, and FTD target.
-
-#### Import & Cleanup Tabs - Dynamic Tab Titles
-
-- The Import and Cleanup tab titles and section frame headers now update based on the selected target platform instead of being hard-coded to "FTD":
-  - **FTD target**: "Import to FTD" / "Cleanup FTD"
-  - **PAN-OS target**: "Import to PAN-OS" / "Cleanup PAN-OS"
-  - **FortiGate target**: "Import (N/A for FortiGate)" / "Cleanup (N/A for FortiGate)" - reflects that API-based import/cleanup is not supported for FortiGate (config must be applied manually)
-- The top `LabelFrame` section headers on both tabs (e.g. "FTD Connection & Import Options") are retitled to match.
-
----
-
-### Files Modified
-
-| File | Changes |
-|------|---------|
-| `gui_app.py` | HA Port label text now switches to "FTD Username:" when FTD is the source; new `_retitle_import_cleanup_tabs` helper updates Import/Cleanup tab titles and section frame labels per target platform; version bumped to 1.6.1 |
-
----
-
----
-
-## v1.6.0 - Cisco FTD → FortiGate Conversion Support
-
-### Overview
-
-Adds a live Cisco FTD to FortiGate conversion pipeline. The converter connects directly to the FTD Firepower Device Manager (FDM) REST API, reads the running configuration, and produces a single FortiGate CLI `.conf` file - no offline export required. Apply the output via CLI paste or the FortiGate web UI restore feature.
-
----
+**Action recommended:** If you ran v1.4.0, any pre-release build, or shared the GUI output window (screen share, screenshots, saved logs), **rotate affected admin passwords**.
 
 ### New Features
 
-#### Cisco FTD → FortiGate Conversion Engine (`CiscoFTDToFortiGateTool/`)
+Two new conversion pipelines produce FortiGate CLI `.conf` files for manual apply (CLI paste or web UI restore). See README for application steps.
 
-- **FDM API Reader** (`ftd_reader.py`) - Authenticates to the FTD FDM REST API (OAuth 2.0 password grant), reads all supported object types with automatic offset/limit pagination; handles 404 gracefully for object types not present on a given FTD version
-- **Address Objects** - FTD `networkobject` (`HOST`, `NETWORK`, `RANGE`, `FQDN`) → FortiGate `config firewall address`
-- **Address Groups** - FTD `networkgroup` (with inline literal expansion) → FortiGate `config firewall addrgrp`; inline IP/subnet literals auto-generate supplemental address objects
-- **Service Objects** - FTD TCP and UDP port objects → FortiGate `config firewall service custom`; `_TCP`/`_UDP` suffix pairs (produced by the reverse FG→PA converter) automatically merged back into dual-protocol FortiGate service objects
-- **Service Groups** - FTD port groups → FortiGate `config firewall service group`
-- **Interfaces** - Physical Ethernet and EtherChannel (LACP aggregate) interfaces → FortiGate `config system interface` with IP, admin state, and zone membership
-- **Zones** - FTD security zones → FortiGate `config system zone` with member interface lists
-- **Security Policies** - FTD access rules → FortiGate `config firewall policy`; maps source/destination zones, address objects, service objects, rule action (`PERMIT`→`accept`, `DENY`→`deny`), logging, and disabled state
-- **Static Routes** - FTD static routes from all virtual routers → FortiGate `config router static`
-- **Main Orchestrator** (`fg_ftd_converter.py`) - 8-phase pipeline; outputs a single timestamped `.conf` file with a header comment documenting the source host, generation time, and application notes
+| | Palo Alto → FortiGate | Cisco FTD → FortiGate |
+|--|----------------------|----------------------|
+| **Input** | PAN-OS XML running config | FDM REST API (live) or exported JSON |
+| **Output** | FortiGate `.conf` | FortiGate `.conf` |
+| **Objects converted** | Addresses, groups, services, policies, routes, interfaces, zones | Same |
+| **GUI** | "Palo Alto" source locks Target to FortiGate; XML file browser | "Cisco FTD" source locks Target to FortiGate; host/username fields; password via secure dialog |
 
-#### GUI Updates
+Packages: `PaloAltoToFortiGateTool/`, `CiscoFTDToFortiGateTool/`.
 
-- **"Cisco FTD" source option** added to the Source dropdown
-- Selecting Cisco FTD source automatically locks the Target to "FortiGate"
-- Input field repurposed as **FTD Host / IP** entry; file browse button disabled
-- HA port field repurposed as **FTD username** entry (defaults to `admin`)
-- Password collected via a secure dialog at convert time (not stored)
-- Model selector disabled (not applicable for FortiGate target)
-- Import and Cleanup buttons show an informational dialog for FortiGate targets
-- Title bar updates to "Cisco FTD to FortiGate Migration Tool"
+### Improvements
 
----
+**GUI**
 
-### Files Added
+- Target combobox visually locks (`disabled`) when only one target applies to the selected source.
+- Custom Convert/Import output base names survive source and target changes.
+- Import and Cleanup tabs fully disabled (not just retitled) when target is FortiGate.
+- Import/Cleanup tab titles and section headers update per target platform (FTD, PAN-OS, FortiGate N/A).
+- "HA Port" label switches to "FTD Username:" when Cisco FTD is the source.
 
-| File | Purpose |
-|------|---------|
-| `CiscoFTDToFortiGateTool/__init__.py` | Package marker |
-| `CiscoFTDToFortiGateTool/ftd_reader.py` | FDM REST API reader with pagination |
-| `CiscoFTDToFortiGateTool/fg_ftd_converter.py` | 8-phase conversion orchestrator |
-| `Firewall-Migration-Tool-v1.6.0.spec` | PyInstaller build spec |
+**FTD import**
 
-### Files Modified
+- Skip PUT when payload is semantically identical to the existing object (`[SKIP] identical to existing`).
+- Session-level 401 hook auto-refreshes FDM tokens during long imports (~30-minute JWT lifetime).
+- Update failure messages include HTTP status code.
 
-| File | Changes |
-|------|---------|
-| `gui_app.py` | Cisco FTD source option, FDM host/username input, secure password dialog, v1.6.0 |
+**Other**
 
----
+- Optional flair phrasing in FTD cleanup/auth output; `[OK]` / `[SKIP]` / `[FAIL]` tags preserved for log parsing.
+- Fixed frozen Windows exe crash when loading the window icon; `build.bat` bundles `app_icon.ico` in the onefile build.
 
----
+### Dependencies
 
-## v1.5.0 - Palo Alto → FortiGate Conversion Support & Dependency Updates
-
-### Overview
-
-Adds a full Palo Alto PAN-OS to FortiGate conversion pipeline. A PAN-OS XML running configuration (exported from the device or retrieved via the XML API) is parsed and converted to a single FortiGate CLI `.conf` file that can be applied directly via CLI paste or the FortiGate web UI restore feature. Also updates all runtime and build dependencies to their latest versions.
-
----
-
-### New Features
-
-#### Palo Alto → FortiGate Conversion Engine (`PaloAltoToFortiGateTool/`)
-
-- **PAN-OS XML Parser** (`fg_pa_parser.py`) - Parses PAN-OS XML running configs including device exports, `show config running` output, and XML API responses; supports both NGFW (vsys1) and Panorama shared-object layouts
-- **Address Objects** (`fg_address_converter.py`) - `ip-netmask` (subnet/host), `ip-range`, and `fqdn` types → FortiGate `firewall address`
-- **Address Groups** (`fg_address_group_converter.py`) - Static groups → FortiGate `firewall addrgrp`; nested groups preserved natively (no flattening required)
-- **Service Objects** (`fg_service_converter.py`) - TCP and UDP service objects → FortiGate `firewall service custom`; companion `_TCP`/`_UDP` pairs (produced by the reverse FG→PA converter) are automatically detected and merged back into a single dual-protocol FortiGate object
-- **Service Groups** (`fg_service_group_converter.py`) - Service groups → FortiGate `firewall service group` with name-map resolution for merged service objects
-- **Security Policies** (`fg_policy_converter.py`) - Security rules → FortiGate `firewall policy`; maps zones to `srcintf`/`dstintf`, PAN-OS `any` address to FortiGate `all`, `application-default` service to `ALL`, action deny/drop/reset-* to FortiGate `deny`, and preserves disabled rule state
-- **Static Routes** (`fg_route_converter.py`) - Static routes → FortiGate `router static`; CIDR notation converted to IP + netmask pairs
-- **Interfaces & Zones** (`fg_interface_converter.py`) - Physical, VLAN, and loopback interfaces → FortiGate `system interface`; PAN-OS zones → FortiGate `system zone`
-- **Main Orchestrator** (`fg_converter.py`) - Runs all 7 phases in dependency order and writes a single timestamped `.conf` file with a header block documenting the source file, generation time, and application notes
-
-#### GUI Updates
-
-- **"Palo Alto" source option** added to the Source dropdown
-- Selecting Palo Alto source automatically locks the Target to "FortiGate" and sets the input file browser to filter for `.xml` files
-- Model selector and HA port field are disabled (not applicable for FortiGate target)
-- Import and Cleanup buttons show an informational dialog explaining how to apply the `.conf` file manually
-- Title bar updates to "Palo Alto to FortiGate Migration Tool"
-
----
-
-### How to Apply the Output
-
-The converter produces a single `<output_base>.conf` file. Apply it using either method:
-
-**FortiGate CLI** - paste sections directly (granular, section-by-section):
-```
-config firewall address
-    edit "webserver"
-        set subnet 10.10.20.100 255.255.255.255
-    next
-end
-```
-
-**Web UI restore** - go to **System > Configuration > Restore**, upload the `.conf` file. FortiGate merges the commands into the running configuration automatically.
-
-> **Note:** Interface-to-physical-port assignments must be reviewed and adjusted to match the target FortiGate hardware after applying the configuration.
-
----
-
-### Dependency Updates
-
-All runtime and build dependencies updated to latest versions:
-
-| Package | Previous | Updated |
-|---------|----------|---------|
-| certifi | 2025.11.12 | 2026.4.22 |
-| charset-normalizer | 3.4.4 | 3.4.7 |
-| cryptography | 42.0.8 | 43.0.3 |
-| idna | 3.11 | 3.13 |
-| invoke | 2.2.1 | 3.0.3 |
-| packaging | 26.0 | 26.1 |
-| pydantic | 2.12.5 | 2.13.3 |
-| pydantic_core | 2.41.5 | 2.46.3 |
-| Pygments | 2.19.2 | 2.20.0 |
-| pyinstaller | 6.19.0 | 6.20.0 |
-| pyinstaller-hooks-contrib | 2026.3 | 2026.4 |
-| PyNaCl | 1.6.1 | 1.6.2 |
-| rich | 14.2.0 | 15.0.0 |
-| ruamel.yaml | 0.18.16 | 0.19.1 |
-| setuptools | 80.9.0 | 82.0.1 |
-| tomli | 2.4.0 | 2.4.1 |
-| urllib3 | 2.6.0 | 2.6.3 |
-| wheel | 0.45.1 | 0.47.0 |
-| zipp | 3.23.0 | 3.23.1 |
-
-`requirements.txt` minimum versions updated to reflect the currently tested versions (`pyyaml>=6.0.3`, `requests>=2.32.5`, `urllib3>=2.6.3`).
-
----
-
-### Files Added
-
-| File | Purpose |
-|------|---------|
-| `PaloAltoToFortiGateTool/__init__.py` | Package marker |
-| `PaloAltoToFortiGateTool/fg_common.py` | Shared utilities (CIDR↔netmask, name sanitization) |
-| `PaloAltoToFortiGateTool/fg_pa_parser.py` | PAN-OS XML configuration parser |
-| `PaloAltoToFortiGateTool/fg_address_converter.py` | Address object converter |
-| `PaloAltoToFortiGateTool/fg_address_group_converter.py` | Address group converter |
-| `PaloAltoToFortiGateTool/fg_service_converter.py` | Service object converter with TCP+UDP merge |
-| `PaloAltoToFortiGateTool/fg_service_group_converter.py` | Service group converter |
-| `PaloAltoToFortiGateTool/fg_policy_converter.py` | Security policy converter |
-| `PaloAltoToFortiGateTool/fg_route_converter.py` | Static route converter |
-| `PaloAltoToFortiGateTool/fg_interface_converter.py` | Interface and zone converter |
-| `PaloAltoToFortiGateTool/fg_converter.py` | Main orchestrator |
-| `Firewall-Migration-Tool-v1.5.0.spec` | PyInstaller build spec |
-
-### Files Modified
-
-| File | Changes |
-|------|---------|
-| `gui_app.py` | Palo Alto source option, FortiGate target handling, XML file browser, v1.5.0 |
-| `requirements.txt` | Minimum version bumps for pyyaml, requests, urllib3 |
-
----
+Runtime minimums in `requirements.txt`: `pyyaml>=6.0.3`, `requests>=2.32.5`, `urllib3>=2.6.3`. Build and dev dependencies updated at release time.
 
 ---
 
