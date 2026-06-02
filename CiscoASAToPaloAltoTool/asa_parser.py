@@ -237,7 +237,7 @@ class ASAParser:
             elif line.startswith("description "):
                 obj["description"] = line.split(None, 1)[1]
             elif line.startswith("nat "):
-                pass  # NAT inside object — skip
+                pass  # NAT inside object - skip
 
         result["network_objects"][name] = obj
 

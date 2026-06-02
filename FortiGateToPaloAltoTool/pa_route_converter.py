@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-FortiGate Static Route Converter — Palo Alto PAN-OS Target
+FortiGate Static Route Converter - Palo Alto PAN-OS Target
 ===========================================================
 Converts FortiGate ``router_static`` entries to PAN-OS static routes.
 
 PAN-OS static routes live under a virtual router (default: "default") and
-use CIDR notation directly — no separate network object is needed (unlike FTD).
+use CIDR notation directly - no separate network object is needed (unlike FTD).
 
 Output JSON:
     {

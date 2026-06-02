@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-FortiGate Interface Converter — Palo Alto PAN-OS Target
+FortiGate Interface Converter - Palo Alto PAN-OS Target
 =========================================================
 Converts FortiGate ``system_interface`` entries to PAN-OS interface and zone
 configurations.
@@ -231,7 +231,7 @@ class PAInterfaceConverter:
                 physical_ports.append((intf_name, properties))
             elif intf_type == "switch":
                 # PAN-OS doesn't have bridge groups
-                print(f"    Skipped: {intf_name} (switch/bridge group — not supported on PAN-OS)")
+                print(f"    Skipped: {intf_name} (switch/bridge group - not supported on PAN-OS)")
                 self.failed_items.append({
                     "name": intf_name,
                     "reason": "switch/bridge group not supported on PAN-OS",
@@ -265,7 +265,7 @@ class PAInterfaceConverter:
         # --- Phase 4: Convert physical interfaces ---
         for fg_name, props in physical_ports:
             if fg_name in aggregate_member_set:
-                # Already assigned as aggregate member — skip standalone conversion
+                # Already assigned as aggregate member - skip standalone conversion
                 # but still need the port mapped for reference
                 continue
             self._convert_physical(fg_name, props, zone_lookup)
@@ -395,7 +395,7 @@ class PAInterfaceConverter:
         # Find the PAN-OS parent interface name
         parent_pa = self.interface_name_mapping.get(parent_fg)
         if not parent_pa:
-            # Parent hasn't been mapped yet — assign a port for it
+            # Parent hasn't been mapped yet - assign a port for it
             parent_pa = self._assign_pa_port(parent_fg)
             if not parent_pa:
                 print(f"    Skipped: {fg_name} (parent {parent_fg} has no available port)")

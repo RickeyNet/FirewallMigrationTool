@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-FortiGate Address Object Converter — Palo Alto PAN-OS Target
+FortiGate Address Object Converter - Palo Alto PAN-OS Target
 =============================================================
 Converts FortiGate ``firewall_address`` entries to PAN-OS address objects.
 
 PAN-OS address types:
-    ip-netmask  — Host (/32) or subnet (10.0.0.0/24)
-    ip-range    — 10.0.0.1-10.0.0.10
-    fqdn        — dns.google
+    ip-netmask  - Host (/32) or subnet (10.0.0.0/24)
+    ip-range    - 10.0.0.1-10.0.0.10
+    fqdn        - dns.google
 
 Output JSON (later converted to XML by the importer):
     {

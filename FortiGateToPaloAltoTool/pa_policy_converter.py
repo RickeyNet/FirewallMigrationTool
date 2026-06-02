@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-FortiGate Policy Converter — Palo Alto PAN-OS Target
+FortiGate Policy Converter - Palo Alto PAN-OS Target
 =====================================================
 Converts FortiGate ``firewall_policy`` entries to PAN-OS security rules.
 

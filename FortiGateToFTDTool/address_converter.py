@@ -161,7 +161,7 @@ class AddressConverter:
                 continue
             
             # Check 4: Skip if value is malformed (no valid IP format)
-            # FQDN values are domain names, not IPs — skip IP validation for them
+            # FQDN values are domain names, not IPs - skip IP validation for them
             if address_type != "FQDN" and not self._is_valid_address_value(address_value):
                 print(f"  Skipped: {object_name} (invalid value: {address_value})")
                 self.failed_items.append({"name": object_name, "reason": f"invalid value: {address_value}", "config": properties})

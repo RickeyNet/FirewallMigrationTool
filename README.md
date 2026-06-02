@@ -71,7 +71,7 @@ This toolset converts FortiGate firewall configurations to **Cisco FTD** (Firepo
 ### Python Libraries
 
 ```bash
-pip install pyyaml requests urllib3
+pip install -r requirements.txt
 ```
 
 ### FTD Requirements
@@ -96,47 +96,51 @@ pip install pyyaml requests urllib3
 
 ## Installation
 
-### Step 1: Download All Script Files
+### Step 1: Get the Project
 
-Your working directory should contain:
+Clone or download the full repository. The tools live in subdirectories and import each other as packages, so copy the entire project - not individual script files.
+
+```bash
+git clone https://github.com/RickeyNet/FirewallMigrationTool.git
+cd FirewallMigrationTool
+```
+
+Your working directory should look like this:
 
 ```
-FortiGate-Migration/
-├── fortigate_converter.py              # Main FTD converter script
-├── address_converter.py                # Address object module (FTD)
-├── address_group_converter.py          # Address group module (FTD)
-├── service_converter.py                # Service object module (FTD)
-├── service_group_converter.py          # Service group module (FTD)
-├── policy_converter.py                 # Access policy module (FTD)
-├── route_converter.py                  # Static route module (FTD)
-├── interface_converter.py              # Interface conversion module (FTD)
-├── ftd_api_importer.py                 # FTD API importer script
-├── ftd_api_cleanup.py                  # FTD bulk delete/cleanup utility
-├── gui_app.py                          # Unified GUI application (FTD + PA)
+FirewallMigrationTool/
+├── gui_app.py                          # Unified GUI (recommended entry point)
 ├── cleanup_auth.py                     # Cleanup password authentication module
 ├── set_cleanup_password.py             # Utility to change built-in default password
-├── FortiGateToPaloAltoTool/            # Palo Alto conversion modules
-│   ├── pa_converter.py                 # Main PA converter script
-│   ├── pa_address_converter.py         # Address object module (PA)
-│   ├── pa_address_group_converter.py   # Address group module (PA)
-│   ├── pa_service_converter.py         # Service object module (PA)
-│   ├── pa_service_group_converter.py   # Service group module (PA)
-│   ├── pa_policy_converter.py          # Security rule module (PA)
-│   ├── pa_route_converter.py           # Static route module (PA)
-│   ├── pa_interface_converter.py       # Interface & zone module (PA)
-│   ├── pa_common.py                    # Shared PA utilities
-│   ├── panos_api_base.py               # PAN-OS XML API client
-│   ├── panos_api_importer.py           # PAN-OS API importer
-│   └── panos_api_cleanup.py            # PAN-OS bulk cleanup
+├── requirements.txt                    # Python dependencies
+├── build.bat                           # Windows .exe build script (optional)
+├── FortiGateToFTDTool/                 # FortiGate → Cisco FTD
+│   ├── fortigate_converter.py          # Convert FortiGate YAML → FTD JSON
+│   ├── ftd_api_importer.py             # Import FTD JSON via FDM REST API
+│   ├── ftd_api_cleanup.py              # FTD bulk delete/cleanup utility
+│   └── ...                             # Converter modules (address, policy, route, etc.)
+├── FortiGateToPaloAltoTool/            # FortiGate → Palo Alto PAN-OS
+│   ├── pa_converter.py                 # Convert FortiGate YAML → PA JSON
+│   ├── panos_api_importer.py           # Import PA JSON via XML API
+│   ├── panos_api_cleanup.py            # PAN-OS bulk delete/cleanup utility
+│   └── ...                             # Converter modules
+├── PaloAltoToFortiGateTool/            # Palo Alto PAN-OS → FortiGate CLI
+│   └── fg_converter.py                 # Convert PAN-OS XML → FortiGate .conf
+├── CiscoASAToPaloAltoTool/             # Cisco ASA → Palo Alto PAN-OS
+│   └── asa_converter.py                # Convert ASA config → PA JSON
+├── CiscoFTDToFortiGateTool/            # Cisco FTD → FortiGate CLI
+│   └── fg_ftd_converter.py           # Convert FTD export → FortiGate .conf
 ├── fortigate_config.yaml               # Your FortiGate YAML (input)
 ├── ftd_config_*.json                   # Generated FTD JSON files (output)
 └── pa_config_*.json                    # Generated PA JSON files (output)
 ```
 
+For CLI use, run scripts from the repo root with the package path (for example, `python FortiGateToFTDTool/fortigate_converter.py`) or change into the relevant tool directory first.
+
 ### Step 2: Install Dependencies
 
 ```bash
-pip install pyyaml requests urllib3
+pip install -r requirements.txt
 ```
 
 ### Step 3: Verify Installation
@@ -154,8 +158,8 @@ python -c "import yaml, requests, urllib3; print('All libraries installed!')"
 ### Download required libraries from internet connected device:
 
 ```bash For Windows PowerShell
-pip install pyyaml requests urllib3
-py -3.9 -m pip install pyyaml requests urllib3
+pip install -r requirements.txt
+py -3.9 -m pip install -r requirements.txt
 
 ```
 
@@ -168,13 +172,12 @@ python -c "import yaml, requests, urllib3; print('All libraries installed!')"
 ### Create a directory for the packages and download them:
 
 ```bash
-# Create a directory for the packages
+# Create a directory for the packages (from the repo root)
 mkdir ftd_migration_packages
-cd ftd_migration_packages
 
 # Download packages and their dependencies
-pip download pyyaml requests urllib3
-py -3.9 -m pip download pyyaml requests urllib3
+pip download -r requirements.txt -d ftd_migration_packages
+py -3.9 -m pip download -r requirements.txt -d ftd_migration_packages
 ```
 
 This will download files like:
@@ -187,7 +190,7 @@ This will download files like:
 
 ### Airgapped Side Installation:
 
-1. Move package folder and all scripts to airgapped machine (including Python 3.x installer if not already installed)
+1. Move package folder, `requirements.txt`, and all scripts to airgapped machine (including Python 3.x installer if not already installed)
 
 2. Install Python and select "Add to PATH" on installer
 
@@ -214,10 +217,9 @@ python
 # Type exit() to exit
 ```
 
-6. Navigate to the package directory and install:
+6. From the tool directory (where `requirements.txt` lives), install from the local package folder:
 ```bash
-cd path\to\your\package\folder
-python -m pip install --no-index --find-links=. pyyaml requests urllib3
+python -m pip install --no-index --find-links=ftd_migration_packages -r requirements.txt
 ```
 
 7. Test that libraries are installed:
@@ -233,8 +235,8 @@ python -c "import yaml, requests, urllib3; print('All libraries installed!')"
 
 ```
 □ Install Python 3.9+
-□ Install libraries: pip install pyyaml requests urllib3
-□ Download all 10 script files to one folder
+□ Install libraries: pip install -r requirements.txt
+□ Clone or download the full project (all tool directories)
 □ Export FortiGate config as YAML
 □ Backup FTD configuration in FDM
 □ Identify your target FTD model (e.g., ftd-3120)
@@ -243,10 +245,10 @@ python -c "import yaml, requests, urllib3; print('All libraries installed!')"
 ### Conversion Phase
 
 ```
-□ Run: python fortigate_converter.py config.yaml --target-model ftd-3120 --pretty
-□ (Optional) Specify custom HA port: --ha-port Ethernet1/5
+□ Run: python FortiGateToFTDTool/fortigate_converter.py config.yaml --target-model ftd-3120 --pretty
+□ (Optional) Specify custom HA port: --ha-port Ethernet1/5 (or --ha-port none to disable)
 □ Review generated JSON files (13 files total including metadata)
-□ Check summary.json for conversion statistics
+□ Check ftd_config_summary.json for conversion statistics
 □ Review any warnings in console output
 □ Verify HA port assignment matches your design
 ```
@@ -255,14 +257,15 @@ python -c "import yaml, requests, urllib3; print('All libraries installed!')"
 
 ```
 □ Import interfaces first (creates foundation):
-    python ftd_api_importer.py --host IP -u admin --only-physical-interfaces
-    python ftd_api_importer.py --host IP -u admin --only-etherchannels
-    python ftd_api_importer.py --host IP -u admin --only-subinterfaces
-    python ftd_api_importer.py --host IP -u admin --only-security-zones
+    python FortiGateToFTDTool/ftd_api_importer.py --host IP -u admin --only-physical-interfaces
+    python FortiGateToFTDTool/ftd_api_importer.py --host IP -u admin --only-etherchannels
+    python FortiGateToFTDTool/ftd_api_importer.py --host IP -u admin --only-subinterfaces
+    python FortiGateToFTDTool/ftd_api_importer.py --host IP -u admin --only-bridge-groups
+    python FortiGateToFTDTool/ftd_api_importer.py --host IP -u admin --only-security-zones
 
 □ Import objects and rules:
   # Use --workers to control concurrent address/service object creation (default 6)
-  python ftd_api_importer.py --host IP -u admin --workers 6
+  python FortiGateToFTDTool/ftd_api_importer.py --host IP -u admin --workers 6
 
 □ Deploy configuration in FDM
 □ Verify objects in FDM web interface
@@ -277,15 +280,17 @@ python -c "import yaml, requests, urllib3; print('All libraries installed!')"
 ### If Something Goes Wrong
 
 ```
-□ Run cleanup: python ftd_api_cleanup.py --host IP -u admin --delete-all --dry-run
+□ Run cleanup: python FortiGateToFTDTool/ftd_api_cleanup.py --host IP -u admin --delete-all --dry-run
 □ Review what will be deleted
-□ Execute: python ftd_api_cleanup.py --host IP -u admin --delete-all --deploy
+□ Execute: python FortiGateToFTDTool/ftd_api_cleanup.py --host IP -u admin --delete-all --deploy
 □ Start over with corrected configuration
 ```
 
 ---
 
 ## Phase 1: Converting FortiGate Configuration
+
+All CLI examples below assume you run commands from the **repository root**. Use the `FortiGateToFTDTool/` path shown, or `cd FortiGateToFTDTool` and drop the prefix.
 
 ### Step 1: Export FortiGate Configuration
 
@@ -302,33 +307,33 @@ Before converting, determine which FTD model you're migrating to. This affects i
 
 **List available models:**
 ```bash
-python fortigate_converter.py --list-models
+python FortiGateToFTDTool/fortigate_converter.py --list-models
 ```
 
 **Supported models:**
 
-| Model    | Ports | HA Port     | Description               |
-|----------|-------|-------------|---------------------------|
-| ftd-1010 | 8     | None        | Entry-level, no HA        |
-| ftd-1120 | 12    | Ethernet1/2 | Small branch              |
-| ftd-1140 | 12    | Ethernet1/2 | Small branch              |
-| ftd-2110 | 12    | Ethernet1/2 | Mid-range                 |
-| ftd-2120 | 12    | Ethernet1/2 | Mid-range                 |
-| ftd-2130 | 16    | Ethernet1/2 | Mid-range                 |
-| ftd-2140 | 16    | Ethernet1/2 | Mid-range                 |
-| ftd-3105 | 8     | Ethernet1/2 | Secure Firewall           |
-| ftd-3110 | 16    | Ethernet1/2 | Secure Firewall           |
-| ftd-3120 | 16    | Ethernet1/2 | Secure Firewall (default) |
-| ftd-3130 | 24    | Ethernet1/2 | Secure Firewall           |
-| ftd-3140 | 24    | Ethernet1/2 | Secure Firewall           |
-| ftd-4215 | 24    | Ethernet1/2 | Enterprise                |
+| Model    | Ports | HA Port (default) | Description               |
+|----------|-------|-------------------|---------------------------|
+| ftd-1010 | 8     | None              | Entry-level, no HA        |
+| ftd-1120 | 12    | None              | Small branch              |
+| ftd-1140 | 12    | None              | Small branch              |
+| ftd-2110 | 12    | None              | Mid-range                 |
+| ftd-2120 | 12    | None              | Mid-range                 |
+| ftd-2130 | 16    | None              | Mid-range                 |
+| ftd-2140 | 16    | None              | Mid-range                 |
+| ftd-3105 | 16    | Ethernet1/2       | Secure Firewall           |
+| ftd-3110 | 16    | Ethernet1/2       | Secure Firewall           |
+| ftd-3120 | 16    | Ethernet1/2       | Secure Firewall (default) |
+| ftd-3130 | 24    | Ethernet1/2       | Secure Firewall           |
+| ftd-3140 | 24    | Ethernet1/2       | Secure Firewall           |
+| ftd-4215 | 24    | Ethernet1/2       | Enterprise                |
 
 **Note:** Default HA ports can be overridden using the `--ha-port` option. See [Customizing HA Port Configuration](#customizing-ha-port-configuration) for details.
 
 
 ### Step 2a: Customizing HA Port Configuration
 
-By default, most FTD models reserve **Ethernet1/2** for High Availability (HA) connections. However, you can customize which port is used for HA using the `--ha-port` option.
+By default, **Secure Firewall models (ftd-3105 and newer)** reserve **Ethernet1/2** for High Availability (HA) connections. Older models (ftd-1010 through ftd-2140) do not reserve an HA port unless you set one with `--ha-port`. Use `--ha-port none` on HA-capable models to disable the default reservation.
 
 #### When to Use a Custom HA Port
 
@@ -339,14 +344,15 @@ By default, most FTD models reserve **Ethernet1/2** for High Availability (HA) c
 
 #### How HA Port Assignment Works
 
-1. **Default behavior**: Models with HA support (all except FTD-1010) use Ethernet1/2
+1. **Default behavior**: ftd-3105 and newer reserve Ethernet1/2; other models reserve no HA port unless `--ha-port` is set
 2. **Port reservation**: The HA port is automatically skipped during interface conversion
 3. **Port validation**: Custom HA ports must be within the model's port range (1 to total_ports)
 4. **Data port assignment**: All FortiGate interfaces are mapped to available FTD ports, excluding the HA port
+5. **Disable HA reservation**: Pass `--ha-port none` to use all data ports on HA-capable models
 
 #### Custom HA Port Syntax
 ```bash
-python fortigate_converter.py config.yaml --target-model MODEL --ha-port EthernetX/Y
+python FortiGateToFTDTool/fortigate_converter.py config.yaml --target-model MODEL --ha-port EthernetX/Y
 ```
 
 **Format Requirements:**
@@ -359,7 +365,7 @@ python fortigate_converter.py config.yaml --target-model MODEL --ha-port Etherne
 
 **Example 1: Use Ethernet1/5 for HA on FTD-3120 (16-port model)**
 ```bash
-python fortigate_converter.py fortigate.yaml --target-model ftd-3120 --ha-port Ethernet1/5 --pretty
+python FortiGateToFTDTool/fortigate_converter.py fortigate.yaml --target-model ftd-3120 --ha-port Ethernet1/5 --pretty
 ```
 **Result:**
 - HA configured on: Ethernet1/5
@@ -369,7 +375,7 @@ python fortigate_converter.py fortigate.yaml --target-model ftd-3120 --ha-port E
 
 **Example 2: Use Ethernet1/10 for HA on FTD-3140 (24-port model)**
 ```bash
-python fortigate_converter.py fortigate.yaml --target-model ftd-3140 --ha-port Ethernet1/10 --pretty
+python FortiGateToFTDTool/fortigate_converter.py fortigate.yaml --target-model ftd-3140 --ha-port Ethernet1/10 --pretty
 ```
 **Result:**
 - HA configured on: Ethernet1/10
@@ -379,7 +385,7 @@ python fortigate_converter.py fortigate.yaml --target-model ftd-3140 --ha-port E
 
 **Example 3: Keep default HA port (Ethernet1/2)**
 ```bash
-python fortigate_converter.py fortigate.yaml --target-model ftd-3120 --pretty
+python FortiGateToFTDTool/fortigate_converter.py fortigate.yaml --target-model ftd-3120 --pretty
 ```
 **Result:**
 - HA configured on: Ethernet1/2 (default)
@@ -389,7 +395,7 @@ python fortigate_converter.py fortigate.yaml --target-model ftd-3120 --pretty
 
 **Example 4: Try invalid port number (will error)**
 ```bash
-python fortigate_converter.py fortigate.yaml --target-model ftd-3120 --ha-port Ethernet1/99
+python FortiGateToFTDTool/fortigate_converter.py fortigate.yaml --target-model ftd-3120 --ha-port Ethernet1/99
 ```
 **Result:**
 ```
@@ -401,7 +407,7 @@ Specify a port between Ethernet1/1 and Ethernet1/16.
 
 **Example 5: Try invalid format (will error)**
 ```bash
-python fortigate_converter.py fortigate.yaml --target-model ftd-3120 --ha-port eth1/5
+python FortiGateToFTDTool/fortigate_converter.py fortigate.yaml --target-model ftd-3120 --ha-port eth1/5
 ```
 **Result:**
 ```
@@ -415,10 +421,10 @@ The conversion script automatically adjusts port availability based on your HA p
 
 | HA Port Setting       | Ports Reserved        | Ports Available for Data Traffic          |
 |-----------------------|-----------------------|-------------------------------------------|
-| Default (Ethernet1/2) | Ethernet1/2           | Ethernet1/1, 1/3-16 (15 ports)            |
-| Custom (Ethernet1/5)  | Ethernet1/5           | Ethernet1/1-4, 1/6-16 (15 ports)          |
-| Custom (Ethernet1/10) | Ethernet1/10          | Ethernet1/1-9, 1/11-16 (15 ports)         |
-| FTD-1010 (No HA)      | None                  | Ethernet1/1-8 (all 8 ports)               |
+| Default on 3105+ (Ethernet1/2) | Ethernet1/2 | Ethernet1/1, 1/3-16 on 16-port models (15 ports) |
+| Custom (Ethernet1/5)  | Ethernet1/5           | Ethernet1/1-4, 1/6-16 (15 ports on ftd-3120) |
+| Custom (Ethernet1/10) | Ethernet1/10          | Ethernet1/1-9, 1/11-24 (23 ports on ftd-3140) |
+| No HA port (default on 1010–2140, or `--ha-port none`) | None | All model data ports available |
 
 #### Verification
 
@@ -454,17 +460,17 @@ The metadata file stores your model selection for the import process.
 
 **Basic conversion (uses default ftd-3120):**
 ```bash
-python fortigate_converter.py fortigate_config.yaml --pretty
+python FortiGateToFTDTool/fortigate_converter.py fortigate_config.yaml --pretty
 ```
 
 **Specify target model (recommended):**
 ```bash
-python fortigate_converter.py fortigate_config.yaml --target-model ftd-3120 --pretty
+python FortiGateToFTDTool/fortigate_converter.py fortigate_config.yaml --target-model ftd-3120 --pretty
 ```
 
 **Custom output name:**
 ```bash
-python fortigate_converter.py fortigate_config.yaml -o prod_ftd --target-model ftd-3120 --pretty
+python FortiGateToFTDTool/fortigate_converter.py fortigate_config.yaml -o prod_ftd --target-model ftd-3120 --pretty
 ```
 
 **Command options:**
@@ -476,7 +482,7 @@ python fortigate_converter.py fortigate_config.yaml -o prod_ftd --target-model f
 | `--pretty`       | Format JSON with indentation      | Off          |
 | `--target-model` | Target FTD firewall model         | `ftd-3120`   |
 | `--list-models`  | Display supported models and exit | -            |
-| `--ha-port`      | Specified HA port being used      | `Ethernet1/2`|
+| `--ha-port`      | Custom HA port (`Ethernet1/X`) or `none` to disable | Model default (see table above) |
 ### Step 4: Review Generated Files
 
 The converter creates 13 JSON files:
@@ -505,6 +511,7 @@ The `{output}_metadata.json` file stores conversion settings:
 {
   "target_model": "ftd-3120",
   "output_basename": "ftd_config",
+  "ha_port": "Ethernet1/2",
   "schema_version": 1
 }
 ```
@@ -515,6 +522,7 @@ The `{output}_metadata.json` file stores conversion settings:
 |-------------------|----------------------------------------------------------------------|
 | `target_model`    | Tells importer which FTD model was targeted for correct port mapping |
 | `output_basename` | Helps importer auto-discover related JSON files                      |
+| `ha_port`         | Records the HA port reserved during conversion (`null` if none)     |
 | `schema_version`  | Future-proofing for format changes                                   |
 
 **Auto-discovery:** The importer automatically finds `{base}_metadata.json` when you use `--base`. No need to specify `--metadata-file` manually.
@@ -569,7 +577,7 @@ cat ftd_config_summary.json
 
 ### Palo Alto PAN-OS Conversion
 
-To convert for Palo Alto instead of Cisco FTD, use the `pa_converter.py` script in the `FortiGateToPaloAltoTool/` directory:
+Run from the **repository root**. To convert for Palo Alto instead of Cisco FTD, use `pa_converter.py` in the `FortiGateToPaloAltoTool/` directory:
 
 **Basic conversion (uses default PA-440):**
 ```bash
@@ -609,6 +617,8 @@ The PA converter generates 10 JSON files (addresses, address groups, services, s
 
 ## Phase 2a: Importing to FTD
 
+Run these commands from the **repository root** using the `FortiGateToFTDTool/` paths below (or `cd FortiGateToFTDTool` and drop the prefix).
+
 ### Important: Object Dependency Order
 
 FTD requires objects to be imported in a specific order because later objects reference earlier ones.
@@ -634,7 +644,7 @@ FTD requires objects to be imported in a specific order because later objects re
 The importer prompts for password if not provided:
 
 ```bash
-python ftd_api_importer.py --host 192.168.1.1 -u admin
+python FortiGateToFTDTool/ftd_api_importer.py --host 192.168.1.1 -u admin
 ```
 
 ### Step 2: Import Interfaces First
@@ -642,11 +652,11 @@ python ftd_api_importer.py --host 192.168.1.1 -u admin
 Interfaces form the foundation. Import them in this specific order:
 
 ```bash
-python ftd_api_importer.py --host 192.168.1.1 -u admin --only-physical-interfaces # Update physical interfaces
-python ftd_api_importer.py --host 192.168.1.1 -u admin --only-etherchannels # Create EtherChannels (port-channels)
-python ftd_api_importer.py --host 192.168.1.1 -u admin --only-subinterfaces # Create subinterfaces (VLANs)
-python ftd_api_importer.py --host 192.168.1.1 -u admin --only-bridge-groups # Create bridge groups
-python ftd_api_importer.py --host 192.168.1.1 -u admin --only-security-zones # Create security zones
+python FortiGateToFTDTool/ftd_api_importer.py --host 192.168.1.1 -u admin --only-physical-interfaces # Update physical interfaces
+python FortiGateToFTDTool/ftd_api_importer.py --host 192.168.1.1 -u admin --only-etherchannels # Create EtherChannels (port-channels)
+python FortiGateToFTDTool/ftd_api_importer.py --host 192.168.1.1 -u admin --only-subinterfaces # Create subinterfaces (VLANs)
+python FortiGateToFTDTool/ftd_api_importer.py --host 192.168.1.1 -u admin --only-bridge-groups # Create bridge groups
+python FortiGateToFTDTool/ftd_api_importer.py --host 192.168.1.1 -u admin --only-security-zones # Create security zones
 ```
 
 ### Step 3: Import Objects and Rules
@@ -655,26 +665,26 @@ After interfaces are configured, import remaining objects:
 
 ```bash
 # Import everything else (skips already-imported interfaces)
-python ftd_api_importer.py --host 192.168.1.1 -u admin
+python FortiGateToFTDTool/ftd_api_importer.py --host 192.168.1.1 -u admin
 ```
 
 Or import selectively:
 
 ```bash
 # Address objects and groups
-python ftd_api_importer.py --host 192.168.1.1 -u admin --only-address-objects
-python ftd_api_importer.py --host 192.168.1.1 -u admin --only-address-groups
-python ftd_api_importer.py --host 192.168.1.1 -u admin --only-service-objects
-python ftd_api_importer.py --host 192.168.1.1 -u admin --only-service-groups
-python ftd_api_importer.py --host 192.168.1.1 -u admin --only-routes
-python ftd_api_importer.py --host 192.168.1.1 -u admin --only-rules
+python FortiGateToFTDTool/ftd_api_importer.py --host 192.168.1.1 -u admin --only-address-objects
+python FortiGateToFTDTool/ftd_api_importer.py --host 192.168.1.1 -u admin --only-address-groups
+python FortiGateToFTDTool/ftd_api_importer.py --host 192.168.1.1 -u admin --only-service-objects
+python FortiGateToFTDTool/ftd_api_importer.py --host 192.168.1.1 -u admin --only-service-groups
+python FortiGateToFTDTool/ftd_api_importer.py --host 192.168.1.1 -u admin --only-routes
+python FortiGateToFTDTool/ftd_api_importer.py --host 192.168.1.1 -u admin --only-rules
 ```
 
 ### Step 4: Deploy Configuration
 
 **Option A: Deploy via script**
 ```bash
-python ftd_api_importer.py --host 192.168.1.1 -u admin --deploy
+python FortiGateToFTDTool/ftd_api_importer.py --host 192.168.1.1 -u admin --deploy
 ```
 
 **Option B: Deploy via FDM web interface**
@@ -698,6 +708,8 @@ python ftd_api_importer.py --host 192.168.1.1 -u admin --deploy
 | `--debug`         | Enable debug output showing API payloads                     |
 | `--workers`       | Max concurrent threads for address/service imports (default: 6) |
 | `--json-report`   | Write run summary to a JSON file                             |
+| `--validate-only` | Authenticate and probe endpoints without importing           |
+| `--skip-existing` | Skip objects that already exist (default: update existing)   |
 | `--only-*`        | Import only specific object types                            |
 | `--file`          | Import specific JSON file                                    |
 | `--type`          | Object type for `--file`                                     |
@@ -722,6 +734,8 @@ python ftd_api_importer.py --host 192.168.1.1 -u admin --deploy
 
 ## Phase 2b: Importing to Palo Alto PAN-OS
 
+Run from the **repository root** using the `FortiGateToPaloAltoTool/` paths below.
+
 ### Step 1: Import Configuration
 
 The PAN-OS importer pushes converted JSON to your Palo Alto firewall via the XML API. It imports objects in dependency order automatically.
@@ -745,14 +759,15 @@ python FortiGateToPaloAltoTool/panos_api_importer.py --host 10.0.0.1 --username 
 
 **Import order (handled automatically):**
 ```
-1. Zones                ← Foundation
-2. Address Objects      ← Standalone
-3. Address Groups       ← References address objects
-4. Service Objects      ← Standalone
-5. Service Groups       ← References service objects
-6. Static Routes        ← References interfaces
-7. Security Rules       ← References everything above
-8. Commit (optional)    ← Activates configuration
+1. Interfaces           ← Foundation (physical, aggregate, VLAN)
+2. Zones                ← Requires interfaces
+3. Address Objects      ← Standalone
+4. Address Groups       ← References address objects
+5. Service Objects      ← Standalone
+6. Service Groups       ← References service objects
+7. Static Routes        ← References interfaces
+8. Security Rules       ← References everything above
+9. Commit (optional)    ← Activates configuration
 ```
 
 ### Step 2: Commit Configuration
@@ -786,6 +801,8 @@ python FortiGateToPaloAltoTool/panos_api_cleanup.py --host 10.0.0.1 --username a
 
 ## Phase 3: Cleanup (Optional)
 
+Run these commands from the **repository root** using the `FortiGateToFTDTool/` paths below (or `cd FortiGateToFTDTool` and drop the prefix).
+
 The FTD cleanup script removes imported objects for rollback or fresh start.
 
 ### Important: Deletion Order
@@ -811,34 +828,34 @@ Objects must be deleted in reverse dependency order:
 Always preview before deleting:
 
 ```bash
-python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-all --dry-run
+python FortiGateToFTDTool/ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-all --dry-run
 ```
 
 ### Step 2: Execute Deletion
 
 ```bash
 # Delete everything
-python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-all
+python FortiGateToFTDTool/ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-all
 
 # Delete and deploy
-python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-all --deploy
+python FortiGateToFTDTool/ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-all --deploy
 ```
 
 ### Selective Deletion
 
 ```bash
 # Delete specific object types
-python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-rules
-python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-routes
-python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-address-objects
-python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-address-groups
-python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-service-objects
-python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-service-groups
-python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-security-zones
-python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-bridge-groups
-python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-subinterfaces
-python ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-etherchannels
-python ftd_api_cleanup.py --host 192.168.1.1 -u admin --reset-physical-interfaces
+python FortiGateToFTDTool/ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-rules
+python FortiGateToFTDTool/ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-routes
+python FortiGateToFTDTool/ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-address-objects
+python FortiGateToFTDTool/ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-address-groups
+python FortiGateToFTDTool/ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-service-objects
+python FortiGateToFTDTool/ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-service-groups
+python FortiGateToFTDTool/ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-security-zones
+python FortiGateToFTDTool/ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-bridge-groups
+python FortiGateToFTDTool/ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-subinterfaces
+python FortiGateToFTDTool/ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-etherchannels
+python FortiGateToFTDTool/ftd_api_cleanup.py --host 192.168.1.1 -u admin --reset-physical-interfaces
 ```
 
 ### Cleanup Password Protection
@@ -933,16 +950,16 @@ Both the importer and cleanup accept `--workers N` to control the size of the th
 
 ```bash
 # Default (6 workers)
-python ftd_api_importer.py --host 10.0.0.1 -u admin
+python FortiGateToFTDTool/ftd_api_importer.py --host 10.0.0.1 -u admin
 
 # Conservative (high rate-limit environment)
-python ftd_api_importer.py --host 10.0.0.1 -u admin --workers 2
+python FortiGateToFTDTool/ftd_api_importer.py --host 10.0.0.1 -u admin --workers 2
 
 # Aggressive (high-latency link, powerful appliance)
-python ftd_api_importer.py --host 10.0.0.1 -u admin --workers 10
+python FortiGateToFTDTool/ftd_api_importer.py --host 10.0.0.1 -u admin --workers 10
 
 # Cleanup with fewer workers
-python ftd_api_cleanup.py --host 10.0.0.1 -u admin --delete-all --workers 3
+python FortiGateToFTDTool/ftd_api_cleanup.py --host 10.0.0.1 -u admin --delete-all --workers 3
 ```
 
 ### Retry and Backoff Behavior
@@ -967,10 +984,10 @@ Both the importer and cleanup support `--json-report <path>` to write a machine-
 
 ```bash
 # Importer report
-python ftd_api_importer.py --host 10.0.0.1 -u admin --json-report import_results.json
+python FortiGateToFTDTool/ftd_api_importer.py --host 10.0.0.1 -u admin --json-report import_results.json
 
 # Cleanup report
-python ftd_api_cleanup.py --host 10.0.0.1 -u admin --delete-all --json-report cleanup_results.json
+python FortiGateToFTDTool/ftd_api_cleanup.py --host 10.0.0.1 -u admin --delete-all --json-report cleanup_results.json
 ```
 
 ---
@@ -1006,10 +1023,10 @@ SSL: CERTIFICATE_VERIFY_FAILED
 **Solution:**
 ```bash
 # Check your model's port range
-python fortigate_converter.py --list-models
+python FortiGateToFTDTool/fortigate_converter.py --list-models
 
 # Example: FTD-3120 has 16 ports, so valid range is Ethernet1/1 through Ethernet1/16
-python fortigate_converter.py config.yaml --target-model ftd-3120 --ha-port Ethernet1/12 --pretty
+python FortiGateToFTDTool/fortigate_converter.py config.yaml --target-model ftd-3120 --ha-port Ethernet1/12 --pretty
 ```
 
 ---
@@ -1021,7 +1038,7 @@ python fortigate_converter.py config.yaml --target-model ftd-3120 --ha-port Ethe
 **Solution:**
 ```bash
 # Correct format (case-sensitive)
-python fortigate_converter.py config.yaml --target-model ftd-3120 --ha-port Ethernet1/5
+python FortiGateToFTDTool/fortigate_converter.py config.yaml --target-model ftd-3120 --ha-port Ethernet1/5
 
 # WRONG formats (will error):
 # --ha-port eth1/5
@@ -1052,7 +1069,7 @@ python fortigate_converter.py config.yaml --target-model ftd-3120 --ha-port Ethe
 **Solution:**
 ```bash
 # Re-run conversion with explicit HA port
-python fortigate_converter.py config.yaml --target-model ftd-3120 --ha-port Ethernet1/8 --pretty
+python FortiGateToFTDTool/fortigate_converter.py config.yaml --target-model ftd-3120 --ha-port Ethernet1/8 --pretty
 
 # Verify in generated files
 grep -i "hardwareName" ftd_config_physical_interfaces.json
@@ -1182,7 +1199,7 @@ Deployment validation failed
    - Notify stakeholders
 
 4. **Review Converted Config**
-   - Check summary.json statistics
+   - Check `ftd_config_summary.json` statistics
    - Review conversion warnings
    - Validate critical rules converted correctly
 
@@ -1467,22 +1484,18 @@ For networks without internet access:
 **On Internet-Connected Machine:**
 
 ```bash
-# Create package directory
+# Create package directory (from the repo root)
 mkdir ftd_migration_packages
-cd ftd_migration_packages
 
 # Download packages
-pip download pyyaml requests urllib3
+pip download -r requirements.txt -d ftd_migration_packages
 ```
 
 **On Airgapped Machine:**
 
 ```bash
-# Navigate to package directory
-cd path\to\ftd_migration_packages
-
-# Install from local files
-python -m pip install --no-index --find-links=. pyyaml requests urllib3
+# From the tool directory (where requirements.txt lives)
+python -m pip install --no-index --find-links=ftd_migration_packages -r requirements.txt
 
 # Verify installation
 python -c "import yaml, requests, urllib3; print('All libraries installed!')"
@@ -1550,103 +1563,115 @@ python -c "import yaml, requests, urllib3; print('All libraries installed!')"
 {
   "target_model": "ftd-3120",
   "output_basename": "ftd_config",
+  "ha_port": "Ethernet1/2",
   "schema_version": 1
 }
 ```
 
 ### C. Complete Command Reference
 
+All commands below assume the **repository root** as the working directory.
+
 **Conversion Commands:**
 ```bash
 # Basic conversion
-python fortigate_converter.py config.yaml --pretty
+python FortiGateToFTDTool/fortigate_converter.py config.yaml --pretty
 
 # Specify target model
-python fortigate_converter.py config.yaml --target-model ftd-3120 --pretty
+python FortiGateToFTDTool/fortigate_converter.py config.yaml --target-model ftd-3120 --pretty
 
 # Custom output name
-python fortigate_converter.py config.yaml -o prod_ftd --target-model ftd-3120 --pretty
+python FortiGateToFTDTool/fortigate_converter.py config.yaml -o prod_ftd --target-model ftd-3120 --pretty
 
 # List supported models
-python fortigate_converter.py --list-models
+python FortiGateToFTDTool/fortigate_converter.py --list-models
 
 # Help
-python fortigate_converter.py --help
+python FortiGateToFTDTool/fortigate_converter.py --help
 ```
 
 **Import Commands:**
 ```bash
 # Full import (auto-discovers metadata)
-python ftd_api_importer.py --host IP -u admin
+python FortiGateToFTDTool/ftd_api_importer.py --host IP -u admin
 
 # With explicit metadata file
-python ftd_api_importer.py --host IP -u admin --metadata-file ftd_config_metadata.json
+python FortiGateToFTDTool/ftd_api_importer.py --host IP -u admin --metadata-file ftd_config_metadata.json
 
 # Interface imports (in order)
-python ftd_api_importer.py --host IP -u admin --only-physical-interfaces
-python ftd_api_importer.py --host IP -u admin --only-etherchannels
-python ftd_api_importer.py --host IP -u admin --only-subinterfaces
-python ftd_api_importer.py --host IP -u admin --only-bridge-groups
-python ftd_api_importer.py --host IP -u admin --only-security-zones
+python FortiGateToFTDTool/ftd_api_importer.py --host IP -u admin --only-physical-interfaces
+python FortiGateToFTDTool/ftd_api_importer.py --host IP -u admin --only-etherchannels
+python FortiGateToFTDTool/ftd_api_importer.py --host IP -u admin --only-subinterfaces
+python FortiGateToFTDTool/ftd_api_importer.py --host IP -u admin --only-bridge-groups
+python FortiGateToFTDTool/ftd_api_importer.py --host IP -u admin --only-security-zones
 
 # Object imports
-python ftd_api_importer.py --host IP -u admin --only-address-objects
-python ftd_api_importer.py --host IP -u admin --only-address-groups
-python ftd_api_importer.py --host IP -u admin --only-service-objects
-python ftd_api_importer.py --host IP -u admin --only-service-groups
-python ftd_api_importer.py --host IP -u admin --only-routes
-python ftd_api_importer.py --host IP -u admin --only-rules
+python FortiGateToFTDTool/ftd_api_importer.py --host IP -u admin --only-address-objects
+python FortiGateToFTDTool/ftd_api_importer.py --host IP -u admin --only-address-groups
+python FortiGateToFTDTool/ftd_api_importer.py --host IP -u admin --only-service-objects
+python FortiGateToFTDTool/ftd_api_importer.py --host IP -u admin --only-service-groups
+python FortiGateToFTDTool/ftd_api_importer.py --host IP -u admin --only-routes
+python FortiGateToFTDTool/ftd_api_importer.py --host IP -u admin --only-rules
 
 # Import specific file
-python ftd_api_importer.py --host IP -u admin --file custom.json --type address-objects
+python FortiGateToFTDTool/ftd_api_importer.py --host IP -u admin --file custom.json --type address-objects
 
 # Import and deploy
-python ftd_api_importer.py --host IP -u admin --deploy
+python FortiGateToFTDTool/ftd_api_importer.py --host IP -u admin --deploy
 
 # Custom worker count
-python ftd_api_importer.py --host IP -u admin --workers 3
+python FortiGateToFTDTool/ftd_api_importer.py --host IP -u admin --workers 3
 
 # Generate JSON report
-python ftd_api_importer.py --host IP -u admin --json-report import_results.json
+python FortiGateToFTDTool/ftd_api_importer.py --host IP -u admin --json-report import_results.json
+
+# Validate connectivity without importing
+python FortiGateToFTDTool/ftd_api_importer.py --host IP -u admin --validate-only
+
+# Skip existing objects instead of updating them
+python FortiGateToFTDTool/ftd_api_importer.py --host IP -u admin --skip-existing
 
 # Debug mode
-python ftd_api_importer.py --host IP -u admin --debug
+python FortiGateToFTDTool/ftd_api_importer.py --host IP -u admin --debug
 
 # Help
-python ftd_api_importer.py --help
+python FortiGateToFTDTool/ftd_api_importer.py --help
 ```
 
 **Cleanup Commands:**
 ```bash
 # Dry run (preview)
-python ftd_api_cleanup.py --host IP -u admin --delete-all --dry-run
+python FortiGateToFTDTool/ftd_api_cleanup.py --host IP -u admin --delete-all --dry-run
 
 # Delete specific types
-python ftd_api_cleanup.py --host IP -u admin --delete-rules
-python ftd_api_cleanup.py --host IP -u admin --delete-routes
-python ftd_api_cleanup.py --host IP -u admin --delete-subinterfaces
-python ftd_api_cleanup.py --host IP -u admin --delete-etherchannels
-python ftd_api_cleanup.py --host IP -u admin --delete-security-zones
-python ftd_api_cleanup.py --host IP -u admin --delete-bridge-groups
-python ftd_api_cleanup.py --host IP -u admin --delete-service-groups
-python ftd_api_cleanup.py --host IP -u admin --delete-service-objects
-python ftd_api_cleanup.py --host IP -u admin --delete-address-groups
-python ftd_api_cleanup.py --host IP -u admin --delete-address-objects
+python FortiGateToFTDTool/ftd_api_cleanup.py --host IP -u admin --delete-rules
+python FortiGateToFTDTool/ftd_api_cleanup.py --host IP -u admin --delete-routes
+python FortiGateToFTDTool/ftd_api_cleanup.py --host IP -u admin --delete-subinterfaces
+python FortiGateToFTDTool/ftd_api_cleanup.py --host IP -u admin --delete-etherchannels
+python FortiGateToFTDTool/ftd_api_cleanup.py --host IP -u admin --delete-security-zones
+python FortiGateToFTDTool/ftd_api_cleanup.py --host IP -u admin --delete-bridge-groups
+python FortiGateToFTDTool/ftd_api_cleanup.py --host IP -u admin --delete-service-groups
+python FortiGateToFTDTool/ftd_api_cleanup.py --host IP -u admin --delete-service-objects
+python FortiGateToFTDTool/ftd_api_cleanup.py --host IP -u admin --delete-address-groups
+python FortiGateToFTDTool/ftd_api_cleanup.py --host IP -u admin --delete-address-objects
 
 # Delete everything
-python ftd_api_cleanup.py --host IP -u admin --delete-all
+python FortiGateToFTDTool/ftd_api_cleanup.py --host IP -u admin --delete-all
+
+# Delete everything without confirmation prompt
+python FortiGateToFTDTool/ftd_api_cleanup.py --host IP -u admin --delete-all --yes
 
 # Delete and deploy
-python ftd_api_cleanup.py --host IP -u admin --delete-all --deploy
+python FortiGateToFTDTool/ftd_api_cleanup.py --host IP -u admin --delete-all --deploy
 
 # Custom worker count
-python ftd_api_cleanup.py --host IP -u admin --delete-all --workers 3
+python FortiGateToFTDTool/ftd_api_cleanup.py --host IP -u admin --delete-all --workers 3
 
 # Generate JSON report
-python ftd_api_cleanup.py --host IP -u admin --delete-all --json-report cleanup_results.json
+python FortiGateToFTDTool/ftd_api_cleanup.py --host IP -u admin --delete-all --json-report cleanup_results.json
 
 # Help
-python ftd_api_cleanup.py --help
+python FortiGateToFTDTool/ftd_api_cleanup.py --help
 ```
 
 ### D. Support and Resources

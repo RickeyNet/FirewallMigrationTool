@@ -4,7 +4,7 @@ Flair: phrase pools for action outcomes.
 Returns a formatted line like:
     [OK] Yeeted into the void: net-obj-foo
     [SKIP] Already gone, sweet prince: legacy-rule
-    [FAIL] Refused to die: stubborn-route — 503 Service Unavailable
+    [FAIL] Refused to die: stubborn-route - 503 Service Unavailable
 
 The bracket tag (`[OK] | [SKIP] | [FAIL]`) is preserved verbatim because
 JSON reports, exit-code logic, and grep-based log scraping depend on it.
@@ -54,7 +54,7 @@ _PHRASES: dict = {
     ("delete", "SKIP"): [
         "Already gone",
         "Nothing to see here",
-        "Ghost — already departed",
+        "Ghost - already departed",
         "Beat us to it",
     ],
     ("delete", "FAIL"): [
@@ -173,7 +173,7 @@ def flair(action: str, outcome: str, subject: str = "", detail: Optional[str] = 
         flair("delete", "OK", "net-obj-foo")
             -> "[OK] Yeeted into the void: net-obj-foo"
         flair("create", "FAIL", "rule-42", detail="422 duplicate name")
-            -> "[FAIL] Bounced: rule-42 — 422 duplicate name"
+            -> "[FAIL] Bounced: rule-42 - 422 duplicate name"
         flair("auth", "OK")
             -> "[OK] Secret handshake accepted"
     """
@@ -185,5 +185,5 @@ def flair(action: str, outcome: str, subject: str = "", detail: Optional[str] = 
     if subject:
         out = f"{out}: {subject}"
     if detail:
-        out = f"{out} — {detail}"
+        out = f"{out} - {detail}"
     return out

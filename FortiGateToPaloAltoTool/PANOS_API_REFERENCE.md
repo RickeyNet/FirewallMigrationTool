@@ -49,12 +49,12 @@ Body: user=<username>&password=<password>
 
 ### Using the API Key
 
-**Option 1 — HTTP Header (recommended):**
+**Option 1 - HTTP Header (recommended):**
 ```
 X-PAN-KEY: <api_key>
 ```
 
-**Option 2 — URL Parameter:**
+**Option 2 - URL Parameter:**
 ```
 https://<firewall>/api/?type=config&action=get&xpath=...&key=<api_key>
 ```
@@ -92,37 +92,37 @@ POST https://<fw>/api/?type=config&action=set&xpath=/config/devices/entry[@name=
 
 ## Configuration Actions
 
-### `set` — Create or Merge
+### `set` - Create or Merge
 Adds new entries or merges into existing configuration. **Idempotent** for new objects.
 - If the entry already exists, `set` merges the provided XML into the existing entry
 - If the entry does not exist, it is created
 - Does NOT delete children not specified in the element
 
-### `edit` — Replace Entire Node
+### `edit` - Replace Entire Node
 Replaces the entire node at the given XPath with the provided element.
 - **Destructive**: removes any children not included in the new element
 - XPath must point to a specific entry: `...address/entry[@name='test']`
 - Element must include the full node (including `<entry name="...">`)
 
-### `get` — Read Candidate Configuration
+### `get` - Read Candidate Configuration
 Returns the candidate (uncommitted) configuration at the specified XPath.
 ```
 GET https://<fw>/api/?type=config&action=get&xpath=<xpath>&key=<key>
 ```
 
-### `show` — Read Running Configuration
+### `show` - Read Running Configuration
 Returns the active (committed) running configuration.
 ```
 GET https://<fw>/api/?type=config&action=show&xpath=<xpath>&key=<key>
 ```
 
-### `delete` — Remove Configuration
+### `delete` - Remove Configuration
 Removes the entry at the specified XPath.
 ```
 POST https://<fw>/api/?type=config&action=delete&xpath=<xpath>/entry[@name='object_name']&key=<key>
 ```
 
-### `rename` — Rename Object
+### `rename` - Rename Object
 ```
 POST https://<fw>/api/?type=config&action=rename&xpath=<xpath>/entry[@name='old']&newname=new&key=<key>
 ```
@@ -416,19 +416,19 @@ Append `/entry[@name='object_name']` to any XPath to target a specific object:
 
 | Field | Required | Values | Default |
 |---|---|---|---|
-| `<from>` | Yes | Zone names or `any` | — |
-| `<to>` | Yes | Zone names or `any` | — |
-| `<source>` | Yes | Address/group names or `any` | — |
-| `<destination>` | Yes | Address/group names or `any` | — |
-| `<service>` | Yes | Service/group names, `any`, or `application-default` | — |
-| `<application>` | Yes | App names or `any` | — |
-| `<action>` | Yes | `allow`, `deny`, `drop`, `reset-client`, `reset-server`, `reset-both` | — |
+| `<from>` | Yes | Zone names or `any` | - |
+| `<to>` | Yes | Zone names or `any` | - |
+| `<source>` | Yes | Address/group names or `any` | - |
+| `<destination>` | Yes | Address/group names or `any` | - |
+| `<service>` | Yes | Service/group names, `any`, or `application-default` | - |
+| `<application>` | Yes | App names or `any` | - |
+| `<action>` | Yes | `allow`, `deny`, `drop`, `reset-client`, `reset-server`, `reset-both` | - |
 | `<log-start>` | No | `yes`, `no` | `no` |
 | `<log-end>` | No | `yes`, `no` | `no` |
-| `<log-setting>` | No | Log forwarding profile name or `default` | — |
-| `<description>` | No | Text (max 1023 chars) | — |
+| `<log-setting>` | No | Log forwarding profile name or `default` | - |
+| `<description>` | No | Text (max 1023 chars) | - |
 | `<disabled>` | No | `yes`, `no` | `no` |
-| `<tag>` | No | `<member>tag_name</member>` | — |
+| `<tag>` | No | `<member>tag_name</member>` | - |
 | `<negate-source>` | No | `yes`, `no` | `no` |
 | `<negate-destination>` | No | `yes`, `no` | `no` |
 

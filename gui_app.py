@@ -251,7 +251,7 @@ class App(tk.Tk):
         self.geometry("960x720")
         self.minsize(800, 600)
 
-        # Window icon — load from bundle dir when frozen, project dir otherwise.
+        # Window icon - load from bundle dir when frozen, project dir otherwise.
         # Wrapped because a bad/missing .ico must never crash the GUI.
         try:
             base = getattr(sys, "_MEIPASS", APP_DIR) if getattr(sys, "frozen", False) else APP_DIR
@@ -1475,7 +1475,7 @@ class App(tk.Tk):
         put(" (CLI .conf)\n\n", "bullet")
         put("Note: ", "warning")
         put("When the target is FortiGate, the Import and Cleanup tabs are "
-            "disabled \u2014 FortiGate output is a CLI .conf file you restore "
+            "disabled - FortiGate output is a CLI .conf file you restore "
             "from the FortiGate GUI (System \u2192 Configuration \u2192 Restore).\n\n",
             "italic")
 
@@ -1522,16 +1522,16 @@ class App(tk.Tk):
         put("The Convert tab's input field changes based on the selected source:\n\n")
         put("\u2022  ", "bullet")
         put("FortiGate: ", "bold")
-        put("Input YAML \u2014 path to a FortiGate config exported as YAML.\n", "bullet")
+        put("Input YAML - path to a FortiGate config exported as YAML.\n", "bullet")
         put("\u2022  ", "bullet")
         put("Cisco ASA: ", "bold")
-        put("Input Config \u2014 plain-text ASA config (.txt, .cfg, .conf).\n", "bullet")
+        put("Input Config - plain-text ASA config (.txt, .cfg, .conf).\n", "bullet")
         put("\u2022  ", "bullet")
         put("Palo Alto: ", "bold")
-        put("Input XML \u2014 a PAN-OS configuration export (running-config XML).\n", "bullet")
+        put("Input XML - a PAN-OS configuration export (running-config XML).\n", "bullet")
         put("\u2022  ", "bullet")
         put("Cisco FTD: ", "bold")
-        put("two modes \u2014 ", "bullet")
+        put("two modes - ", "bullet")
         put("live API", "italic")
         put(" (enter FTD Host / IP plus FTD username, then a password prompt) "
             "or ", "bullet")
@@ -1552,7 +1552,7 @@ class App(tk.Tk):
         put("fg_config", "code")
         put(" (FortiGate target).\n", "bullet")
         put("\u2022  Target Model: ", "bullet")
-        put("Hardware model for the target appliance \u2014 controls interface "
+        put("Hardware model for the target appliance - controls interface "
             "port mapping and port count. Not applicable when the target is "
             "FortiGate.\n", "bullet")
         put("\u2022  HA Port / FTD Username: ", "bullet")
@@ -1598,7 +1598,7 @@ class App(tk.Tk):
         put("Pushes the converted JSON files to a Cisco FTD or Palo Alto PAN-OS "
             "appliance via its management API. ", "")
         put("Disabled when the target is FortiGate", "warning")
-        put(" \u2014 use the FortiGate GUI's Restore feature instead.\n\n", "")
+        put(" - use the FortiGate GUI's Restore feature instead.\n\n", "")
 
         put("Connection Fields\n", "h2")
         put("\u2022  Host / IP: ", "bullet")
@@ -1626,27 +1626,27 @@ class App(tk.Tk):
         put("By default (no boxes checked), all object types are imported in "
             "dependency order. Check one or more to import only those types:\n\n")
         put("\u2022  Physical Interfaces", "bullet")
-        put(" \u2014 port configurations (IP, name, enabled state)\n", "bullet")
+        put(" - port configurations (IP, name, enabled state)\n", "bullet")
         put("\u2022  EtherChannels", "bullet")
-        put(" \u2014 port-channel / LACP bond configurations\n", "bullet")
+        put(" - port-channel / LACP bond configurations\n", "bullet")
         put("\u2022  Subinterfaces", "bullet")
-        put(" \u2014 VLAN subinterface configurations\n", "bullet")
+        put(" - VLAN subinterface configurations\n", "bullet")
         put("\u2022  Bridge Groups", "bullet")
-        put(" \u2014 bridge group / BVI configurations\n", "bullet")
+        put(" - bridge group / BVI configurations\n", "bullet")
         put("\u2022  Security Zones", "bullet")
-        put(" \u2014 zone definitions\n", "bullet")
+        put(" - zone definitions\n", "bullet")
         put("\u2022  Address Objects", "bullet")
-        put(" \u2014 host, network, range, FQDN\n", "bullet")
+        put(" - host, network, range, FQDN\n", "bullet")
         put("\u2022  Address Groups", "bullet")
-        put(" \u2014 groups of address objects\n", "bullet")
+        put(" - groups of address objects\n", "bullet")
         put("\u2022  Service Objects", "bullet")
-        put(" \u2014 TCP/UDP port objects\n", "bullet")
+        put(" - TCP/UDP port objects\n", "bullet")
         put("\u2022  Service Groups", "bullet")
-        put(" \u2014 groups of service objects\n", "bullet")
+        put(" - groups of service objects\n", "bullet")
         put("\u2022  Static Routes", "bullet")
-        put(" \u2014 IPv4 static route entries\n", "bullet")
+        put(" - IPv4 static route entries\n", "bullet")
         put("\u2022  Access Rules", "bullet")
-        put(" \u2014 firewall policy / access control rules\n\n", "bullet")
+        put(" - firewall policy / access control rules\n\n", "bullet")
 
         put("How Existing Objects Are Handled\n", "h2")
         put("\u2022  ", "bullet")
@@ -1668,7 +1668,7 @@ class App(tk.Tk):
             "step.\n", "bullet")
         put("\u2022  ", "bullet")
         put("Physical interfaces (FTD): ", "bold")
-        put("always PUT \u2014 they pre-exist on the device.\n\n", "bullet")
+        put("always PUT - they pre-exist on the device.\n\n", "bullet")
         put("Tip: ", "tip")
         put("Imports are safe to re-run. Existing objects are updated in place "
             "(FTD) or merged (PAN-OS) rather than skipped, so the target stays "
@@ -1743,7 +1743,7 @@ class App(tk.Tk):
         put(" first to preview.\n", "bullet")
         put("5.  Click ", "bullet")
         put("Start Cleanup", "bold")
-        put(" \u2014 you will be prompted for the cleanup password.\n", "bullet")
+        put(" - you will be prompted for the cleanup password.\n", "bullet")
         put("6.  Review the dry-run output, then uncheck Dry run and run again "
             "to perform the deletion.\n", "bullet")
         put("7.  A confirmation dialog appears before destructive operations.\n\n",
@@ -1970,7 +1970,7 @@ class App(tk.Tk):
                 )
             except Exception as exc:
                 # Scrub any operator passwords typed into the GUI before
-                # surfacing the exception or traceback — defense in depth in
+                # surfacing the exception or traceback - defense in depth in
                 # case a future code path puts credentials into a URL or body
                 # that ends up in a network exception string.
                 err_text = self._scrub_secrets(str(exc))

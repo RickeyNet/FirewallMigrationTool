@@ -606,7 +606,7 @@ Examples:
     )
 
     if args.dry_run:
-        print("\n*** DRY-RUN MODE — no changes will be made ***\n")
+        print("\n*** DRY-RUN MODE - no changes will be made ***\n")
         # In dry-run, we don't need to authenticate
         client.import_all(args.input, auto_commit=False)
         client.print_summary()

@@ -250,7 +250,7 @@ class FTDAPIClient(FTDBaseClient):
         """
         Return True if ``payload`` would not actually change ``existing``.
 
-        Compares value-bearing fields only — FDM bookkeeping (id, version,
+        Compares value-bearing fields only - FDM bookkeeping (id, version,
         links, metadata, ...) is dropped from both sides. For any field
         present in the new payload, the existing value must match. Existing
         fields not mentioned in the payload are tolerated (FDM defaults).
@@ -303,7 +303,7 @@ class FTDAPIClient(FTDBaseClient):
             return False, f"Existing object has no ID: {obj_name}"
 
         # Short-circuit: if every value-bearing field already matches what we
-        # would PUT, treat as SKIP — no need to hit the API and no risk of an
+        # would PUT, treat as SKIP - no need to hit the API and no risk of an
         # FDM "no changes detected" rejection.
         if self._payload_matches_existing(existing, payload):
             if track_stats:
@@ -377,7 +377,7 @@ class FTDAPIClient(FTDBaseClient):
             if response.status_code == 422:
                 error_msg = self._extract_error_message(response)
                 if "already exists" in error_msg.lower() or "duplicate" in error_msg.lower():
-                    # Object exists — try to update it if update_existing is enabled
+                    # Object exists - try to update it if update_existing is enabled
                     if self.update_existing:
                         return self._update_existing_object(
                             endpoint, payload, stat_prefix, track_stats,
@@ -1318,10 +1318,10 @@ class FTDAPIClient(FTDBaseClient):
         # HA monitoring: enable only on standalone physical interfaces,
         # disable on etherchannel member preps (subinterfaces handled separately)
         if intf.get('name') == '':
-            # EtherChannel member prep — only the etherchannel itself should be monitored
+            # EtherChannel member prep - only the etherchannel itself should be monitored
             update_payload['monitorInterface'] = False
         else:
-            # Standalone physical interface — enable HA monitoring
+            # Standalone physical interface - enable HA monitoring
             update_payload['monitorInterface'] = True
 
         endpoint = f"{self.base_url}/devices/default/interfaces/{intf_id}"

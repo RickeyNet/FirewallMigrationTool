@@ -9,10 +9,10 @@ Password resolution order:
     2. Built-in default hash (baked into this source file)
 
 If the user changes the password, a JSON file is created.  If that file
-is deleted, the built-in default is used automatically — users are
+is deleted, the built-in default is used automatically - users are
 never locked out.
 
-Uses PBKDF2-HMAC-SHA256 (standard library only — no third-party deps)
+Uses PBKDF2-HMAC-SHA256 (standard library only - no third-party deps)
 with a random 16-byte salt and 600 000 iterations.  Only the hash is
 stored, so the original password cannot be recovered.
 

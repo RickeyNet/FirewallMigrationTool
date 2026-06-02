@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-FortiGate to Palo Alto PAN-OS Configuration Converter — Main Script
+FortiGate to Palo Alto PAN-OS Configuration Converter - Main Script
 ====================================================================
 Orchestrates the conversion of FortiGate YAML configs to PAN-OS JSON format.
 
@@ -8,16 +8,16 @@ This mirrors the structure of FortiGateToFTDTool/fortigate_converter.py
 but targets Palo Alto PAN-OS instead of Cisco FTD.
 
 OUTPUT FILES:
-    {basename}_interfaces.json        — PAN-OS interface configs (physical, sub, aggregate)
-    {basename}_address_objects.json   — PAN-OS address objects
-    {basename}_address_groups.json    — PAN-OS address groups
-    {basename}_service_objects.json   — PAN-OS service objects
-    {basename}_service_groups.json    — PAN-OS service groups
-    {basename}_security_rules.json    — PAN-OS security rules
-    {basename}_static_routes.json     — PAN-OS static routes
-    {basename}_zones.json             — PAN-OS zone definitions
-    {basename}_metadata.json          — Conversion metadata
-    {basename}_summary.json           — Conversion statistics
+    {basename}_interfaces.json        - PAN-OS interface configs (physical, sub, aggregate)
+    {basename}_address_objects.json   - PAN-OS address objects
+    {basename}_address_groups.json    - PAN-OS address groups
+    {basename}_service_objects.json   - PAN-OS service objects
+    {basename}_service_groups.json    - PAN-OS service groups
+    {basename}_security_rules.json    - PAN-OS security rules
+    {basename}_static_routes.json     - PAN-OS static routes
+    {basename}_zones.json             - PAN-OS zone definitions
+    {basename}_metadata.json          - Conversion metadata
+    {basename}_summary.json           - Conversion statistics
 
 HOW TO RUN:
     python pa_converter.py fortigate.yaml

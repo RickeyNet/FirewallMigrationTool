@@ -8,7 +8,7 @@ either a live FDM API connection or a saved/exported JSON file.
 
 SUPPORTED FILE FORMATS
 -----------------------
-1. Normalized export — direct output of FTDReader.read_all() or a manual
+1. Normalized export - direct output of FTDReader.read_all() or a manual
    API snapshot saved as-is:
 
        {
@@ -18,7 +18,7 @@ SUPPORTED FILE FORMATS
            ...
        }
 
-2. FDM API snapshot — each section wrapped in an FDM-style paging dict:
+2. FDM API snapshot - each section wrapped in an FDM-style paging dict:
 
        {
            "network_objects": {"items": [...]},
@@ -28,7 +28,7 @@ SUPPORTED FILE FORMATS
 
 HOW TO CREATE A COMPATIBLE JSON FILE
 --------------------------------------
-Option A — Save the API reader output:
+Option A - Save the API reader output:
     Connect to your FTD device via the FDM API once and save the result:
 
         from ftd_reader import FTDReader
@@ -41,7 +41,7 @@ Option A — Save the API reader output:
         with open("ftd_snapshot.json", "w") as f:
             json.dump(config, f, indent=2)
 
-Option B — Export individual sections from the FDM REST API and combine
+Option B - Export individual sections from the FDM REST API and combine
     them under the keys listed below, then save as a single JSON file.
 
 REQUIRED KEYS
@@ -59,7 +59,7 @@ import os
 from typing import Any, Dict, List
 
 # ---------------------------------------------------------------------------
-# Section keys — must match FTDReader.read_all() output keys
+# Section keys - must match FTDReader.read_all() output keys
 # ---------------------------------------------------------------------------
 _SECTIONS: List[str] = [
     "network_objects",

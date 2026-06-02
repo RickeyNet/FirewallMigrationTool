@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 """
-Cisco FTD to FortiGate Configuration Converter — Main Script
+Cisco FTD to FortiGate Configuration Converter - Main Script
 =============================================================
 Connects to a Cisco FTD device via the Firepower Device Manager (FDM)
 REST API, reads the running configuration, and converts it to a single
 FortiGate CLI .conf file.
 
 OUTPUT FILE:
-    {output_base}.conf    — FortiGate CLI configuration
+    {output_base}.conf    - FortiGate CLI configuration
 
 SECTIONS GENERATED (in order):
-    1. config system interface    — Physical and EtherChannel interfaces
-    2. config system zone         — Security zones (with member interfaces)
-    3. config firewall address    — Address objects
-    4. config firewall addrgrp    — Address groups
-    5. config firewall service custom  — TCP/UDP service objects
-    6. config firewall service group   — Service groups
-    7. config firewall policy     — Security policies (from access rules)
-    8. config router static       — Static routes
+    1. config system interface    - Physical and EtherChannel interfaces
+    2. config system zone         - Security zones (with member interfaces)
+    3. config firewall address    - Address objects
+    4. config firewall addrgrp    - Address groups
+    5. config firewall service custom  - TCP/UDP service objects
+    6. config firewall service group   - Service groups
+    7. config firewall policy     - Security policies (from access rules)
+    8. config router static       - Static routes
 
 HOW TO RUN:
     python fg_ftd_converter.py --host 192.168.1.1 --username admin --password P@ss
@@ -36,7 +36,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 # ---------------------------------------------------------------------------
-# Path setup — allow importing from sibling tool directories
+# Path setup - allow importing from sibling tool directories
 # ---------------------------------------------------------------------------
 _SELF_DIR = os.path.dirname(os.path.abspath(__file__))
 _FTD_DIR = os.path.join(os.path.dirname(_SELF_DIR), "FortiGateToFTDTool")
@@ -120,9 +120,9 @@ def _convert_interfaces(
     """Convert FTD interfaces to a FortiGate 'config system interface' block.
 
     Returns:
-        cli_block          — The FortiGate CLI text
-        zone_to_intfs      — Mapping of zone name → [fg_intf_name, ...]
-        hw_to_fg           — Mapping of FTD hardware name → fg_intf_name
+        cli_block          - The FortiGate CLI text
+        zone_to_intfs      - Mapping of zone name → [fg_intf_name, ...]
+        hw_to_fg           - Mapping of FTD hardware name → fg_intf_name
                              (used when resolving static-route interface names)
     """
     lines = ["config system interface"]
@@ -174,7 +174,7 @@ def _convert_interfaces(
         if not obj.get("enabled", True):
             lines.append("        set status down")
 
-        # Zone membership — record for later zone block generation
+        # Zone membership - record for later zone block generation
         zone_ref = obj.get("securityZone") or {}
         zone_name = zone_ref.get("name", "")
         if zone_name:
@@ -442,8 +442,8 @@ def _convert_port_objects(
     merges them back into single dual-protocol FortiGate service objects.
 
     Returns:
-        cli_block        — FortiGate CLI text
-        service_name_map — Mapping of original FTD port-object name → FG service name
+        cli_block        - FortiGate CLI text
+        service_name_map - Mapping of original FTD port-object name → FG service name
                            (used by group and policy converters)
     """
     lines = ["config firewall service custom"]
@@ -812,10 +812,10 @@ _HEADER_TEMPLATE = """\
 # ============================================================
 #
 # HOW TO APPLY:
-#   Option A — CLI (granular, section by section):
+#   Option A - CLI (granular, section by section):
 #     Paste each config block into the FortiGate CLI shell.
 #
-#   Option B — Web UI restore (merges all sections at once):
+#   Option B - Web UI restore (merges all sections at once):
 #     System > Configuration > Restore  (select this .conf file)
 #
 # IMPORTANT:
@@ -929,7 +929,7 @@ Examples:
             verify_ssl=not args.no_ssl_verify,
         )
         if not reader.authenticate():
-            print("[ERROR] Authentication failed — check host, username, and password.")
+            print("[ERROR] Authentication failed - check host, username, and password.")
             return 1
         print("\n[Reading FTD configuration...]")
         ftd_config = reader.read_all()

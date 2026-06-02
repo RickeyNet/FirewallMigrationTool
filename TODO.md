@@ -230,7 +230,7 @@ This checklist tracks technical debt, performance hardening, and usability impro
 
 ---
 
-## P4: GUI — Source/Target Matrix Polish
+## P4: GUI - Source/Target Matrix Polish
 
 Follow-up items identified during v1.6.1 label/tab fixes. The app supports multiple
 source→target pairs but several UI elements still carry FTD-centric defaults or wording.
@@ -262,12 +262,12 @@ source→target pairs but several UI elements still carry FTD-centric defaults o
     "FTD Config JSON:" (FTD file mode), "FTD Host / IP:" (FTD API mode).
   - Suggested pattern: `"<Source> Config (<format>):"` for file inputs,
     keep "FTD Host / IP:" as the exception for API mode.
-  - Priority: Low — cosmetic polish.
+  - Priority: Low - cosmetic polish.
 
 - [x] Dim or hide Import/Cleanup tabs when target is FortiGate
   - Done (v1.6.2): Took the "dim and disable" approach. Added `_set_tab_enabled()`
     helper that recursively walks a tab frame and toggles interactive widgets
-    (Entry / Checkbutton / Spinbox / Combobox / Button) — output Text widgets are
+    (Entry / Checkbutton / Spinbox / Combobox / Button) - output Text widgets are
     skipped so prior logs stay readable. `_retitle_import_cleanup_tabs()` sets
     `_imp_locked_by_target` / `_cln_locked_by_target` flags that `_set_buttons_state()`
     respects so the shared run/cancel toggle never re-enables locked buttons.
@@ -278,18 +278,18 @@ source→target pairs but several UI elements still carry FTD-centric defaults o
     Subinterfaces, Bridge Groups, Security Zones, etc.) are FTD-specific terminology.
     For PAN-OS target, rebuild the list with PAN-OS-relevant types, or hide the
     whole Selective Import frame when the target doesn't support granular import.
-  - Priority: Medium — current state can mislead PAN-OS users into thinking they're
+  - Priority: Medium - current state can mislead PAN-OS users into thinking they're
     enabling filters that get ignored.
 
 - [ ] Filter Cleanup tab "What to Delete" checkboxes per target
-  - Scope: Same issue as the Import tab — delete-types at `gui_app.py:973-985` include
+  - Scope: Same issue as the Import tab - delete-types at `gui_app.py:973-985` include
     FDM-specific items like "Physical Interfaces (reset)". Rebuild per target.
   - Priority: Medium.
 
 - [ ] Audit Config Viewer tab for target-specific behavior
   - Scope: Verify whether the Viewer handles YAML (FG), XML (PA), JSON (FTD/PAN-OS
     exports) appropriately, or hide/disable the tab for unsupported targets.
-  - Priority: Medium — unknown impact until audited.
+  - Priority: Medium - unknown impact until audited.
 
 - [ ] Update Help tab to reflect FTD-username repurposing and new source/target pairs
   - Scope: Help text at `gui_app.py:1391-1394` describes "HA Port (optional):" as
@@ -300,7 +300,7 @@ source→target pairs but several UI elements still carry FTD-centric defaults o
 
 - [ ] Simplify the window-title template
   - Scope: Seven hardcoded title strings across `_on_platform_change` branches.
-    Replace with a single template: `f"Firewall Migration Tool — {source} → {target} v{APP_VERSION}"`.
+    Replace with a single template: `f"Firewall Migration Tool - {source} → {target} v{APP_VERSION}"`.
   - Benefit: Fewer bespoke strings, consistent formatting, one place to change wording.
   - Priority: Low.
 
