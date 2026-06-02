@@ -24,6 +24,7 @@ fortigate_config.yaml
 build/
 dist/
 *.spec
+version_info.txt
 
 # Built executable
 *.exe

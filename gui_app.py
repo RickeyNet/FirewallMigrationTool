@@ -34,16 +34,51 @@ else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
     _PKG_DIR = APP_DIR
 
-# Add both tool directories to sys.path
+# Add enabled tool directories to sys.path. Restricted builds bundle a
+# build_profile_runtime.json file into the PyInstaller temp directory.
 _FTD_DIR = os.path.join(APP_DIR, "FortiGateToFTDTool")
 _PA_DIR = os.path.join(APP_DIR, "FortiGateToPaloAltoTool")
 _ASA_DIR = os.path.join(APP_DIR, "CiscoASAToPaloAltoTool")
 _PA_TO_FG_DIR = os.path.join(APP_DIR, "PaloAltoToFortiGateTool")
 _FTD_TO_FG_DIR = os.path.join(APP_DIR, "CiscoFTDToFortiGateTool")
 
-for _d in (_FTD_DIR, _PA_DIR, _ASA_DIR, _PA_TO_FG_DIR, _FTD_TO_FG_DIR, _PKG_DIR):
-    if os.path.isdir(_d) and _d not in sys.path:
+_TOOL_DIRS = {
+    "FortiGateToFTDTool": _FTD_DIR,
+    "FortiGateToPaloAltoTool": _PA_DIR,
+    "CiscoASAToPaloAltoTool": _ASA_DIR,
+    "PaloAltoToFortiGateTool": _PA_TO_FG_DIR,
+    "CiscoFTDToFortiGateTool": _FTD_TO_FG_DIR,
+}
+
+
+def _load_runtime_profile():
+    profile_path = os.environ.get("FMT_BUILD_PROFILE_FILE", "").strip()
+    candidates = [profile_path] if profile_path else []
+    candidates.extend([
+        os.path.join(_PKG_DIR, "build_profile_runtime.json"),
+        os.path.join(APP_DIR, "build_profile_runtime.json"),
+    ])
+    for path in candidates:
+        if not path or not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            return data if isinstance(data, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            return {}
+    return {}
+
+
+_RUNTIME_PROFILE = _load_runtime_profile()
+_ENABLED_TOOL_DIR_NAMES = _RUNTIME_PROFILE.get("tool_dirs") or list(_TOOL_DIRS)
+
+for _name in _ENABLED_TOOL_DIR_NAMES:
+    _d = _TOOL_DIRS.get(_name)
+    if _d and os.path.isdir(_d) and _d not in sys.path:
         sys.path.insert(0, _d)
+if _PKG_DIR not in sys.path:
+    sys.path.insert(0, _PKG_DIR)
 
 # Import the three FTD entry points
 from fortigate_converter import main as convert_main   # noqa: E402
@@ -108,9 +143,39 @@ PA_MODEL_LIST = [
     "pa-5220",
 ]
 
-SOURCE_PLATFORM_LIST = ["FortiGate", "Cisco ASA", "Palo Alto", "Cisco FTD"]
+def _profile_list(key, default):
+    value = _RUNTIME_PROFILE.get(key)
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return value or default
+    return default
 
-PLATFORM_LIST = ["Cisco FTD", "Palo Alto PAN-OS", "FortiGate"]
+
+def _profile_text(key, default=""):
+    value = _RUNTIME_PROFILE.get(key)
+    return value.strip() if isinstance(value, str) and value.strip() else default
+
+
+SOURCE_PLATFORM_LIST = _profile_list(
+    "source_platforms", ["FortiGate", "Cisco ASA", "Palo Alto", "Cisco FTD"],
+)
+
+PLATFORM_LIST = _profile_list(
+    "target_platforms", ["Cisco FTD", "Palo Alto PAN-OS", "FortiGate"],
+)
+
+DEFAULT_SOURCE_PLATFORM = SOURCE_PLATFORM_LIST[0]
+DEFAULT_TARGET_PLATFORM = PLATFORM_LIST[0]
+
+SUPPORTED_PAIRS_TEXT = _profile_text(
+    "supported_pairs_text",
+    (
+        "Supported pairs:  FortiGate <-> Cisco FTD   |   "
+        "FortiGate <-> Palo Alto PAN-OS   |   "
+        "Cisco ASA -> Palo Alto PAN-OS"
+    ),
+)
+
+APP_TITLE_OVERRIDE = _profile_text("app_title")
 
 # Known auto-generated defaults for the "Output Base Name" field. When the field
 # holds any of these, platform changes may overwrite it; when the user has typed
@@ -118,6 +183,12 @@ PLATFORM_LIST = ["Cisco FTD", "Palo Alto PAN-OS", "FortiGate"]
 DEFAULT_OUTPUT_BASES = {"", "ftd_config", "pa_config", "fg_config"}
 
 DEFAULT_DIR = APP_DIR
+
+
+def _profile_title(default):
+    if APP_TITLE_OVERRIDE:
+        return APP_TITLE_OVERRIDE.format(version=APP_VERSION)
+    return default
 
 
 # ---------------------------------------------------------------------------
@@ -247,7 +318,7 @@ class App(tk.Tk):
 
     def __init__(self):
         super().__init__()
-        self.title(f"Firewall Migration Tool v{APP_VERSION}")
+        self._set_window_title(f"Firewall Migration Tool v{APP_VERSION}")
         self.geometry("960x720")
         self.minsize(800, 600)
 
@@ -266,8 +337,8 @@ class App(tk.Tk):
         self._output_queue: queue.Queue = queue.Queue()
 
         # Current platform selection
-        self._current_platform = "Cisco FTD"
-        self._current_source = "FortiGate"
+        self._current_platform = DEFAULT_TARGET_PLATFORM
+        self._current_source = DEFAULT_SOURCE_PLATFORM
 
         # Import/Cleanup tab lockout state (set by _retitle_import_cleanup_tabs
         # when target doesn't support API-based import/cleanup).
@@ -280,6 +351,9 @@ class App(tk.Tk):
 
         self._apply_theme(THEMES[self._current_theme])
         self._build_ui()
+
+    def _set_window_title(self, default):
+        self.title(_profile_title(default))
 
     # ------------------------------------------------------------------
     # Theme engine
@@ -498,24 +572,28 @@ class App(tk.Tk):
         platform_frame.pack(fill=tk.X, padx=6, pady=(6, 0))
 
         ttk.Label(platform_frame, text="Source:").pack(side=tk.LEFT, padx=(4, 4))
-        self.source_var = tk.StringVar(value="FortiGate")
+        self.source_var = tk.StringVar(value=self._current_source)
         source_combo = ttk.Combobox(
             platform_frame, textvariable=self.source_var,
-            values=SOURCE_PLATFORM_LIST, state="readonly", width=14,
+            values=SOURCE_PLATFORM_LIST,
+            state=(tk.DISABLED if len(SOURCE_PLATFORM_LIST) == 1 else "readonly"),
+            width=14,
         )
         source_combo.pack(side=tk.LEFT)
         source_combo.bind("<<ComboboxSelected>>", self._on_source_change)
 
         ttk.Label(platform_frame, text="Target:").pack(side=tk.LEFT, padx=(12, 4))
-        self.platform_var = tk.StringVar(value="Cisco FTD")
+        self.platform_var = tk.StringVar(value=self._current_platform)
         self.platform_combo = ttk.Combobox(
             platform_frame, textvariable=self.platform_var,
-            values=PLATFORM_LIST, state="readonly", width=20,
+            values=PLATFORM_LIST,
+            state=(tk.DISABLED if len(PLATFORM_LIST) == 1 else "readonly"),
+            width=20,
         )
         self.platform_combo.pack(side=tk.LEFT)
         self.platform_combo.bind("<<ComboboxSelected>>", self._on_platform_change)
 
-        if not _PA_AVAILABLE:
+        if "Palo Alto PAN-OS" in PLATFORM_LIST and not _PA_AVAILABLE:
             self._pa_warning = ttk.Label(
                 platform_frame, text="(PA modules not found)", foreground=_FG_DIM,
             )
@@ -536,11 +614,7 @@ class App(tk.Tk):
         matrix_frame.pack(fill=tk.X, padx=6, pady=(2, 0))
         ttk.Label(
             matrix_frame,
-            text=(
-                "Supported pairs:  FortiGate ↔ Cisco FTD   |   "
-                "FortiGate ↔ Palo Alto PAN-OS   |   "
-                "Cisco ASA → Palo Alto PAN-OS"
-            ),
+            text=SUPPORTED_PAIRS_TEXT,
             foreground=_FG_DIM,
         ).pack(side=tk.LEFT, padx=(4, 0))
 
@@ -554,6 +628,9 @@ class App(tk.Tk):
         self._build_viewer_tab(notebook)
         self._build_help_tab(notebook)
 
+        # Apply profile/source defaults after all tab widgets exist.
+        self._on_source_change()
+
         # Status bar
         self.status_var = tk.StringVar(value="Ready")
         ttk.Label(
@@ -561,29 +638,49 @@ class App(tk.Tk):
             anchor=tk.W, padding=(6, 2),
         ).pack(side=tk.BOTTOM, fill=tk.X)
 
+    def _targets_for_source(self, source):
+        target_map = {
+            "FortiGate": ["Cisco FTD", "Palo Alto PAN-OS"],
+            "Cisco ASA": ["Palo Alto PAN-OS"],
+            "Palo Alto": ["FortiGate"],
+            "Cisco FTD": ["FortiGate"],
+        }
+        candidates = target_map.get(source, PLATFORM_LIST)
+        return [target for target in candidates if target in PLATFORM_LIST]
+
+    def _configure_target_selector(self, targets):
+        state = tk.DISABLED if len(targets) <= 1 else "readonly"
+        self.platform_combo.configure(values=targets, state=state)
+        if targets and self.platform_var.get() not in targets:
+            self.platform_var.set(targets[0])
+
     def _on_source_change(self, event=None):
         """Handle source platform change - update target list and input label."""
         source = self.source_var.get()
         self._current_source = source
+        targets = self._targets_for_source(source)
+        if not targets:
+            messagebox.showerror(
+                "Unsupported Profile",
+                f"No enabled targets are available for source platform: {source}",
+            )
+            return
 
         if source == "Cisco ASA":
             # When source is ASA, target must be Palo Alto PAN-OS
-            self.platform_combo.configure(values=["Palo Alto PAN-OS"], state="disabled")
-            self.platform_var.set("Palo Alto PAN-OS")
+            self._configure_target_selector(targets)
             self._on_platform_change()
             self.conv_input_label.configure(text="Input Config:")
             self.conv_browse_btn.configure(state=tk.NORMAL)
         elif source == "Palo Alto":
             # When source is Palo Alto, target must be FortiGate
-            self.platform_combo.configure(values=["FortiGate"], state="disabled")
-            self.platform_var.set("FortiGate")
+            self._configure_target_selector(targets)
             self._on_platform_change()
             self.conv_input_label.configure(text="Input XML:")
             self.conv_browse_btn.configure(state=tk.NORMAL)
         elif source == "Cisco FTD":
             # FTD → FortiGate: default to live API mode
-            self.platform_combo.configure(values=["FortiGate"], state="disabled")
-            self.platform_var.set("FortiGate")
+            self._configure_target_selector(targets)
             self._on_platform_change()
             self.conv_ftd_file_var.set(False)
             self.conv_ftd_file_check.grid()  # show the mode toggle
@@ -598,12 +695,8 @@ class App(tk.Tk):
             # FortiGate - restore FTD and PA targets (not FortiGate-as-target)
             self.conv_ftd_file_var.set(False)
             self.conv_ftd_file_check.grid_remove()  # hide FTD toggle
-            self.platform_combo.configure(
-                values=["Cisco FTD", "Palo Alto PAN-OS"], state="readonly",
-            )
-            if self.platform_var.get() == "FortiGate":
-                self.platform_var.set("Cisco FTD")
-                self._on_platform_change()
+            self._configure_target_selector(targets)
+            self._on_platform_change()
             self.conv_input_label.configure(text="Input YAML:")
             self.conv_browse_btn.configure(state=tk.NORMAL)
 
@@ -675,9 +768,13 @@ class App(tk.Tk):
 
             source = self._current_source
             if source == "Cisco ASA":
-                self.title(f"Cisco ASA to Palo Alto PAN-OS Migration Tool v{APP_VERSION}")
+                self._set_window_title(
+                    f"Cisco ASA to Palo Alto PAN-OS Migration Tool v{APP_VERSION}",
+                )
             else:
-                self.title(f"FortiGate to Palo Alto PAN-OS Migration Tool v{APP_VERSION}")
+                self._set_window_title(
+                    f"FortiGate to Palo Alto PAN-OS Migration Tool v{APP_VERSION}",
+                )
 
         elif platform == "FortiGate":
             source = self._current_source
@@ -702,9 +799,9 @@ class App(tk.Tk):
                 )
                 self.source_var.set("FortiGate")
                 self._current_source = "FortiGate"
-                self.platform_combo.configure(values=["Cisco FTD", "Palo Alto PAN-OS"])
-                self.platform_var.set("Cisco FTD")
-                self._current_platform = "Cisco FTD"
+                fallback_targets = self._targets_for_source("FortiGate")
+                self._configure_target_selector(fallback_targets)
+                self._current_platform = self.platform_var.get()
                 self._on_platform_change()
                 return
 
@@ -744,9 +841,13 @@ class App(tk.Tk):
 
             source = self._current_source
             if source == "Cisco FTD":
-                self.title(f"Cisco FTD to FortiGate Migration Tool v{APP_VERSION}")
+                self._set_window_title(
+                    f"Cisco FTD to FortiGate Migration Tool v{APP_VERSION}",
+                )
             else:
-                self.title(f"Palo Alto to FortiGate Migration Tool v{APP_VERSION}")
+                self._set_window_title(
+                    f"Palo Alto to FortiGate Migration Tool v{APP_VERSION}",
+                )
 
         else:
             # Restore FTD defaults - also re-enable model combo if it was disabled
@@ -773,7 +874,7 @@ class App(tk.Tk):
 
             self._retitle_import_cleanup_tabs("FTD")
 
-            self.title(f"FortiGate to Cisco FTD Converter v{APP_VERSION}")
+            self._set_window_title(f"FortiGate to Cisco FTD Converter v{APP_VERSION}")
 
     def _retitle_import_cleanup_tabs(self, target):
         """Update Import/Cleanup tab titles, section frame labels, and enabled state
