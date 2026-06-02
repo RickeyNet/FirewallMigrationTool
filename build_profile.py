@@ -23,6 +23,11 @@ ROOT = Path(__file__).resolve().parent
 GUI_FILE = ROOT / "gui_app.py"
 PROFILES_FILE = ROOT / "build_profiles.json"
 RUNTIME_PROFILE_NAME = "build_profile_runtime.json"
+CLEANUP_HIDDEN_IMPORTS = frozenset({
+    "ftd_api_cleanup",
+    "panos_api_cleanup",
+    "cleanup_auth",
+})
 
 
 def load_profiles() -> dict:
@@ -68,6 +73,33 @@ def validate_profile(profile_name: str, profile: dict) -> None:
             raise FileNotFoundError(f"Profile {profile_name!r} references missing directory: {tool_dir}")
 
 
+def resolve_features(profile: dict, no_cleanup: bool = False) -> dict:
+    features = dict(profile.get("features") or {})
+    if no_cleanup:
+        features["cleanup"] = False
+    elif "cleanup" not in features:
+        features["cleanup"] = True
+    return features
+
+
+def effective_hidden_imports(profile: dict, features: dict) -> list[str]:
+    hidden_imports = list(profile["hidden_imports"])
+    if not features.get("cleanup", True):
+        hidden_imports = [
+            module for module in hidden_imports
+            if module not in CLEANUP_HIDDEN_IMPORTS
+        ]
+    return hidden_imports
+
+
+def prepare_profile(profile: dict, no_cleanup: bool = False) -> dict:
+    prepared = dict(profile)
+    features = resolve_features(profile, no_cleanup=no_cleanup)
+    prepared["features"] = features
+    prepared["hidden_imports"] = effective_hidden_imports(profile, features)
+    return prepared
+
+
 def write_runtime_profile(profile_name: str, profile: dict) -> Path:
     runtime_dir = ROOT / "build" / "runtime_profiles" / profile_name
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -79,6 +111,7 @@ def write_runtime_profile(profile_name: str, profile: dict) -> Path:
         "target_platforms": profile["target_platforms"],
         "supported_pairs_text": profile.get("supported_pairs_text", ""),
         "tool_dirs": profile["tool_dirs"],
+        "features": profile.get("features", {"cleanup": True}),
     }
     runtime_path.write_text(json.dumps(runtime, indent=2), encoding="utf-8")
     return runtime_path
@@ -204,6 +237,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Write generated build metadata and print the PyInstaller command without building.",
     )
+    parser.add_argument(
+        "--no-cleanup",
+        action="store_true",
+        help="Omit the Cleanup tab and exclude cleanup modules from the executable.",
+    )
     return parser.parse_args()
 
 
@@ -222,11 +260,12 @@ def main() -> int:
         print("Run build_profile.py --list to see available profiles.")
         return 2
 
-    profile = profiles[args.profile]
+    profile = prepare_profile(profiles[args.profile], no_cleanup=args.no_cleanup)
     validate_profile(args.profile, profile)
 
     original_gui = None
     version = args.version or read_app_version()
+    cleanup_enabled = profile.get("features", {}).get("cleanup", True)
 
     print()
     print("============================================================")
@@ -234,6 +273,7 @@ def main() -> int:
     print("============================================================")
     print(f"  Profile: {args.profile}")
     print(f"  Version: {version}")
+    print(f"  Cleanup: {'enabled' if cleanup_enabled else 'disabled'}")
     print(f"  Output:  dist\\{profile['exe_name'].format(version=version)}.exe")
     print()
 

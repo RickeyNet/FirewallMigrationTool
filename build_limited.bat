@@ -17,6 +17,12 @@ REM        Lists available profiles from build_profiles.json
 REM
 REM    build_limited.bat fortigate_to_ftd 1.7.6 --dry-run
 REM        Prints the generated PyInstaller command without building
+REM
+REM    build_limited.bat fortigate_to_ftd 1.7.6 --no-cleanup
+REM        Builds without the Cleanup tab or cleanup modules
+REM
+REM    build_limited.bat fortigate_to_ftd_no_cleanup
+REM        Same as fortigate_to_ftd but cleanup disabled via profile
 REM =========================================================================
 
 setlocal

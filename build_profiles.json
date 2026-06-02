@@ -74,6 +74,43 @@
     "target_platforms": ["Cisco FTD"],
     "supported_pairs_text": "Supported pair:  FortiGate -> Cisco FTD",
     "tool_dirs": ["FortiGateToFTDTool"],
+    "features": {
+      "cleanup": true
+    },
+    "hidden_imports": [
+      "yaml",
+      "requests",
+      "urllib3",
+      "address_converter",
+      "address_group_converter",
+      "service_converter",
+      "service_group_converter",
+      "policy_converter",
+      "route_converter",
+      "interface_converter",
+      "common",
+      "concurrency_utils",
+      "ftd_api_base",
+      "platform_profiles",
+      "fortigate_converter",
+      "ftd_api_importer",
+      "ftd_api_cleanup",
+      "cleanup_auth"
+    ]
+  },
+  "fortigate_to_ftd_no_cleanup": {
+    "description": "Restricted build for FortiGate to Cisco FTD conversion and import only (no cleanup).",
+    "exe_name": "FortiGate-to-Cisco-FTD-Tool-v{version}",
+    "product_name": "FortiGate to Cisco FTD Tool",
+    "file_description": "Restricted FortiGate to Cisco FTD Migration Tool (no cleanup)",
+    "app_title": "FortiGate to Cisco FTD Tool v{version}",
+    "source_platforms": ["FortiGate"],
+    "target_platforms": ["Cisco FTD"],
+    "supported_pairs_text": "Supported pair:  FortiGate -> Cisco FTD",
+    "tool_dirs": ["FortiGateToFTDTool"],
+    "features": {
+      "cleanup": false
+    },
     "hidden_imports": [
       "yaml",
       "requests",

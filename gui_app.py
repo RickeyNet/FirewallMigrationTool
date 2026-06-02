@@ -73,6 +73,16 @@ def _load_runtime_profile():
 _RUNTIME_PROFILE = _load_runtime_profile()
 _ENABLED_TOOL_DIR_NAMES = _RUNTIME_PROFILE.get("tool_dirs") or list(_TOOL_DIRS)
 
+
+def _profile_feature(name, default=True):
+    features = _RUNTIME_PROFILE.get("features")
+    if isinstance(features, dict) and name in features:
+        return bool(features[name])
+    return default
+
+
+_CLEANUP_ENABLED = _profile_feature("cleanup", True)
+
 for _name in _ENABLED_TOOL_DIR_NAMES:
     _d = _TOOL_DIRS.get(_name)
     if _d and os.path.isdir(_d) and _d not in sys.path:
@@ -80,22 +90,25 @@ for _name in _ENABLED_TOOL_DIR_NAMES:
 if _PKG_DIR not in sys.path:
     sys.path.insert(0, _PKG_DIR)
 
-# Import the three FTD entry points
+# Import the FTD entry points
 from fortigate_converter import main as convert_main   # noqa: E402
 from ftd_api_importer import main as import_main       # noqa: E402
-from ftd_api_cleanup import main as cleanup_main       # noqa: E402
-from cleanup_auth import (                              # noqa: E402
-    set_password, verify_password,
-    has_custom_password, reset_to_default,
-)  # stdlib only - no third-party deps, portable across machines
+
+if _CLEANUP_ENABLED:
+    from ftd_api_cleanup import main as cleanup_main       # noqa: E402
+    from cleanup_auth import (                              # noqa: E402
+        set_password, verify_password,
+        has_custom_password, reset_to_default,
+    )  # stdlib only - no third-party deps, portable across machines
 
 # Palo Alto modules - optional (only needed when PA platform is selected)
 _PA_IMPORT_ERROR = ""
 try:
     from pa_converter import main as pa_convert_main          # noqa: E402
     from panos_api_importer import main as pa_import_main     # noqa: E402
-    from panos_api_cleanup import main as pa_cleanup_main     # noqa: E402
     _PA_AVAILABLE = True
+    if _CLEANUP_ENABLED:
+        from panos_api_cleanup import main as pa_cleanup_main     # noqa: E402
 except ImportError as _e:
     _PA_AVAILABLE = False
     _PA_IMPORT_ERROR = str(_e)
@@ -344,6 +357,7 @@ class App(tk.Tk):
         # when target doesn't support API-based import/cleanup).
         self._imp_locked_by_target = False
         self._cln_locked_by_target = False
+        self._cleanup_enabled = _CLEANUP_ENABLED
 
         # Track current theme
         self._current_theme = DEFAULT_THEME
@@ -624,7 +638,10 @@ class App(tk.Tk):
 
         self._build_convert_tab(notebook)
         self._build_import_tab(notebook)
-        self._build_cleanup_tab(notebook)
+        if self._cleanup_enabled:
+            self._build_cleanup_tab(notebook)
+        else:
+            self._cln_tab = None
         self._build_viewer_tab(notebook)
         self._build_help_tab(notebook)
 
@@ -759,10 +776,11 @@ class App(tk.Tk):
             self.imp_deploy_cb.configure(text="Commit after import")
 
             # Update Cleanup tab labels
-            self.cln_host_label.configure(text="PAN-OS Host / IP:")
-            self.cln_model_combo.configure(values=PA_MODEL_LIST)
-            self.cln_model_var.set("pa-440")
-            self.cln_deploy_cb.configure(text="Commit after cleanup")
+            if self._cleanup_enabled:
+                self.cln_host_label.configure(text="PAN-OS Host / IP:")
+                self.cln_model_combo.configure(values=PA_MODEL_LIST)
+                self.cln_model_var.set("pa-440")
+                self.cln_deploy_cb.configure(text="Commit after cleanup")
 
             self._retitle_import_cleanup_tabs("PAN-OS")
 
@@ -832,10 +850,11 @@ class App(tk.Tk):
             self.imp_workers_spin.configure(state=tk.DISABLED)
             self.imp_deploy_cb.configure(text="(not applicable)")
 
-            self.cln_host_label.configure(text="FortiGate Host / IP:")
-            self.cln_model_combo.configure(values=["(not applicable)"])
-            self.cln_model_var.set("(not applicable)")
-            self.cln_deploy_cb.configure(text="(not applicable)")
+            if self._cleanup_enabled:
+                self.cln_host_label.configure(text="FortiGate Host / IP:")
+                self.cln_model_combo.configure(values=["(not applicable)"])
+                self.cln_model_var.set("(not applicable)")
+                self.cln_deploy_cb.configure(text="(not applicable)")
 
             self._retitle_import_cleanup_tabs("FortiGate")
 
@@ -867,10 +886,11 @@ class App(tk.Tk):
             self.imp_workers_spin.configure(state=tk.NORMAL)
             self.imp_deploy_cb.configure(text="Deploy after import")
 
-            self.cln_host_label.configure(text="FTD Host / IP:")
-            self.cln_model_combo.configure(values=FTD_MODEL_LIST)
-            self.cln_model_var.set("ftd-3120")
-            self.cln_deploy_cb.configure(text="Deploy after cleanup")
+            if self._cleanup_enabled:
+                self.cln_host_label.configure(text="FTD Host / IP:")
+                self.cln_model_combo.configure(values=FTD_MODEL_LIST)
+                self.cln_model_var.set("ftd-3120")
+                self.cln_deploy_cb.configure(text="Deploy after cleanup")
 
             self._retitle_import_cleanup_tabs("FTD")
 
@@ -894,13 +914,18 @@ class App(tk.Tk):
             tabs_locked = False
 
         self._notebook.tab(self._imp_tab, text=imp_tab_text)
-        self._notebook.tab(self._cln_tab, text=cln_tab_text)
         self._imp_opts_frame.configure(text=imp_frame_text)
-        self._cln_opts_frame.configure(text=cln_frame_text)
 
         self._imp_locked_by_target = tabs_locked
-        self._cln_locked_by_target = tabs_locked
         self._set_tab_enabled(self._imp_tab, skip=(self.imp_output,), enabled=not tabs_locked)
+
+        if not self._cleanup_enabled:
+            return
+
+        self._notebook.tab(self._cln_tab, text=cln_tab_text)
+        self._cln_opts_frame.configure(text=cln_frame_text)
+
+        self._cln_locked_by_target = tabs_locked
         self._set_tab_enabled(self._cln_tab, skip=(self.cln_output,), enabled=not tabs_locked)
 
         # Reset-password button's enabled state depends on has_custom_password(),
@@ -1575,10 +1600,16 @@ class App(tk.Tk):
         put("FortiGate", "bold")
         put(" (CLI .conf)\n\n", "bullet")
         put("Note: ", "warning")
-        put("When the target is FortiGate, the Import and Cleanup tabs are "
-            "disabled - FortiGate output is a CLI .conf file you restore "
-            "from the FortiGate GUI (System \u2192 Configuration \u2192 Restore).\n\n",
-            "italic")
+        if self._cleanup_enabled:
+            put("When the target is FortiGate, the Import and Cleanup tabs are "
+                "disabled - FortiGate output is a CLI .conf file you restore "
+                "from the FortiGate GUI (System \u2192 Configuration \u2192 Restore).\n\n",
+                "italic")
+        else:
+            put("When the target is FortiGate, the Import tab is "
+                "disabled - FortiGate output is a CLI .conf file you restore "
+                "from the FortiGate GUI (System \u2192 Configuration \u2192 Restore).\n\n",
+                "italic")
 
         # ----- Getting Started -----
         put("Getting Started\n", "h1")
@@ -1607,13 +1638,14 @@ class App(tk.Tk):
         put("Config Viewer", "bold")
         put(" tab to browse JSON output. (Not used for FortiGate .conf output.)\n\n", "")
 
-        put("Step 5: Rollback if Needed\n", "h2")
-        put("Use the ", "")
-        put("Cleanup", "bold")
-        put(" tab to delete imported objects from FTD or PAN-OS. (Not available "
-            "when the target is FortiGate.)\n\n", "")
+        if self._cleanup_enabled:
+            put("Step 5: Rollback if Needed\n", "h2")
+            put("Use the ", "")
+            put("Cleanup", "bold")
+            put(" tab to delete imported objects from FTD or PAN-OS. (Not available "
+                "when the target is FortiGate.)\n\n", "")
 
-        # ----- Convert Tab -----
+        viewer_tab_num = 4 if self._cleanup_enabled else 3
         put("Tab 1: Convert\n", "h1")
         put("=" * 70 + "\n\n", "separator")
         put("Converts your source configuration into the format the target "
@@ -1794,67 +1826,68 @@ class App(tk.Tk):
         put(" and monitor the console.\n\n", "bullet")
 
         # ----- Cleanup Tab -----
-        put("Tab 3: Cleanup / Rollback\n", "h1")
-        put("=" * 70 + "\n\n", "separator")
-        put("Deletes imported objects from a Cisco FTD or PAN-OS appliance. ", "")
-        put("Disabled when the target is FortiGate", "warning")
-        put(".\n\n", "")
-        put("Cleanup Password: ", "warning")
-        put("Cleanup is gated by a password to prevent accidental destructive "
-            "runs. The first time you use Cleanup, enter the built-in default "
-            "password when prompted, then use the ", "italic")
-        put("Change Password", "bold")
-        put(" button next to the Cleanup form to set your own. ", "italic")
-        put("Reset Password", "bold")
-        put(" reverts to the default (and requires the current password to do "
-            "so).\n\n", "italic")
+        if self._cleanup_enabled:
+            put("Tab 3: Cleanup / Rollback\n", "h1")
+            put("=" * 70 + "\n\n", "separator")
+            put("Deletes imported objects from a Cisco FTD or PAN-OS appliance. ", "")
+            put("Disabled when the target is FortiGate", "warning")
+            put(".\n\n", "")
+            put("Cleanup Password: ", "warning")
+            put("Cleanup is gated by a password to prevent accidental destructive "
+                "runs. The first time you use Cleanup, enter the built-in default "
+                "password when prompted, then use the ", "italic")
+            put("Change Password", "bold")
+            put(" button next to the Cleanup form to set your own. ", "italic")
+            put("Reset Password", "bold")
+            put(" reverts to the default (and requires the current password to do "
+                "so).\n\n", "italic")
 
-        put("Connection Fields\n", "h2")
-        put("\u2022  Host / IP, Username, Password: ", "bullet")
-        put("Same as the Import tab.\n", "bullet")
-        put("\u2022  Target Model: ", "bullet")
-        put("Model of the appliance being cleaned.\n", "bullet")
-        put("\u2022  Workers: ", "bullet")
-        put("Concurrent threads for deletion (1-32, default 6).\n\n", "bullet")
+            put("Connection Fields\n", "h2")
+            put("\u2022  Host / IP, Username, Password: ", "bullet")
+            put("Same as the Import tab.\n", "bullet")
+            put("\u2022  Target Model: ", "bullet")
+            put("Model of the appliance being cleaned.\n", "bullet")
+            put("\u2022  Workers: ", "bullet")
+            put("Concurrent threads for deletion (1-32, default 6).\n\n", "bullet")
 
-        put("What to Delete\n", "h2")
-        put("\u2022  Delete ALL custom objects: ", "bullet")
-        put("Master checkbox that selects every object type.\n", "bullet")
-        put("\u2022  Individual checkboxes: ", "bullet")
-        put("Delete specific types: Access Rules, Static Routes, Subinterfaces, "
-            "EtherChannels, Security Zones, Bridge Groups, Service Groups, "
-            "Service Objects, Address Groups, Address Objects, Physical "
-            "Interfaces (reset to defaults).\n\n", "bullet")
+            put("What to Delete\n", "h2")
+            put("\u2022  Delete ALL custom objects: ", "bullet")
+            put("Master checkbox that selects every object type.\n", "bullet")
+            put("\u2022  Individual checkboxes: ", "bullet")
+            put("Delete specific types: Access Rules, Static Routes, Subinterfaces, "
+                "EtherChannels, Security Zones, Bridge Groups, Service Groups, "
+                "Service Objects, Address Groups, Address Objects, Physical "
+                "Interfaces (reset to defaults).\n\n", "bullet")
 
-        put("Flags\n", "h2")
-        put("\u2022  Dry run (preview only): ", "bullet")
-        put("Shows what would be deleted without actually deleting. ", "bullet")
-        put("Always use this first.\n", "warning")
-        put("\u2022  Deploy / Commit after cleanup: ", "bullet")
-        put("Activate the changes on the appliance after deletion.\n\n", "bullet")
+            put("Flags\n", "h2")
+            put("\u2022  Dry run (preview only): ", "bullet")
+            put("Shows what would be deleted without actually deleting. ", "bullet")
+            put("Always use this first.\n", "warning")
+            put("\u2022  Deploy / Commit after cleanup: ", "bullet")
+            put("Activate the changes on the appliance after deletion.\n\n", "bullet")
 
-        put("How to Run\n", "h2")
-        put("1.  Enter the target appliance credentials.\n", "bullet")
-        put("2.  Select the Target Model.\n", "bullet")
-        put("3.  Check ", "bullet")
-        put("Delete ALL custom objects", "bold")
-        put(" or individual types.\n", "bullet")
-        put("4.  Check ", "bullet")
-        put("Dry run", "bold")
-        put(" first to preview.\n", "bullet")
-        put("5.  Click ", "bullet")
-        put("Start Cleanup", "bold")
-        put(" - you will be prompted for the cleanup password.\n", "bullet")
-        put("6.  Review the dry-run output, then uncheck Dry run and run again "
-            "to perform the deletion.\n", "bullet")
-        put("7.  A confirmation dialog appears before destructive operations.\n\n",
-            "bullet")
-        put("Important: ", "warning")
-        put("Objects are deleted in reverse dependency order (rules first, then "
-            "routes, then interfaces, etc.) to avoid reference errors.\n\n")
+            put("How to Run\n", "h2")
+            put("1.  Enter the target appliance credentials.\n", "bullet")
+            put("2.  Select the Target Model.\n", "bullet")
+            put("3.  Check ", "bullet")
+            put("Delete ALL custom objects", "bold")
+            put(" or individual types.\n", "bullet")
+            put("4.  Check ", "bullet")
+            put("Dry run", "bold")
+            put(" first to preview.\n", "bullet")
+            put("5.  Click ", "bullet")
+            put("Start Cleanup", "bold")
+            put(" - you will be prompted for the cleanup password.\n", "bullet")
+            put("6.  Review the dry-run output, then uncheck Dry run and run again "
+                "to perform the deletion.\n", "bullet")
+            put("7.  A confirmation dialog appears before destructive operations.\n\n",
+                "bullet")
+            put("Important: ", "warning")
+            put("Objects are deleted in reverse dependency order (rules first, then "
+                "routes, then interfaces, etc.) to avoid reference errors.\n\n")
 
         # ----- Config Viewer Tab -----
-        put("Tab 4: Config Viewer\n", "h1")
+        put(f"Tab {viewer_tab_num}: Config Viewer\n", "h1")
         put("=" * 70 + "\n\n", "separator")
         put("Browse and search the generated JSON files without leaving the "
             "application. (Designed for FTD / PAN-OS JSON output; FortiGate "
@@ -1897,9 +1930,14 @@ class App(tk.Tk):
         put("=" * 70 + "\n\n", "separator")
         put("\u2022  ", "bullet")
         put("One operation at a time: ", "bold")
-        put("Only one background operation (convert, import, or cleanup) can "
-            "run at a time. The Run buttons are disabled while an operation is "
-            "in progress.\n", "bullet")
+        if self._cleanup_enabled:
+            put("Only one background operation (convert, import, or cleanup) can "
+                "run at a time. The Run buttons are disabled while an operation is "
+                "in progress.\n", "bullet")
+        else:
+            put("Only one background operation (convert or import) can "
+                "run at a time. The Run buttons are disabled while an operation is "
+                "in progress.\n", "bullet")
         put("\u2022  ", "bullet")
         put("Cancel safely: ", "bold")
         put("Clicking Cancel interrupts the running operation. It may take a "
@@ -1918,8 +1956,11 @@ class App(tk.Tk):
             "Import and Config Viewer.\n", "bullet")
         put("\u2022  ", "bullet")
         put("Separate credentials: ", "bold")
-        put("The Import and Cleanup tabs have their own credential fields. "
-            "Credentials are not shared between tabs.\n", "bullet")
+        if self._cleanup_enabled:
+            put("The Import and Cleanup tabs have their own credential fields. "
+                "Credentials are not shared between tabs.\n", "bullet")
+        else:
+            put("The Import tab stores its own credentials.\n", "bullet")
         put("\u2022  ", "bullet")
         put("Compiled executable: ", "bold")
         put("When running from the .exe, all functionality is identical. No "
@@ -2021,16 +2062,18 @@ class App(tk.Tk):
         self.imp_run_btn.configure(
             state=tk.DISABLED if self._imp_locked_by_target else state,
         )
-        self.cln_run_btn.configure(
-            state=tk.DISABLED if self._cln_locked_by_target else state,
-        )
+        if self._cleanup_enabled:
+            self.cln_run_btn.configure(
+                state=tk.DISABLED if self._cln_locked_by_target else state,
+            )
         self.conv_cancel_btn.configure(state=cancel_state)
         self.imp_cancel_btn.configure(
             state=tk.DISABLED if self._imp_locked_by_target else cancel_state,
         )
-        self.cln_cancel_btn.configure(
-            state=tk.DISABLED if self._cln_locked_by_target else cancel_state,
-        )
+        if self._cleanup_enabled:
+            self.cln_cancel_btn.configure(
+                state=tk.DISABLED if self._cln_locked_by_target else cancel_state,
+            )
 
     # ------------------------------------------------------------------
     # In-process execution engine
@@ -2450,6 +2493,8 @@ class App(tk.Tk):
     # Cleanup execution
     # ------------------------------------------------------------------
     def _run_cleanup(self):
+        if not self._cleanup_enabled:
+            return
         # Cleanup for FortiGate via API is not supported
         if self._current_platform == "FortiGate":
             messagebox.showinfo(
