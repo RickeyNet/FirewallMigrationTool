@@ -16,7 +16,10 @@ sequence (CASA-ND-001050 / CASA-ND-001070):
 
 Multiple SNMP managers are supported - they share the SNMPv3 user and
 source interface, and each manager gets its own network object and SNMP
-host (object names suffixed with the manager IP).
+host. Object names are always suffixed with the manager IP, so separate
+runs are additive: pushing a different management tool's manager with
+its own SNMPv3 user adds alongside the existing config instead of
+overwriting it (one user per tool is supported by running once per tool).
 
 All steps are create-or-update (idempotent): re-running with new values
 updates the existing objects instead of failing on duplicates.
@@ -282,11 +285,10 @@ class FTDSNMPConfig(FTDBaseClient):
     # Orchestration
     # ------------------------------------------------------------------
     @staticmethod
-    def _per_host_name(base: str, ip: str, multiple: bool) -> str:
-        """Object name for one NMS: suffix the base name with the IP when
-        configuring multiple managers so each gets a unique object."""
-        if not multiple:
-            return base
+    def _per_host_name(base: str, ip: str) -> str:
+        """Object name for one NMS: always suffixed with the manager IP so
+        every push is additive - separate runs for different managers (e.g.
+        one SNMPv3 user per management tool) never overwrite each other."""
         return f"{base}_{ip.replace('.', '_')}"
 
     def configure(
@@ -341,12 +343,11 @@ class FTDSNMPConfig(FTDBaseClient):
         print(f"  {flair('lookup', 'OK', f'interface {interface_name} ({hardware_name})')}")
 
         # Step 3: per-manager network object + SNMP host
-        multiple = len(nms_ips) > 1
         configured = 0
         failed = 0
         for ip in nms_ips:
-            net_name = self._per_host_name(nms_object_name, ip, multiple)
-            host_name = self._per_host_name(host_object_name, ip, multiple)
+            net_name = self._per_host_name(nms_object_name, ip)
+            host_name = self._per_host_name(host_object_name, ip)
 
             ok, net_obj = self.ensure_network_object(net_name, ip)
             if not ok or not isinstance(net_obj, dict):
@@ -426,7 +427,7 @@ Examples:
                              '(e.g. --nms-ip 10.0.0.50,10.0.0.51)')
     parser.add_argument('--nms-object-name', default='snmpHost',
                         help='Base name for the NMS network object(s) (default: snmpHost). '
-                             'With multiple managers, each name is suffixed with its IP.')
+                             'Each object name is suffixed with its manager IP.')
     parser.add_argument('--snmp-user', required=True,
                         help='SNMPv3 user name (e.g. FWADMIN)')
     parser.add_argument('--security-level', choices=SECURITY_LEVELS, default='PRIV',
@@ -443,7 +444,7 @@ Examples:
                         help='Logical name of the interface that sources SNMP traffic (e.g. outside)')
     parser.add_argument('--host-object-name', default='snmpv3-host',
                         help='Base name for the SNMP host object(s) (default: snmpv3-host). '
-                             'With multiple managers, each name is suffixed with its IP.')
+                             'Each object name is suffixed with its manager IP.')
     parser.add_argument('--no-poll', action='store_true', help='Disable SNMP polling')
     parser.add_argument('--no-trap', action='store_true', help='Disable SNMP traps')
     parser.add_argument('--deploy', action='store_true', help='Deploy after configuring')
