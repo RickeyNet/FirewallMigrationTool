@@ -1,12 +1,22 @@
 # Release Notes
 
-## v1.5.1 - VLAN Conflict Resolution, HA Cleanup Fix, Smarter Updates
+## v1.5.1 - SNMPv3 Configuration, VLAN Conflict Resolution, HA Cleanup Fix
 
 ### Overview
 
-Fixes failed imports caused by duplicate VLAN IDs and failed cleanups caused by HA interface monitoring, tightens the importer's update-on-existing logic, and adds restricted build profiles for cleanup-free executables.
+Adds STIG-compliant SNMPv3 push for FDM-managed FTDs, fixes failed imports caused by duplicate VLAN IDs and failed cleanups caused by HA interface monitoring, tightens the importer's update-on-existing logic, and adds restricted build profiles for cleanup-free executables.
 
 ### New Features
+
+**SNMPv3 configuration for FDM-managed FTD (new SNMP tab + CLI)**
+
+FDM does not expose SNMPv3 in its GUI - locally managed FTDs must be configured through the REST API. The tool now does this end to end (STIG CASA-ND-001050 / CASA-ND-001070):
+
+- **New `ftd_snmp_config.py` CLI** - Creates/updates the SNMPv3 user (Auth/Priv: SHA or SHA256 auth + AES128/192/256 privacy, AES256 default), resolves the source interface by logical name (physical, EtherChannel, or subinterface), then creates/updates a network object and SNMP host per manager. Idempotent - re-running with new values updates in place. Optional `--deploy` deploys the staged changes.
+- **Multiple SNMP managers** - `--nms-ip` accepts comma-separated values or repeated flags; every manager shares the SNMPv3 user and source interface, and each gets its own network object and SNMP host (names suffixed with the manager IP).
+- **New "SNMP (FTD)" GUI tab** - Visible only when the target platform is Cisco FTD. Connection fields plus SNMP manager IP(s) (comma-separated for multiple), SNMPv3 user, algorithms, masked auth/privacy password fields, source interface, poll/trap toggles, and deploy-after-push.
+- **Credential hygiene** - `--auth-password` / `--priv-password` are redacted from the echoed command line and scrubbed from exception output, same as device passwords. Passwords are validated to the 8-character FDM minimum; NoAuth security level is not offered, and AUTH-only prints a STIG compliance warning.
+- **Cleanup support** - New `--delete-snmp` flag (and "SNMP Hosts & Users" checkbox in the Cleanup tab) removes SNMP hosts then users; included in `--delete-all` ahead of interfaces and address objects so the SNMP host's references never block deletion.
 
 **Automatic VLAN conflict resolution (FortiGate → FTD conversion)**
 

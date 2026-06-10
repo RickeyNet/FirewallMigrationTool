@@ -93,6 +93,7 @@ if _PKG_DIR not in sys.path:
 # Import the FTD entry points
 from fortigate_converter import main as convert_main   # noqa: E402
 from ftd_api_importer import main as import_main       # noqa: E402
+from ftd_snmp_config import main as snmp_main          # noqa: E402
 
 if _CLEANUP_ENABLED:
     from ftd_api_cleanup import main as cleanup_main       # noqa: E402
@@ -210,7 +211,10 @@ def _profile_title(default):
 # Flags whose immediate value is sensitive and must never be echoed to the
 # output window or logs. Add to this set if a new credential-bearing flag is
 # introduced anywhere the GUI shells out.
-_SENSITIVE_FLAGS = frozenset({"--password", "-p", "--api-key", "--token"})
+_SENSITIVE_FLAGS = frozenset({
+    "--password", "-p", "--api-key", "--token",
+    "--auth-password", "--priv-password",
+})
 
 
 def _redact_argv(argv):
@@ -642,6 +646,7 @@ class App(tk.Tk):
             self._build_cleanup_tab(notebook)
         else:
             self._cln_tab = None
+        self._build_snmp_tab(notebook)
         self._build_viewer_tab(notebook)
         self._build_help_tab(notebook)
 
@@ -899,7 +904,16 @@ class App(tk.Tk):
     def _retitle_import_cleanup_tabs(self, target):
         """Update Import/Cleanup tab titles, section frame labels, and enabled state
         for the target platform. When target is FortiGate, API-based import/cleanup
-        is not supported and the tab forms are disabled."""
+        is not supported and the tab forms are disabled.
+
+        Also manages SNMP tab visibility: SNMPv3 push is FDM-specific, so the
+        tab is only shown when the target is Cisco FTD."""
+        if getattr(self, "_snmp_tab", None) is not None:
+            if target == "FTD":
+                self._notebook.add(self._snmp_tab)   # restores a hidden tab in place
+            else:
+                self._notebook.hide(self._snmp_tab)
+
         if target == "FortiGate":
             imp_tab_text = "  Import (N/A for FortiGate)  "
             cln_tab_text = "  Cleanup (N/A for FortiGate)  "
@@ -1234,6 +1248,7 @@ class App(tk.Tk):
             ("Service Objects", "service-objects"),
             ("Address Groups", "address-groups"),
             ("Address Objects", "address-objects"),
+            ("SNMP Hosts & Users", "snmp"),
             ("Physical Interfaces (reset)", "reset-physical-interfaces"),
         ]
         for i, (label, key) in enumerate(del_types):
@@ -1291,6 +1306,202 @@ class App(tk.Tk):
         self.cln_pw_btn.pack(side=tk.RIGHT, padx=4)
 
         self.cln_output = self._make_output_area(tab)
+
+    # ==================== SNMP TAB ====================
+    def _build_snmp_tab(self, notebook):
+        """SNMPv3 configuration tab - FTD targets only (FDM has no SNMP GUI).
+
+        The tab is hidden whenever the target platform is not Cisco FTD;
+        visibility is managed in _retitle_import_cleanup_tabs().
+        """
+        tab = ttk.Frame(notebook)
+        notebook.add(tab, text="  SNMP (FTD)  ")
+        self._snmp_tab = tab
+
+        conn = ttk.LabelFrame(tab, text="FTD Connection", padding=10)
+        conn.pack(fill=tk.X, padx=8, pady=(8, 4))
+
+        ttk.Label(conn, text="FTD Host / IP:").grid(row=0, column=0, sticky=tk.W, pady=3)
+        self.snmp_host_var = tk.StringVar()
+        ttk.Entry(conn, textvariable=self.snmp_host_var, width=30).grid(
+            row=0, column=1, sticky=tk.W, padx=4,
+        )
+
+        ttk.Label(conn, text="Username:").grid(row=1, column=0, sticky=tk.W, pady=3)
+        self.snmp_user_var = tk.StringVar(value="admin")
+        ttk.Entry(conn, textvariable=self.snmp_user_var, width=30).grid(
+            row=1, column=1, sticky=tk.W, padx=4,
+        )
+
+        ttk.Label(conn, text="Password:").grid(row=2, column=0, sticky=tk.W, pady=3)
+        self.snmp_pass_var = tk.StringVar()
+        ttk.Entry(conn, textvariable=self.snmp_pass_var, show="*", width=30).grid(
+            row=2, column=1, sticky=tk.W, padx=4,
+        )
+
+        conn.columnconfigure(1, weight=1)
+
+        # SNMPv3 settings
+        snmp_opts = ttk.LabelFrame(
+            tab, text="SNMPv3 Settings (STIG: Auth/Priv - SHA auth + AES privacy)",
+            padding=10,
+        )
+        snmp_opts.pack(fill=tk.X, padx=8, pady=4)
+
+        ttk.Label(snmp_opts, text="SNMP Manager IP(s):").grid(row=0, column=0, sticky=tk.W, pady=3)
+        self.snmp_nms_var = tk.StringVar()
+        ttk.Entry(snmp_opts, textvariable=self.snmp_nms_var, width=40).grid(
+            row=0, column=1, sticky=tk.W, padx=4,
+        )
+        ttk.Label(
+            snmp_opts, text="(comma-separated for multiple, e.g. 10.0.0.50, 10.1.0.50)",
+            foreground=_FG_DIM,
+        ).grid(row=0, column=2, sticky=tk.W, padx=4)
+
+        ttk.Label(snmp_opts, text="SNMPv3 User Name:").grid(row=1, column=0, sticky=tk.W, pady=3)
+        self.snmp_v3user_var = tk.StringVar(value="FWADMIN")
+        ttk.Entry(snmp_opts, textvariable=self.snmp_v3user_var, width=30).grid(
+            row=1, column=1, sticky=tk.W, padx=4,
+        )
+
+        ttk.Label(snmp_opts, text="Auth Algorithm:").grid(row=2, column=0, sticky=tk.W, pady=3)
+        self.snmp_auth_alg_var = tk.StringVar(value="SHA")
+        ttk.Combobox(
+            snmp_opts, textvariable=self.snmp_auth_alg_var,
+            values=["SHA", "SHA256"], state="readonly", width=12,
+        ).grid(row=2, column=1, sticky=tk.W, padx=4)
+
+        ttk.Label(snmp_opts, text="Auth Password:").grid(row=3, column=0, sticky=tk.W, pady=3)
+        self.snmp_auth_pw_var = tk.StringVar()
+        ttk.Entry(snmp_opts, textvariable=self.snmp_auth_pw_var, show="*", width=30).grid(
+            row=3, column=1, sticky=tk.W, padx=4,
+        )
+        ttk.Label(
+            snmp_opts, text="(min 8 characters)", foreground=_FG_DIM,
+        ).grid(row=3, column=2, sticky=tk.W, padx=4)
+
+        ttk.Label(snmp_opts, text="Privacy Algorithm:").grid(row=4, column=0, sticky=tk.W, pady=3)
+        self.snmp_priv_alg_var = tk.StringVar(value="AES256")
+        ttk.Combobox(
+            snmp_opts, textvariable=self.snmp_priv_alg_var,
+            values=["AES128", "AES192", "AES256"], state="readonly", width=12,
+        ).grid(row=4, column=1, sticky=tk.W, padx=4)
+        ttk.Label(
+            snmp_opts, text="(AES128 = STIG minimum, AES256 preferred)", foreground=_FG_DIM,
+        ).grid(row=4, column=2, sticky=tk.W, padx=4)
+
+        ttk.Label(snmp_opts, text="Privacy Password:").grid(row=5, column=0, sticky=tk.W, pady=3)
+        self.snmp_priv_pw_var = tk.StringVar()
+        ttk.Entry(snmp_opts, textvariable=self.snmp_priv_pw_var, show="*", width=30).grid(
+            row=5, column=1, sticky=tk.W, padx=4,
+        )
+        ttk.Label(
+            snmp_opts, text="(min 8 characters)", foreground=_FG_DIM,
+        ).grid(row=5, column=2, sticky=tk.W, padx=4)
+
+        ttk.Label(snmp_opts, text="Source Interface:").grid(row=6, column=0, sticky=tk.W, pady=3)
+        self.snmp_intf_var = tk.StringVar()
+        ttk.Entry(snmp_opts, textvariable=self.snmp_intf_var, width=30).grid(
+            row=6, column=1, sticky=tk.W, padx=4,
+        )
+        ttk.Label(
+            snmp_opts, text="(logical name, e.g. outside - not Ethernet1/1)",
+            foreground=_FG_DIM,
+        ).grid(row=6, column=2, sticky=tk.W, padx=4)
+
+        self.snmp_poll_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            snmp_opts, text="Enable polling (UDP 161)", variable=self.snmp_poll_var,
+        ).grid(row=7, column=1, sticky=tk.W, padx=4, pady=3)
+
+        self.snmp_trap_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            snmp_opts, text="Enable traps (UDP 162)", variable=self.snmp_trap_var,
+        ).grid(row=8, column=1, sticky=tk.W, padx=4, pady=3)
+
+        self.snmp_deploy_var = tk.BooleanVar()
+        ttk.Checkbutton(
+            snmp_opts, text="Deploy after push", variable=self.snmp_deploy_var,
+        ).grid(row=9, column=1, sticky=tk.W, padx=4, pady=3)
+
+        snmp_opts.columnconfigure(1, weight=0)
+
+        # Buttons
+        btn_frame = ttk.Frame(tab)
+        btn_frame.pack(fill=tk.X, padx=8, pady=4)
+        self.snmp_run_btn = ttk.Button(
+            btn_frame, text="Push SNMP Config", command=self._run_snmp,
+        )
+        self.snmp_run_btn.pack(side=tk.LEFT)
+        self.snmp_cancel_btn = ttk.Button(
+            btn_frame, text="Cancel", command=self._cancel_operation,
+            state=tk.DISABLED,
+        )
+        self.snmp_cancel_btn.pack(side=tk.LEFT, padx=8)
+        ttk.Button(
+            btn_frame, text="Clear Output",
+            command=lambda: self._clear_output(self.snmp_output),
+        ).pack(side=tk.LEFT, padx=8)
+
+        self.snmp_output = self._make_output_area(tab)
+
+    def _run_snmp(self):
+        host = self.snmp_host_var.get().strip()
+        password = self.snmp_pass_var.get()
+        nms_ip = self.snmp_nms_var.get().strip()
+        v3_user = self.snmp_v3user_var.get().strip()
+        auth_pw = self.snmp_auth_pw_var.get()
+        priv_pw = self.snmp_priv_pw_var.get()
+        interface = self.snmp_intf_var.get().strip()
+
+        missing = []
+        if not host:
+            missing.append("FTD host/IP")
+        if not password:
+            missing.append("FTD password")
+        if not nms_ip:
+            missing.append("SNMP manager IP(s)")
+        if not v3_user:
+            missing.append("SNMPv3 user name")
+        if not auth_pw:
+            missing.append("auth password")
+        if not priv_pw:
+            missing.append("privacy password")
+        if not interface:
+            missing.append("source interface")
+        if missing:
+            messagebox.showerror(
+                "Missing Fields", "Please fill in: " + ", ".join(missing),
+            )
+            return
+
+        if len(auth_pw) < 8 or len(priv_pw) < 8:
+            messagebox.showerror(
+                "Password Too Short",
+                "SNMPv3 auth and privacy passwords must be at least 8 characters.",
+            )
+            return
+
+        argv = [
+            "--host", host,
+            "-u", self.snmp_user_var.get().strip() or "admin",
+            "-p", password,
+            "--nms-ip", nms_ip,
+            "--snmp-user", v3_user,
+            "--auth-algorithm", self.snmp_auth_alg_var.get(),
+            "--auth-password", auth_pw,
+            "--priv-algorithm", self.snmp_priv_alg_var.get(),
+            "--priv-password", priv_pw,
+            "--interface", interface,
+        ]
+        if not self.snmp_poll_var.get():
+            argv.append("--no-poll")
+        if not self.snmp_trap_var.get():
+            argv.append("--no-trap")
+        if self.snmp_deploy_var.get():
+            argv.append("--deploy")
+
+        self._run_in_thread(snmp_main, argv, self.snmp_output, "SNMP Config")
 
     # ==================== CONFIG VIEWER TAB ====================
     def _build_viewer_tab(self, notebook):
@@ -2074,6 +2285,9 @@ class App(tk.Tk):
             self.cln_cancel_btn.configure(
                 state=tk.DISABLED if self._cln_locked_by_target else cancel_state,
             )
+        # SNMP tab is hidden (not locked) for non-FTD targets, so no lock flag
+        self.snmp_run_btn.configure(state=state)
+        self.snmp_cancel_btn.configure(state=cancel_state)
 
     # ------------------------------------------------------------------
     # In-process execution engine
@@ -2141,7 +2355,8 @@ class App(tk.Tk):
         """
         if not text:
             return text
-        for var_name in ("imp_pass_var", "cln_pass_var"):
+        for var_name in ("imp_pass_var", "cln_pass_var",
+                         "snmp_pass_var", "snmp_auth_pw_var", "snmp_priv_pw_var"):
             var = getattr(self, var_name, None)
             if var is None:
                 continue

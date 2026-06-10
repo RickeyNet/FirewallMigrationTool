@@ -34,6 +34,7 @@
       "fortigate_converter",
       "ftd_api_importer",
       "ftd_api_cleanup",
+      "ftd_snmp_config",
       "pa_common",
       "pa_converter",
       "pa_address_converter",
@@ -95,6 +96,7 @@
       "fortigate_converter",
       "ftd_api_importer",
       "ftd_api_cleanup",
+      "ftd_snmp_config",
       "cleanup_auth"
     ]
   },
@@ -129,6 +131,7 @@
       "fortigate_converter",
       "ftd_api_importer",
       "ftd_api_cleanup",
+      "ftd_snmp_config",
       "cleanup_auth"
     ]
   }

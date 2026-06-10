@@ -121,6 +121,7 @@ py -3.14 -m PyInstaller --onefile --windowed ^
     --hidden-import fortigate_converter ^
     --hidden-import ftd_api_importer ^
     --hidden-import ftd_api_cleanup ^
+    --hidden-import ftd_snmp_config ^
     --hidden-import pa_common ^
     --hidden-import pa_converter ^
     --hidden-import pa_address_converter ^

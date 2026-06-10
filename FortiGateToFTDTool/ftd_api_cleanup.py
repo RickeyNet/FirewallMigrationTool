@@ -1328,6 +1328,7 @@ Examples:
     parser.add_argument('--delete-security-zones', action='store_true', help='Delete all security zones')
     parser.add_argument('--delete-routes', action='store_true', help='Delete all static routes')
     parser.add_argument('--delete-rules', action='store_true', help='Delete all access rules')
+    parser.add_argument('--delete-snmp', action='store_true', help='Delete all SNMP hosts and SNMP users')
     parser.add_argument('--delete-subinterfaces', action='store_true', help='Delete all subinterfaces')
     parser.add_argument('--delete-etherchannels', action='store_true', help='Delete all EtherChannels')
     parser.add_argument('--delete-bridge-groups', action='store_true', help='Delete all bridge groups')
@@ -1341,7 +1342,7 @@ Examples:
     if not args.validate_only and not any([
                 args.delete_address_objects, args.delete_address_groups,
                 args.delete_service_objects, args.delete_service_groups,
-                args.delete_security_zones,
+                args.delete_security_zones, args.delete_snmp,
                 args.delete_routes, args.delete_rules, args.delete_all,
                 args.delete_subinterfaces, args.delete_etherchannels,
                 args.delete_bridge_groups, args.reset_physical_interfaces,
@@ -1462,6 +1463,29 @@ Examples:
         record_phase("Security Zones", client.delete_all_custom_objects,
             "/object/securityzones",
             "Security Zones",
+            args.dry_run,
+            args.workers,
+            args.max_attempts,
+            args.base_backoff,
+            args.max_jitter,
+        )
+
+    # SNMP hosts reference interfaces AND network objects, so they must be
+    # deleted before both. SNMP users are referenced by SNMP hosts, so hosts
+    # go first.
+    if args.delete_all or args.delete_snmp:
+        record_phase("SNMP Hosts", client.delete_all_custom_objects,
+            "/object/snmphosts",
+            "SNMP Hosts",
+            args.dry_run,
+            args.workers,
+            args.max_attempts,
+            args.base_backoff,
+            args.max_jitter,
+        )
+        record_phase("SNMP Users", client.delete_all_custom_objects,
+            "/object/snmpusers",
+            "SNMP Users",
             args.dry_run,
             args.workers,
             args.max_attempts,
