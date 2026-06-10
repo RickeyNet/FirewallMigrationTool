@@ -1901,7 +1901,15 @@ class App(tk.Tk):
             put(" tab to delete imported objects from FTD or PAN-OS. (Not available "
                 "when the target is FortiGate.)\n\n", "")
 
-        viewer_tab_num = 4 if self._cleanup_enabled else 3
+        put(f"Step {6 if self._cleanup_enabled else 5}: Configure SNMP "
+            "Monitoring (FTD targets only)\n", "h2")
+        put("Use the ", "")
+        put("SNMP (FTD)", "bold")
+        put(" tab to push an SNMPv3 user and SNMP manager hosts to the FTD. "
+            "The tab only appears when the target platform is Cisco FTD.\n\n", "")
+
+        snmp_tab_num = 4 if self._cleanup_enabled else 3
+        viewer_tab_num = snmp_tab_num + 1
         put("Tab 1: Convert\n", "h1")
         put("=" * 70 + "\n\n", "separator")
         put("Converts your source configuration into the format the target "
@@ -1969,6 +1977,20 @@ class App(tk.Tk):
         put("{base}.conf", "code")
         put(" CLI file you restore from the FortiGate GUI (System \u2192 "
             "Configuration \u2192 Restore).\n\n", "bullet")
+
+        put("Automatic VLAN Conflict Resolution (FortiGate \u2192 FTD)\n", "h2")
+        put("FortiGate allows VLAN interfaces on different parents to share a "
+            "VLAN ID; FTD requires device-wide unique VLAN IDs. The converter "
+            "resolves these conflicts automatically:\n\n")
+        put("\u2022  Subinterfaces on EtherChannels and virtual switches keep "
+            "their original VLAN IDs; conflicting subinterfaces on physical "
+            "ports are remapped to the nearest unused VLAN ID.\n", "bullet")
+        put("\u2022  Logical names never change, so zones, routes, and policies "
+            "are unaffected.\n", "bullet")
+        put("\u2022  Every remap is printed during conversion, noted in the "
+            "interface description (", "bullet")
+        put("[remapped from VLAN N]", "code")
+        put("), and counted in the conversion summary.\n\n", "bullet")
 
         put("How to Run\n", "h2")
         put("1.  Pick Source and Target in the toolbar.\n", "bullet")
@@ -2112,8 +2134,8 @@ class App(tk.Tk):
             put("\u2022  Individual checkboxes: ", "bullet")
             put("Delete specific types: Access Rules, Static Routes, Subinterfaces, "
                 "EtherChannels, Security Zones, Bridge Groups, Service Groups, "
-                "Service Objects, Address Groups, Address Objects, Physical "
-                "Interfaces (reset to defaults).\n\n", "bullet")
+                "Service Objects, Address Groups, Address Objects, SNMP Hosts & "
+                "Users, Physical Interfaces (reset to defaults).\n\n", "bullet")
 
             put("Flags\n", "h2")
             put("\u2022  Dry run (preview only): ", "bullet")
@@ -2141,6 +2163,75 @@ class App(tk.Tk):
             put("Important: ", "warning")
             put("Objects are deleted in reverse dependency order (rules first, then "
                 "routes, then interfaces, etc.) to avoid reference errors.\n\n")
+
+        # ----- SNMP Tab -----
+        put(f"Tab {snmp_tab_num}: SNMP (FTD)\n", "h1")
+        put("=" * 70 + "\n\n", "separator")
+        put("Pushes a STIG-compliant SNMPv3 configuration to an FDM-managed "
+            "FTD. FDM's GUI does not expose SNMPv3, so locally managed FTDs "
+            "must be configured through the REST API - this tab does it end "
+            "to end. ", "")
+        put("Only visible when the target platform is Cisco FTD.\n\n", "warning")
+
+        put("What It Creates\n", "h2")
+        put("•  An SNMPv3 user with the chosen auth and privacy "
+            "algorithms.\n", "bullet")
+        put("•  A network object and SNMP host entry per manager IP, bound "
+            "to the source interface. Object names are suffixed with the "
+            "manager IP, so pushes are additive - run once per management "
+            "tool without overwriting earlier configs.\n", "bullet")
+        put("•  Re-running with new values updates the existing objects in "
+            "place.\n\n", "bullet")
+
+        put("Fields\n", "h2")
+        put("•  FTD Host / IP, Username, Password: ", "bullet")
+        put("Admin credentials for the FTD, same as the Import tab.\n", "bullet")
+        put("•  SNMP Manager IP(s): ", "bullet")
+        put("IP address(es) of your monitoring server(s). Comma-separated "
+            "for multiple.\n", "bullet")
+        put("•  SNMPv3 User Name: ", "bullet")
+        put("Name of the SNMPv3 user to create (default ", "bullet")
+        put("FWADMIN", "code")
+        put(").\n", "bullet")
+        put("•  Auth Algorithm / Auth Password: ", "bullet")
+        put("SHA or SHA256, password minimum 8 characters.\n", "bullet")
+        put("•  Privacy Algorithm / Privacy Password: ", "bullet")
+        put("AES128, AES192, or AES256 (default AES256; AES128 is the STIG "
+            "minimum), password minimum 8 characters.\n", "bullet")
+        put("•  Source Interface: ", "bullet")
+        put("Logical name of the interface the managers reach the FTD "
+            "through (e.g. ", "bullet")
+        put("outside", "code")
+        put(", not ", "bullet")
+        put("Ethernet1/1", "code")
+        put("). Physical interfaces, EtherChannels, and subinterfaces are "
+            "all supported.\n", "bullet")
+        put("•  Enable polling / Enable traps: ", "bullet")
+        put("Allow SNMP polling (UDP 161) and/or traps (UDP 162). Both on "
+            "by default.\n", "bullet")
+        put("•  Deploy after push: ", "bullet")
+        put("Deploy the staged changes on the FTD after the push "
+            "completes.\n\n", "bullet")
+
+        put("How to Run\n", "h2")
+        put("1.  Set the target platform to Cisco FTD so the tab is "
+            "visible.\n", "bullet")
+        put("2.  Enter the FTD connection credentials.\n", "bullet")
+        put("3.  Enter the SNMP manager IP(s) and SNMPv3 user settings.\n", "bullet")
+        put("4.  Enter the source interface's logical name.\n", "bullet")
+        put("5.  Click ", "bullet")
+        put("Push SNMP Config", "bold")
+        put(" and monitor the console. Check ", "bullet")
+        put("Deploy after push", "bold")
+        put(" first to activate immediately.\n\n", "bullet")
+        put("Tip: ", "tip")
+        if self._cleanup_enabled:
+            put("Passwords are redacted from the echoed command line and error "
+                "output. To remove SNMP config later, use the Cleanup tab's "
+                "\"SNMP Hosts & Users\" checkbox.\n\n")
+        else:
+            put("Passwords are redacted from the echoed command line and error "
+                "output.\n\n")
 
         # ----- Config Viewer Tab -----
         put(f"Tab {viewer_tab_num}: Config Viewer\n", "h1")
@@ -2197,13 +2288,13 @@ class App(tk.Tk):
         put("\u2022  ", "bullet")
         put("One operation at a time: ", "bold")
         if self._cleanup_enabled:
-            put("Only one background operation (convert, import, or cleanup) can "
-                "run at a time. The Run buttons are disabled while an operation is "
-                "in progress.\n", "bullet")
+            put("Only one background operation (convert, import, cleanup, or "
+                "SNMP push) can run at a time. The Run buttons are disabled "
+                "while an operation is in progress.\n", "bullet")
         else:
-            put("Only one background operation (convert or import) can "
-                "run at a time. The Run buttons are disabled while an operation is "
-                "in progress.\n", "bullet")
+            put("Only one background operation (convert, import, or SNMP push) "
+                "can run at a time. The Run buttons are disabled while an "
+                "operation is in progress.\n", "bullet")
         put("\u2022  ", "bullet")
         put("Cancel safely: ", "bold")
         put("Clicking Cancel interrupts the running operation. It may take a "

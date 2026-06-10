@@ -13,11 +13,12 @@
 7. [Phase 3: Cleanup (Optional)](#phase-3-cleanup-optional)
    - [Cleanup Password Protection](#cleanup-password-protection)
    - [Changing the Built-in Default Password](#changing-the-built-in-default-password)
-8. [Performance and Concurrency](#performance-and-concurrency)
-9. [Troubleshooting](#troubleshooting)
-10. [Best Practices](#best-practices)
-11. [GUI How-To Guide](#gui-how-to-guide)
-12. [Appendix](#appendix)
+8. [SNMPv3 Configuration (FDM-Managed FTD)](#snmpv3-configuration-fdm-managed-ftd)
+9. [Performance and Concurrency](#performance-and-concurrency)
+10. [Troubleshooting](#troubleshooting)
+11. [Best Practices](#best-practices)
+12. [GUI How-To Guide](#gui-how-to-guide)
+13. [Appendix](#appendix)
 
 ---
 
@@ -51,10 +52,12 @@ This toolset converts FortiGate firewall configurations to **Cisco FTD** (Firepo
 - **Multi-platform support** - Convert to Cisco FTD or Palo Alto PAN-OS from the same FortiGate source
 - Model-aware interface port mapping with customizable HA port assignment (FTD)
 - Flexible HA port configuration (override model defaults)
+- Automatic VLAN ID conflict resolution (FTD requires device-wide unique VLAN IDs; conflicting subinterfaces are remapped automatically)
 - Metadata file for seamless import workflow
 - Bulk cleanup/delete script for rollback
-- Idempotent imports (skip existing objects)
-- Unified GUI with platform selector for Convert, Import, and Cleanup workflows
+- Idempotent imports (existing objects are updated in place; re-runs are safe)
+- **SNMPv3 configuration push** for FDM-managed FTD (STIG-compliant; FDM's GUI does not expose SNMPv3)
+- Unified GUI with platform selector for Convert, Import, Cleanup, and SNMP workflows
 
 ---
 
@@ -573,6 +576,17 @@ cat ftd_config_summary.json
 }
 ```
 
+### Automatic VLAN Conflict Resolution (FTD targets)
+
+FortiGate allows VLAN interfaces on different parents (physical ports, port channels, virtual switches) to share the same VLAN ID. FTD requires VLAN IDs to be **unique device-wide**, so duplicates would fail to import. The converter resolves these conflicts automatically:
+
+- **Priority parents keep their VLAN IDs** - subinterfaces on EtherChannels (port channels) and virtual switches (FTD bridge groups) always keep their original VLAN numbers.
+- **Physical-parent subinterfaces are remapped** - conflicting subinterfaces on physical interfaces move to the nearest unused VLAN ID (e.g., `Ethernet1/3.100` → `Ethernet1/3.102`).
+- **References stay intact** - logical names never change, so security zones, routes, and policies are unaffected.
+- **Fully visible** - every remap is printed during conversion, appended to the interface description (`[remapped from VLAN 100]`), and counted in the conversion summary (`Duplicate VLAN IDs remapped: N`).
+
+No action is required - this happens automatically during conversion. Review the printed remaps and update your documentation/switch trunk configs to match the new VLAN IDs.
+
 ---
 
 ### Palo Alto PAN-OS Conversion
@@ -812,15 +826,16 @@ Objects must be deleted in reverse dependency order:
 ```
 1. Access Rules           ← Remove policies first
 2. Static Routes          ← Remove routing
-3. Subinterfaces          ← Remove VLAN interfaces
-4. EtherChannels          ← Remove port-channels
-5. Security Zones         ← Remove zones
-6. Bridge Groups          ← Remove bridge groups
-7. Service Groups         ← Remove port groups
-8. Service Objects        ← Remove port objects
-9. Address Groups         ← Remove network groups
-10. Address Objects       ← Remove network objects
-11. Physical Interfaces   ← Reset only (cannot delete)
+3. Security Zones         ← Remove zones (they reference interfaces)
+4. SNMP Hosts & Users     ← Remove SNMP config (hosts reference interfaces and network objects)
+5. Subinterfaces          ← Remove VLAN interfaces
+6. EtherChannels          ← Remove port-channels
+7. Bridge Groups          ← Remove bridge groups
+8. Physical Interfaces    ← Reset only (cannot delete)
+9. Service Groups         ← Remove port groups
+10. Service Objects       ← Remove port objects
+11. Address Groups        ← Remove network groups
+12. Address Objects       ← Remove network objects
 ```
 
 ### Step 1: Preview Deletion (Dry Run)
@@ -855,6 +870,7 @@ python FortiGateToFTDTool/ftd_api_cleanup.py --host 192.168.1.1 -u admin --delet
 python FortiGateToFTDTool/ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-bridge-groups
 python FortiGateToFTDTool/ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-subinterfaces
 python FortiGateToFTDTool/ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-etherchannels
+python FortiGateToFTDTool/ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-snmp
 python FortiGateToFTDTool/ftd_api_cleanup.py --host 192.168.1.1 -u admin --reset-physical-interfaces
 ```
 
@@ -894,6 +910,65 @@ build.bat
 ```
 
 The script only modifies the hash - the plaintext password is never stored in the source code.
+
+---
+
+## SNMPv3 Configuration (FDM-Managed FTD)
+
+FDM does not expose SNMPv3 in its GUI - locally managed FTDs must be configured through the REST API. The `ftd_snmp_config.py` script (and the **SNMP (FTD)** GUI tab) does this end to end, meeting STIG requirements CASA-ND-001050 / CASA-ND-001070.
+
+### What It Creates
+
+1. An **SNMPv3 user** with the chosen auth and privacy algorithms (Auth/Priv security level).
+2. A **network object** and **SNMP host** entry per manager IP, bound to the source interface. Object names are suffixed with the manager IP, so pushes are **additive** - each management tool can get its own SNMPv3 user by running the push once per tool without overwriting earlier configs.
+
+Re-running with new values updates the existing objects in place (idempotent).
+
+### Basic Usage
+
+```bash
+# Single SNMP manager (passwords prompted if omitted)
+python FortiGateToFTDTool/ftd_snmp_config.py --host 192.168.1.1 -u admin \
+    --nms-ip 10.0.0.50 --snmp-user FWADMIN --interface outside
+
+# Multiple managers (comma-separated or repeated flag)
+python FortiGateToFTDTool/ftd_snmp_config.py --host 192.168.1.1 -u admin \
+    --nms-ip 10.0.0.50,10.1.0.50 --snmp-user FWADMIN --interface outside
+
+# Full specification with deploy
+python FortiGateToFTDTool/ftd_snmp_config.py --host 192.168.1.1 -u admin \
+    --nms-ip 10.0.0.50 --snmp-user FWADMIN \
+    --auth-algorithm SHA256 --auth-password 'AuthPass123' \
+    --priv-algorithm AES256 --priv-password 'PrivPass123' \
+    --interface outside --deploy
+```
+
+### Command Reference
+
+| Flag | Description |
+|------|-------------|
+| `--host` | FTD management IP (required) |
+| `-u`, `--username` | FDM username (required) |
+| `-p`, `--password` | FDM password (prompted if omitted) |
+| `--nms-ip` | SNMP manager / NMS IP. Repeat the flag or comma-separate for multiple managers (required) |
+| `--snmp-user` | SNMPv3 user name, e.g. `FWADMIN` (required) |
+| `--interface` | Logical name of the interface that sources SNMP traffic, e.g. `outside` - not `Ethernet1/1`. Physical interfaces, EtherChannels, and subinterfaces are supported (required) |
+| `--auth-algorithm` | `SHA` or `SHA256` (default: `SHA`) |
+| `--auth-password` | Authentication password, min 8 characters (prompted if omitted) |
+| `--priv-algorithm` | `AES128`, `AES192`, or `AES256` (default: `AES256`; `AES128` is the STIG minimum) |
+| `--priv-password` | Privacy/encryption password, min 8 characters (prompted if omitted) |
+| `--nms-object-name` | Base name for the NMS network object(s) (default: `snmpHost`) |
+| `--host-object-name` | Base name for the SNMP host object(s) (default: `snmpv3-host`) |
+| `--no-poll` | Disable SNMP polling (UDP 161) |
+| `--no-trap` | Disable SNMP traps (UDP 162) |
+| `--deploy` | Deploy the staged changes after configuring |
+| `--debug` | Enable debug output |
+
+### Notes
+
+- **Credential hygiene:** `--auth-password` / `--priv-password` are redacted from the echoed command line and scrubbed from exception output, same as device passwords.
+- **Removal:** use `ftd_api_cleanup.py --delete-snmp` (or the Cleanup tab's "SNMP Hosts & Users" checkbox) to remove SNMP hosts and users. SNMP cleanup is also included in `--delete-all`.
+- The GUI equivalent is the **SNMP (FTD)** tab, visible only when the target platform is Cisco FTD (see [GUI How-To Guide](#gui-how-to-guide)).
 
 ---
 
@@ -1253,7 +1328,7 @@ python gui_app.py
 ```
 
 **From compiled executable:**
-Double-click `Firewall-Migration-Tool-v1.2.0.exe` (no Python installation required).
+Double-click `Firewall-Migration-Tool-v1.5.1.exe` (no Python installation required).
 
 The application opens at 960x720 and is resizable (minimum 800x600).
 
@@ -1265,13 +1340,15 @@ The toolbar at the top of the window contains three controls:
 
 | Control | Location | Purpose |
 |---------|----------|---------|
-| **Source** dropdown | Left | Select source platform: **FortiGate** or **Cisco ASA** |
-| **Target** dropdown | Center-left | Select target platform: **Cisco FTD** or **Palo Alto PAN-OS** |
+| **Source** dropdown | Left | Select source platform: **FortiGate**, **Cisco ASA**, **Palo Alto**, or **Cisco FTD** |
+| **Target** dropdown | Center-left | Select target platform: **Cisco FTD**, **Palo Alto PAN-OS**, or **FortiGate** |
 | **Theme** dropdown | Right | Switch between color themes (applied instantly) |
 
 **Platform behavior:**
-- Selecting **Cisco ASA** as source automatically locks the target to **Palo Alto PAN-OS** (the only supported ASA target).
-- Selecting **FortiGate** as source restores both target options.
+- The Target dropdown auto-narrows based on the Source: **Cisco ASA** locks the target to **Palo Alto PAN-OS**; **Palo Alto** and **Cisco FTD** sources lock the target to **FortiGate**.
+- Selecting **FortiGate** as source restores the FTD and PAN-OS target options.
+- When the target is **FortiGate**, the Import and Cleanup tabs are disabled - FortiGate output is a CLI `.conf` file you restore from the FortiGate GUI (System → Configuration → Restore).
+- The **SNMP (FTD)** tab is visible only when the target is **Cisco FTD**.
 - Changing the target platform updates model lists, labels, and default values across all tabs.
 
 ---
@@ -1389,7 +1466,7 @@ This tab deletes imported objects from the target appliance, useful for rollback
 | Option | Description |
 |--------|-------------|
 | **Delete ALL custom objects** | Master checkbox: selects all object types for deletion. |
-| Individual checkboxes | Delete specific object types: Access Rules, Static Routes, Subinterfaces, EtherChannels, Security Zones, Bridge Groups, Service Groups, Service Objects, Address Groups, Address Objects, Physical Interfaces (reset to defaults). |
+| Individual checkboxes | Delete specific object types: Access Rules, Static Routes, Subinterfaces, EtherChannels, Security Zones, Bridge Groups, Service Groups, Service Objects, Address Groups, Address Objects, SNMP Hosts & Users, Physical Interfaces (reset to defaults). |
 
 #### Flags
 
@@ -1426,7 +1503,54 @@ This tab deletes imported objects from the target appliance, useful for rollback
 
 ---
 
-### Tab 4: Config Viewer
+### Tab 4: SNMP (FTD)
+
+This tab pushes a STIG-compliant SNMPv3 configuration to an FDM-managed FTD. FDM's GUI does not expose SNMPv3, so locally managed FTDs must be configured through the REST API - this tab does it end to end. **Only visible when the target platform is Cisco FTD.** See [SNMPv3 Configuration (FDM-Managed FTD)](#snmpv3-configuration-fdm-managed-ftd) for the CLI equivalent and full details.
+
+#### Fields
+
+| Field | Description |
+|-------|-------------|
+| **FTD Host / IP** | Management IP address or hostname of the FTD. |
+| **Username** | Admin username. Defaults to `admin`. |
+| **Password** | Admin password (masked). |
+| **SNMP Manager IP(s)** | IP address(es) of your monitoring server(s). Comma-separated for multiple (e.g., `10.0.0.50, 10.1.0.50`). Each manager gets its own network object and SNMP host. |
+| **SNMPv3 User Name** | Name of the SNMPv3 user to create. Defaults to `FWADMIN`. |
+| **Auth Algorithm** | `SHA` or `SHA256`. |
+| **Auth Password** | Authentication password (masked, minimum 8 characters). |
+| **Privacy Algorithm** | `AES128`, `AES192`, or `AES256` (default `AES256`; `AES128` is the STIG minimum). |
+| **Privacy Password** | Privacy/encryption password (masked, minimum 8 characters). |
+| **Source Interface** | Logical name of the interface the managers reach the FTD through (e.g., `outside` - not `Ethernet1/1`). Physical interfaces, EtherChannels, and subinterfaces are supported. |
+| **Enable polling (UDP 161)** | Allow SNMP polling. On by default. |
+| **Enable traps (UDP 162)** | Allow SNMP traps. On by default. |
+| **Deploy after push** | Deploy the staged changes on the FTD after the push completes. |
+
+#### How to Run an SNMP Push
+
+1. Set the target platform to **Cisco FTD** so the tab is visible.
+2. Enter the FTD **Host / IP**, **Username**, and **Password**.
+3. Enter the **SNMP Manager IP(s)** and **SNMPv3 User Name**.
+4. Choose the auth/privacy algorithms and enter both passwords (minimum 8 characters each).
+5. Enter the **Source Interface**'s logical name.
+6. Optionally check **Deploy after push** to activate immediately.
+7. Click **Push SNMP Config** and monitor the output console.
+
+**Notes:**
+- Pushes are **additive** - object names are suffixed with the manager IP, so running once per management tool never overwrites earlier configs. Re-running with new values updates in place.
+- Passwords are redacted from the echoed command line and error output.
+- To remove SNMP config later, use the Cleanup tab's **SNMP Hosts & Users** checkbox.
+
+#### Buttons
+
+| Button | Action |
+|--------|--------|
+| **Push SNMP Config** | Begin the SNMP configuration push. |
+| **Cancel** | Stop a running push. |
+| **Clear Output** | Clear the output console. |
+
+---
+
+### Tab 5: Config Viewer
 
 This tab lets you browse and search the generated JSON configuration files without leaving the application.
 
@@ -1457,14 +1581,18 @@ The theme dropdown in the top-right corner switches the entire application's col
 
 | Theme | Description |
 |-------|-------------|
-| **Ocean Coral** | Dark teal background with coral accents. Professional and easy on the eyes. Default theme. |
+| **Default** | Neutral dark gray background with light gray accents. Clean and understated. Default theme. |
+| **Coral** | Dark teal background with coral accents. Professional and easy on the eyes. |
+| **Sandstone** | Dark olive-green background with warm orange accents. Earthy and muted. |
 | **Chris** | Hot pink background with neon green accents. High contrast, vibrant, and fun. |
+| **Voyager** | Deep navy-blue background with gold accents. Bold and nautical. |
+| **Light** | Light gray background with blue accents. Bright, for well-lit rooms. |
 
 ---
 
 ### Tips and Notes
 
-- **One operation at a time:** Only one background operation (convert, import, or cleanup) can run at a time across all tabs. The active tab's Run button is disabled while an operation is in progress.
+- **One operation at a time:** Only one background operation (convert, import, cleanup, or SNMP push) can run at a time across all tabs. The active tab's Run button is disabled while an operation is in progress.
 - **Cancel safely:** Clicking Cancel sends an interrupt to the running thread. The operation stops at the next safe point, which may take a few seconds.
 - **Status bar:** The bottom of the window shows the current status (Ready, Running, Cancelled, or Done).
 - **Output console:** Each tab has its own output console. Console text is read-only but can be selected and copied. Use **Clear Output** to reset it.
@@ -1654,6 +1782,7 @@ python FortiGateToFTDTool/ftd_api_cleanup.py --host IP -u admin --delete-service
 python FortiGateToFTDTool/ftd_api_cleanup.py --host IP -u admin --delete-service-objects
 python FortiGateToFTDTool/ftd_api_cleanup.py --host IP -u admin --delete-address-groups
 python FortiGateToFTDTool/ftd_api_cleanup.py --host IP -u admin --delete-address-objects
+python FortiGateToFTDTool/ftd_api_cleanup.py --host IP -u admin --delete-snmp
 
 # Delete everything
 python FortiGateToFTDTool/ftd_api_cleanup.py --host IP -u admin --delete-all
@@ -1674,6 +1803,21 @@ python FortiGateToFTDTool/ftd_api_cleanup.py --host IP -u admin --delete-all --j
 python FortiGateToFTDTool/ftd_api_cleanup.py --help
 ```
 
+**SNMP Configuration Commands (FDM-managed FTD):**
+```bash
+# Push SNMPv3 config (passwords prompted if omitted)
+python FortiGateToFTDTool/ftd_snmp_config.py --host IP -u admin --nms-ip 10.0.0.50 --snmp-user FWADMIN --interface outside
+
+# Multiple SNMP managers
+python FortiGateToFTDTool/ftd_snmp_config.py --host IP -u admin --nms-ip 10.0.0.50,10.1.0.50 --snmp-user FWADMIN --interface outside
+
+# Push and deploy
+python FortiGateToFTDTool/ftd_snmp_config.py --host IP -u admin --nms-ip 10.0.0.50 --snmp-user FWADMIN --interface outside --deploy
+
+# Help
+python FortiGateToFTDTool/ftd_snmp_config.py --help
+```
+
 ### D. Support and Resources
 
 **FTD FDM API Documentation:**
@@ -1691,6 +1835,6 @@ python FortiGateToFTDTool/ftd_api_cleanup.py --help
 
 ---
 
-**Document Version:** 3.0
-**Last Updated:** March 2026
+**Document Version:** 3.1
+**Last Updated:** June 2026
 **Compatible With:** FTD 7.4.x with FDM, PAN-OS 10.1+, Python 3.9+
