@@ -4,7 +4,7 @@
 
 ### Overview
 
-Adds STIG-compliant SNMPv3 push for FDM-managed FTDs, fixes failed imports caused by duplicate VLAN IDs and failed cleanups caused by HA interface monitoring, tightens the importer's update-on-existing logic, and adds restricted build profiles for cleanup-free executables.
+Adds STIG-compliant SNMPv3 push for FDM-managed FTDs, fixes failed imports caused by duplicate VLAN IDs and failed cleanups caused by HA interface monitoring, tightens the importer's update-on-existing logic, adds restricted build profiles for cleanup-free executables, and expands the GUI theme set with three new themes and a redesigned Sandstone.
 
 ### New Features
 
@@ -43,6 +43,14 @@ Deleting EtherChannels (and bridge groups) failed on HA-enabled appliances with 
 - Read-only `links` metadata is stripped from the disable PUT so FDM does not reject it.
 
 ### Improvements
+
+**GUI themes - three new themes, new default, Sandstone redesign**
+
+- **New "Default" theme** - Neutral dark gray with light gray accents; now the theme on launch (previously Coral).
+- **New "Voyager" theme** - Deep navy-blue background with gold accents.
+- **New "Light" theme** - The first light theme: light gray background, white input/output fields, blue accents.
+- **Sandstone redesigned** - Now a dark olive-green palette with warm orange accents and muted green output text, replacing the previous lighter red-accented look.
+- All themes remain switchable live from the dropdown in the top-right corner; help-tab descriptions updated to match.
 
 **FTD import - update-on-existing matching**
 

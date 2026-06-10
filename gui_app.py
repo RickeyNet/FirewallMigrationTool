@@ -262,6 +262,21 @@ class _QueueWriter(io.TextIOBase):
 # Theme definitions
 # ---------------------------------------------------------------------------
 THEMES = {
+    "Default": {
+        "bg":       "#1a1a1a",
+        "input":    "#2d2d2d",
+        "fg":       "#d4d4d4",
+        "fg_dim":   "#909090",
+        "accent":   "#b0b0b0",
+        "accent_d": "#242424",
+        "accent_h": "#c8c8c8",
+        "border":   "#3c3c3c",
+        "btn_bg":   "#b0b0b0",
+        "btn_fg":   "#1a1a1a",
+        "tab_bg":   "#242424",
+        "out_bg":   "#2d2d2d",
+        "out_fg":   "#a6e3a1",
+    },
     "Coral": {
         "bg":       "#0b1e24",
         "input":    "#112e35",
@@ -278,19 +293,19 @@ THEMES = {
         "out_fg":   "#5abaa0",
     },
     "Sandstone": {
-        "bg":       "#868f76",
-        "input":    "#adab99",
-        "fg":       "#4a4a3a",
-        "fg_dim":   "#4b4938",
-        "accent":   "#5c2e2e",
-        "accent_d": "#b0ad94",
-        "accent_h": "#a06c6c",
-        "border":   "#b0ad94",
-        "btn_bg":   "#5c2e2e",
-        "btn_fg":   "#adab99",
-        "tab_bg":   "#a3ac9a",
-        "out_bg":   "#4b493d",
-        "out_fg":   "#5a7a4a",
+        "bg":       "#4f5544",
+        "input":    "#2e3128",
+        "fg":       "#d8d2bc",
+        "fg_dim":   "#9a9480",
+        "accent":   "#c97b3a",
+        "accent_d": "#3e4337",
+        "accent_h": "#e0934a",
+        "border":   "#2a2d23",
+        "btn_bg":   "#c97b3a",
+        "btn_fg":   "#2e3128",
+        "tab_bg":   "#3e4337",
+        "out_bg":   "#2e3128",
+        "out_fg":   "#a3b878",
     },
     "Chris": {
         "bg":       "#ff69b4",
@@ -307,9 +322,39 @@ THEMES = {
         "out_bg":   "#ebfa21",
         "out_fg":   "#ff0000",
     },
+    "Voyager": {
+        "bg":       "#0f1a3d",
+        "input":    "#070d24",
+        "fg":       "#e6ebf5",
+        "fg_dim":   "#7d89b0",
+        "accent":   "#f5a623",
+        "accent_d": "#19234d",
+        "accent_h": "#ffb840",
+        "border":   "#1f2a5c",
+        "btn_bg":   "#f5a623",
+        "btn_fg":   "#0f1a3d",
+        "tab_bg":   "#19234d",
+        "out_bg":   "#070d24",
+        "out_fg":   "#7dd3a0",
+    },
+    "Light": {
+        "bg":       "#f0f0eb",
+        "input":    "#ffffff",
+        "fg":       "#1e1e1e",
+        "fg_dim":   "#6a6a6a",
+        "accent":   "#0066cc",
+        "accent_d": "#e2e2dc",
+        "accent_h": "#0055aa",
+        "border":   "#c0bfb5",
+        "btn_bg":   "#0066cc",
+        "btn_fg":   "#ffffff",
+        "tab_bg":   "#e2e2dc",
+        "out_bg":   "#ffffff",
+        "out_fg":   "#1a6e1a",
+    },
 }
 
-DEFAULT_THEME = "Coral"
+DEFAULT_THEME = "Default"
 
 # Initialize module-level colors from the default theme
 _t = THEMES[DEFAULT_THEME]
@@ -2127,14 +2172,24 @@ class App(tk.Tk):
         put("=" * 70 + "\n\n", "separator")
         put("The theme dropdown in the top-right corner switches the color "
             "scheme instantly. No restart required.\n\n")
-        put("\u2022  Coral (default): ", "bullet")
+        put("\u2022  Default: ", "bullet")
+        put("Neutral dark gray background with light gray accents. Clean and "
+            "understated.\n", "bullet")
+        put("\u2022  Coral: ", "bullet")
         put("Dark teal background with coral accents. Professional and easy "
             "on the eyes.\n", "bullet")
         put("\u2022  Sandstone: ", "bullet")
-        put("Sandstone background with red accents. Lighter, warm tones.\n", "bullet")
+        put("Dark olive-green background with warm orange accents. Earthy and "
+            "muted.\n", "bullet")
         put("\u2022  Chris: ", "bullet")
         put("Hot pink background with neon green accents. High contrast and "
-            "vibrant.\n\n", "bullet")
+            "vibrant.\n", "bullet")
+        put("\u2022  Voyager: ", "bullet")
+        put("Deep navy-blue background with gold accents. Bold and nautical.\n",
+            "bullet")
+        put("\u2022  Light: ", "bullet")
+        put("Light gray background with blue accents. Bright, for well-lit "
+            "rooms.\n\n", "bullet")
 
         # ----- Tips -----
         put("Tips and Notes\n", "h1")
