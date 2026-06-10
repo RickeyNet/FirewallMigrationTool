@@ -44,7 +44,7 @@ import time
 import getpass
 import urllib3
 import threading
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from concurrency_utils import run_with_retry, run_indexed_thread_pool
 from platform_profiles import is_ftd_1000, is_ftd_3100
 from ftd_api_base import FTDBaseClient
@@ -191,7 +191,10 @@ class FTDAPIClient(FTDBaseClient):
             text = (response.text or "").strip()
             return text if text else default
 
-    def _get_object_by_name_from_endpoint(self, endpoint: str, name: str) -> Tuple[bool, Union[Dict[str, Any], str]]:
+    def _get_object_by_name_from_endpoint(
+        self, endpoint: str, name: str,
+        match: Optional[Callable[[Dict[str, Any]], bool]] = None,
+    ) -> Tuple[bool, Union[Dict[str, Any], str]]:
         """
         Look up an existing FTD object by name from the given list endpoint.
 
@@ -200,6 +203,11 @@ class FTDAPIClient(FTDBaseClient):
         Args:
             endpoint: The list endpoint (e.g. /object/networks)
             name: Object name to find
+            match: Optional fallback predicate. During the paginated scan,
+                   any object for which ``match(obj)`` is True is returned
+                   even if its name differs. Used for duplicates keyed on
+                   something other than name (e.g. an etherchannel's
+                   Port-channel ID, a subinterface's VLAN ID).
 
         Returns:
             (True, object_dict) if found, (False, error_message) otherwise.
@@ -214,7 +222,9 @@ class FTDAPIClient(FTDBaseClient):
                     if obj.get("name") == name:
                         return True, obj
 
-            # Fallback: paginated scan
+            # Fallback: paginated scan. An exact name match always wins;
+            # the match predicate is only used when no name match exists.
+            fallback_obj = None
             offset = 0
             limit = 100
             while True:
@@ -228,10 +238,14 @@ class FTDAPIClient(FTDBaseClient):
                 for obj in items:
                     if obj.get("name") == name:
                         return True, obj
+                    if fallback_obj is None and match is not None and match(obj):
+                        fallback_obj = obj
                 paging = data.get("paging", {})
                 if not items or offset + len(items) >= paging.get("count", len(items)):
                     break
                 offset += limit
+            if fallback_obj is not None:
+                return True, fallback_obj
             return False, f"Object not found: {name}"
         except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
             return False, str(e)
@@ -251,20 +265,32 @@ class FTDAPIClient(FTDBaseClient):
         Return True if ``payload`` would not actually change ``existing``.
 
         Compares value-bearing fields only - FDM bookkeeping (id, version,
-        links, metadata, ...) is dropped from both sides. For any field
+        links, metadata, ...) is ignored at every nesting level, so a group
+        whose member refs are ``{name, type}`` in the payload still matches
+        the GET response where those refs carry id/version. For any field
         present in the new payload, the existing value must match. Existing
         fields not mentioned in the payload are tolerated (FDM defaults).
+        List values must match element-by-element in order - a reordered
+        member list is treated as a change (safe fallback to PUT).
         """
-        def _strip(d: Dict) -> Dict:
-            return {k: v for k, v in d.items() if k not in self._FDM_META_KEYS}
+        return self._values_match(existing, payload)
 
-        existing_clean = _strip(existing)
-        payload_clean = _strip(payload)
-
-        for key, new_val in payload_clean.items():
-            if existing_clean.get(key) != new_val:
+    def _values_match(self, existing_val: Any, new_val: Any) -> bool:
+        """Recursive comparison helper for _payload_matches_existing."""
+        if isinstance(new_val, dict) and isinstance(existing_val, dict):
+            for key, val in new_val.items():
+                if key in self._FDM_META_KEYS:
+                    continue
+                if not self._values_match(existing_val.get(key), val):
+                    return False
+            return True
+        if isinstance(new_val, list) and isinstance(existing_val, list):
+            if len(new_val) != len(existing_val):
                 return False
-        return True
+            return all(
+                self._values_match(e, n) for e, n in zip(existing_val, new_val)
+            )
+        return existing_val == new_val
 
     def _update_existing_object(
         self,
@@ -272,6 +298,7 @@ class FTDAPIClient(FTDBaseClient):
         payload: Dict,
         stat_prefix: str,
         track_stats: bool = True,
+        match: Optional[Callable[[Dict[str, Any]], bool]] = None,
     ) -> Tuple[bool, Optional[str]]:
         """
         Look up an existing object by name and PUT an update.
@@ -284,12 +311,15 @@ class FTDAPIClient(FTDBaseClient):
             payload: The desired object payload (must contain "name").
             stat_prefix: Stat key prefix for _updated / _failed counters.
             track_stats: Whether to record stats.
+            match: Optional fallback predicate for finding the existing
+                   object when the duplicate is keyed on something other
+                   than name (passed to _get_object_by_name_from_endpoint).
 
         Returns:
             (success, object_id or error message)
         """
         obj_name = payload.get("name", "")
-        found, existing = self._get_object_by_name_from_endpoint(endpoint, obj_name)
+        found, existing = self._get_object_by_name_from_endpoint(endpoint, obj_name, match=match)
         if not found or not isinstance(existing, dict):
             if track_stats:
                 self.record_stat(f"{stat_prefix}_failed")
@@ -315,6 +345,8 @@ class FTDAPIClient(FTDBaseClient):
         update_payload.update(payload)
         update_payload["id"] = obj_id
         update_payload["version"] = obj_version
+        # Read-only metadata from the GET response - not valid in a PUT body
+        update_payload.pop("links", None)
 
         try:
             put_url = f"{endpoint}/{obj_id}"
@@ -1577,8 +1609,13 @@ class FTDAPIClient(FTDBaseClient):
                     
                     if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
                         if self.update_existing:
+                            # The duplicate may be keyed on the VLAN ID under
+                            # this parent rather than the logical name. The
+                            # endpoint is already parent-scoped, so matching
+                            # on vlanId/subIntfId is safe.
                             return self._update_existing_object(
                                 endpoint, subintf_payload, "subinterfaces",
+                                match=(lambda o: o.get('vlanId') == vlan_id or o.get('subIntfId') == vlan_id),
                             )
                         self.stats["subinterfaces_skipped"] += 1
                         return True, f"SKIPPED: {error_msg}"
@@ -1722,8 +1759,13 @@ class FTDAPIClient(FTDBaseClient):
                 
                 if 'already exists' in error_msg.lower() or 'duplicate' in error_msg.lower():
                     if self.update_existing:
+                        # The duplicate may be keyed on the Port-channel ID
+                        # rather than the logical name, so also match on
+                        # hardwareName (e.g. "Port-channel1").
+                        ec_hw = str(intf.get('hardwareName', '')).lower().strip()
                         return self._update_existing_object(
                             endpoint, intf, "etherchannels",
+                            match=(lambda o: bool(ec_hw) and str(o.get('hardwareName', '')).lower().strip() == ec_hw),
                         )
                     self.stats["etherchannels_skipped"] += 1
                     return True, f"SKIPPED: {error_msg}"
