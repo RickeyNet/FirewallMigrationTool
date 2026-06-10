@@ -949,7 +949,8 @@ class FTDBulkDelete(FTDBaseClient):
 
         return not failure_flag[0]
 
-    def _disable_ha_monitor(self, endpoint: str, obj_id: str, obj_name: str) -> Tuple[bool, str]:
+    def _disable_ha_monitor(self, endpoint: str, obj_id: str, obj_name: str,
+                            force: bool = False) -> Tuple[bool, str]:
         """
         Disable HA interface monitoring on an object before deletion.
 
@@ -969,6 +970,11 @@ class FTDBulkDelete(FTDBaseClient):
                       (e.g. ``/devices/default/etherchannelinterfaces``).
             obj_id:   UUID of the specific object.
             obj_name: Human-readable name for log messages.
+            force:    When True, PUT ``monitorInterface: false`` even if the
+                      GET response reports it as already off or omits the
+                      field.  Used as a second attempt when a DELETE was
+                      rejected with an HA-monitoring error despite the flag
+                      appearing to be off.
 
         Returns:
             Tuple of (success, error_message).
@@ -986,11 +992,12 @@ class FTDBulkDelete(FTDBaseClient):
             obj_data = response.json()
 
             # --- Step 2: Check if HA monitoring is enabled --------------------
-            if not obj_data.get("monitorInterface", False):
+            if not force and not obj_data.get("monitorInterface", False):
                 # Already off - nothing to do
                 return True, ""
 
             # --- Step 3: PUT with monitorInterface = false --------------------
+            obj_data.pop("links", None)  # read-only metadata, not valid in a PUT
             obj_data["monitorInterface"] = False
             # Also disable propagateSecurityGroupTag if present - it can
             # cause the API to reject the PUT with HTTP 423.
@@ -1018,6 +1025,17 @@ class FTDBulkDelete(FTDBaseClient):
 
         except requests.exceptions.RequestException as exc:
             return False, f"Request error (disable HA monitor): {exc}"
+
+    @staticmethod
+    def _is_ha_monitor_error(error_msg: str) -> bool:
+        """Return True when a DELETE rejection looks like an HA-monitoring error.
+
+        The FDM API phrases this a few different ways across versions
+        (e.g. "interface is monitored for HA failover", "HA monitoring is
+        enabled"), so match loosely on the monitoring keyword.
+        """
+        msg = (error_msg or "").lower()
+        return "monitor" in msg and ("ha" in msg or "high availability" in msg or "failover" in msg)
 
     def delete_all_etherchannels(self, dry_run: bool = False, delay: float = 0.3) -> bool:
         """
@@ -1080,6 +1098,21 @@ class FTDBulkDelete(FTDBaseClient):
 
                 # --- Now delete the EtherChannel ------------------------------
                 success, error_msg = self.delete_object("/devices/default/etherchannelinterfaces", obj_id)  # pyright: ignore[reportArgumentType]
+
+                # If FDM still rejected the DELETE because of HA monitoring,
+                # force monitorInterface=false (even when the GET reported it
+                # off) and retry the delete once.
+                if not success and self._is_ha_monitor_error(error_msg):
+                    if self.debug:
+                        print(f"    [DEBUG] DELETE rejected for HA monitoring on {name}; forcing monitor off and retrying")
+                    ha_ok, ha_err = self._disable_ha_monitor(
+                        "/devices/default/etherchannelinterfaces", obj_id, name, force=True  # pyright: ignore[reportArgumentType]
+                    )
+                    if ha_ok:
+                        time.sleep(delay)
+                        success, error_msg = self.delete_object("/devices/default/etherchannelinterfaces", obj_id)  # pyright: ignore[reportArgumentType]
+                    else:
+                        error_msg = f"{error_msg}; force-disable also failed: {ha_err}"
 
                 if success:
                     print(f"  [{i}/{len(all_etherchannels)}] {flair('delete', 'OK', subject)}")
@@ -1162,6 +1195,18 @@ class FTDBulkDelete(FTDBaseClient):
 
                 # --- Now delete the bridge group ------------------------------
                 success, error_msg = self.delete_object("/devices/default/bridgegroupinterfaces", obj_id)  # pyright: ignore[reportArgumentType]
+
+                # Same HA-monitoring retry as etherchannels: force the flag
+                # off and retry once when the DELETE is rejected for it.
+                if not success and self._is_ha_monitor_error(error_msg):
+                    ha_ok, ha_err = self._disable_ha_monitor(
+                        "/devices/default/bridgegroupinterfaces", obj_id, name, force=True  # pyright: ignore[reportArgumentType]
+                    )
+                    if ha_ok:
+                        time.sleep(delay)
+                        success, error_msg = self.delete_object("/devices/default/bridgegroupinterfaces", obj_id)  # pyright: ignore[reportArgumentType]
+                    else:
+                        error_msg = f"{error_msg}; force-disable also failed: {ha_err}"
 
                 if success:
                     print(f"  [{i}/{len(all_bridge_groups)}] {flair('delete', 'OK', name)}")
