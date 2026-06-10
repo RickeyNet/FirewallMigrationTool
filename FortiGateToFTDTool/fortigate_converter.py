@@ -420,6 +420,8 @@ Supported FTD Models:
     print(f"  - Bridge groups to create: {intf_stats['bridge_groups_created']}")
     print(f"  - Subinterfaces to create: {intf_stats['subinterfaces_created']}")
     print(f"  - Security zones to create: {intf_stats['security_zones_created']}")
+    if intf_stats.get('vlan_conflicts_remapped', 0) > 0:
+        print(f"  - Duplicate VLAN IDs remapped: {intf_stats['vlan_conflicts_remapped']}")
     if intf_stats['skipped'] > 0:
         print(f"  - Skipped: {intf_stats['skipped']}")
     

@@ -323,7 +323,7 @@ _TAB_BG   = _t["tab_bg"]
 _OUT_BG   = _t["out_bg"]
 _OUT_FG   = _t["out_fg"]
 
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.5.1"
 
 
 class App(tk.Tk):

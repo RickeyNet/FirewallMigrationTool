@@ -1,5 +1,47 @@
 # Release Notes
 
+## v1.5.1 - VLAN Conflict Resolution, HA Cleanup Fix, Smarter Updates
+
+### Overview
+
+Fixes failed imports caused by duplicate VLAN IDs and failed cleanups caused by HA interface monitoring, tightens the importer's update-on-existing logic, and adds restricted build profiles for cleanup-free executables.
+
+### New Features
+
+**Automatic VLAN conflict resolution (FortiGate → FTD conversion)**
+
+FortiGate allows VLAN interfaces on different parents (physical ports, port channels, virtual switches) to share the same VLAN ID; FTD requires VLAN IDs to be unique device-wide, so the duplicate subinterfaces failed to import. The converter now resolves these conflicts automatically in a new Phase 5B pass:
+
+- **Priority parents keep their VLAN IDs** - Subinterfaces on EtherChannels (port channels) and virtual switches (FTD bridge groups) always keep their original VLAN numbers.
+- **Physical-parent subinterfaces are remapped** - Conflicting subinterfaces on physical interfaces move to the nearest unused VLAN ID. `vlanId`, `subIntfId`, and the `hardwareName` suffix are updated together (e.g. `Ethernet1/3.100` → `Ethernet1/3.102`).
+- **References stay intact** - Logical names never change, so security zones, routes, and policies are unaffected. Zone generation runs after the remap and picks up corrected hardware names automatically.
+- **No cascade displacement** - A remap never takes a VLAN ID that another subinterface legitimately owns.
+- **Fully visible** - Every remap is printed during conversion, appended to the interface description (`[remapped from VLAN 100]`), and counted in the conversion summary (`Duplicate VLAN IDs remapped: N`). If two priority parents collide, the second is remapped with an explicit warning.
+
+**Restricted build profiles**
+
+- New reusable build profiles allow producing limited executables; `--no-cleanup` / `fortigate_to_ftd_no_cleanup` builds omit the Cleanup tab and cleanup-related bundles entirely. The runtime profile carries `features.cleanup`; the GUI and PyInstaller imports respect it.
+
+### Fixes
+
+**FTD cleanup - EtherChannel/bridge group deletion on HA pairs**
+
+Deleting EtherChannels (and bridge groups) failed on HA-enabled appliances with an "HA monitoring is on" error, because the pre-delete disable step was skipped whenever the API reported `monitorInterface` as off or omitted the field:
+
+- The HA-monitor disable can now be **forced** - it PUTs `monitorInterface: false` even when the GET response claims monitoring is already off.
+- If a DELETE is still rejected with an HA-monitoring error, the cleanup force-disables monitoring and **retries the delete once**; both errors are reported together if it still fails.
+- Read-only `links` metadata is stripped from the disable PUT so FDM does not reject it.
+
+### Improvements
+
+**FTD import - update-on-existing matching**
+
+- **Unchanged groups and rules now skip correctly** - Payload comparison is recursive and ignores FDM bookkeeping fields (`id`, `version`, `links`) at every nesting level, so a group whose member refs differ only by server-side metadata is recognized as identical and skipped instead of re-PUT (avoids FDM "no changes detected" rejections).
+- **Non-name duplicates resolve to updates** - When a duplicate is keyed on something other than the object name, the importer now finds and updates the existing object: EtherChannels match on `hardwareName` (Port-channel ID), subinterfaces on `vlanId`/`subIntfId` under the same parent. Exact name matches always take priority.
+- **Cleaner update PUTs** - Read-only `links` metadata is stripped from update payloads.
+
+---
+
 ## v1.5.0 - Major Release (since v1.4.0)
 
 ### Overview

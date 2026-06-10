@@ -255,6 +255,7 @@ class InterfaceConverter:
             'etherchannels_created': 0,
             'bridge_groups_created': 0,
             'security_zones_created': 0,
+            'vlan_conflicts_remapped': 0,
             'skipped': 0
         }
 
@@ -629,6 +630,12 @@ class InterfaceConverter:
         for fg_name, properties in vlan_interfaces:
             self._convert_vlan_interface(fg_name, properties)
         
+        # PHASE 5B: Resolve duplicate VLAN IDs
+        # FortiGate allows the same VLAN ID on different parents; FTD requires
+        # device-wide unique VLAN IDs. Must run BEFORE zone generation so
+        # zones reference the corrected hardware names.
+        self._resolve_vlan_conflicts()
+
         # PHASE 6: Generate Security Zones for all converted interfaces
         # FTD requires security zones for firewall policies
         print("\n  [Phase 6] Generating Security Zones...")
@@ -1194,8 +1201,13 @@ class InterfaceConverter:
                 if ftd_name_val == ec_ftd_name:
                     etherchannel_fg_names.add(fg_name_key)
         
-        # Determine hardware name based on parent type
+        # Determine hardware name based on parent type.
+        # Also classify the parent for VLAN conflict resolution: subinterfaces
+        # on etherchannels and virtual switches (bridge groups) keep their
+        # VLAN IDs; physical-parent subinterfaces may be remapped on conflict.
+        bridge_group_names = {bg.get('name') for bg in self.bridge_groups}
         if parent_fg_name in etherchannel_fg_names:
+            parent_class = 'etherchannel'
             # Parent is an etherchannel - find its hardware name
             for ec in self.etherchannels:
                 if parent_ftd_name == ec.get('name'):
@@ -1204,12 +1216,15 @@ class InterfaceConverter:
             else:
                 parent_hardware = 'Port-channel1'  # Default fallback
         else:
+            parent_class = 'bridge' if parent_ftd_name in bridge_group_names else 'physical'
             # Parent is a physical interface
             parent_hardware = self.port_mapping.get(parent_fg_name, "Ethernet1/1")
-        
+
         hardware_name = f"{parent_hardware}.{vlan_id}"
-        
+
         # Build FTD Subinterface payload
+        # _vlanParentClass is transient - consumed and removed by
+        # _resolve_vlan_conflicts() before the payloads are written out.
         ftd_interface = {
             "name": ftd_name,
             "hardwareName": hardware_name,
@@ -1218,7 +1233,8 @@ class InterfaceConverter:
             "mode": "ROUTED",
             "subIntfId": int(vlan_id),
             "vlanId": int(vlan_id),
-            "type": "subinterface"
+            "type": "subinterface",
+            "_vlanParentClass": parent_class
         }
         
         # Add IP address if present
@@ -1256,6 +1272,96 @@ class InterfaceConverter:
         else:
             print(f"    Converted: {fg_name} -> {ftd_name} ({hardware_name}) VLAN {vlan_id}")
     
+    @staticmethod
+    def _next_free_vlan(start: int, used: Set[int]) -> Optional[int]:
+        """
+        Find the closest unused VLAN ID, scanning up from ``start`` and
+        wrapping around to the bottom of the range (2-4094) if needed.
+        """
+        for candidate in range(start + 1, 4095):
+            if candidate not in used:
+                return candidate
+        for candidate in range(2, start):
+            if candidate not in used:
+                return candidate
+        return None
+
+    def _resolve_vlan_conflicts(self):
+        """
+        Remap duplicate VLAN IDs so every subinterface is unique device-wide.
+
+        FortiGate allows VLAN interfaces on different parents (physical
+        ports, port channels, virtual switches) to share a VLAN ID. FTD
+        rejects a subinterface whose VLAN ID is already used anywhere on the
+        device, so the duplicates would fail to import.
+
+        Priority: subinterfaces parented on EtherChannels and virtual
+        switches (bridge groups) keep their original VLAN IDs. Physical-
+        interface subinterfaces that conflict are moved to the nearest
+        unused VLAN ID. Within the same priority tier, config order wins -
+        a later duplicate is remapped even if it is on a priority parent
+        (two priority parents cannot both keep the same VLAN ID; this is
+        flagged with a warning).
+
+        Only vlanId/subIntfId and the hardwareName suffix change - the
+        logical name is untouched, so security zones, routes, and policies
+        that reference the interface by name are unaffected.
+        """
+        # Pop the transient classification tag so it never reaches the
+        # JSON output files (default to 'physical' for safety).
+        classes = [intf.pop('_vlanParentClass', 'physical') for intf in self.subinterfaces]
+
+        if not self.subinterfaces:
+            return
+
+        # Priority parents claim their VLAN IDs first; config order breaks ties
+        order = sorted(
+            range(len(self.subinterfaces)),
+            key=lambda i: (1 if classes[i] == 'physical' else 0, i),
+        )
+
+        # Remap targets must avoid every original VLAN ID, not just the ones
+        # claimed so far - otherwise a remap could steal the ID of an
+        # interface processed later and needlessly displace it too.
+        original_vlans = {intf.get('vlanId') for intf in self.subinterfaces}
+
+        used_vlans = set()
+        remapped = []
+        for i in order:
+            intf = self.subinterfaces[i]
+            vlan_id = intf.get('vlanId')
+            if vlan_id not in used_vlans:
+                used_vlans.add(vlan_id)
+                continue
+
+            new_vlan = self._next_free_vlan(vlan_id, used_vlans | original_vlans)
+            if new_vlan is None:
+                print(f"    [WARNING] {intf.get('name')}: no free VLAN ID available to resolve conflict on VLAN {vlan_id}")
+                self.stats['skipped'] += 1
+                self.failed_items.append({
+                    "name": intf.get('name'),
+                    "reason": f"duplicate VLAN {vlan_id} and no free VLAN ID available",
+                    "config": dict(intf),
+                })
+                continue
+
+            parent_hardware = str(intf.get('hardwareName', '')).rsplit('.', 1)[0]
+            intf['vlanId'] = new_vlan
+            intf['subIntfId'] = new_vlan
+            intf['hardwareName'] = f"{parent_hardware}.{new_vlan}"
+            desc = intf.get('description') or ''
+            intf['description'] = f"{desc} [remapped from VLAN {vlan_id}]".strip()
+            used_vlans.add(new_vlan)
+            remapped.append((intf.get('name'), parent_hardware, vlan_id, new_vlan, classes[i]))
+
+        if remapped:
+            print(f"\n  [Phase 5B] Resolved {len(remapped)} duplicate VLAN ID(s):")
+            for name, parent_hw, old_vlan, new_vlan, parent_class in remapped:
+                note = '' if parent_class == 'physical' else f"  [WARNING: {parent_class}-parented interface had to move]"
+                print(f"    {name}: {parent_hw}.{old_vlan} -> {parent_hw}.{new_vlan}{note}")
+
+        self.stats['vlan_conflicts_remapped'] = len(remapped)
+
     def get_interface_mapping(self) -> Dict[str, str]:
         """
         Get the mapping of FortiGate interface names to FTD interface names.
