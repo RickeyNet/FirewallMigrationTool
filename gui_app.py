@@ -458,6 +458,7 @@ class App(tk.Tk):
 
         # --- Frames ---
         style.configure("TFrame", background=bg)
+        style.configure("TPanedwindow", background=bg)
 
         # --- LabelFrame (panels) ---
         style.configure(
@@ -1363,8 +1364,17 @@ class App(tk.Tk):
         notebook.add(tab, text="  SNMP (FTD)  ")
         self._snmp_tab = tab
 
-        conn = ttk.LabelFrame(tab, text="FTD Connection", padding=10)
-        conn.pack(fill=tk.X, padx=8, pady=(8, 4))
+        # Settings on the left, console output on the right (the tab is too
+        # tall for a stacked layout). The sash is draggable.
+        paned = ttk.PanedWindow(tab, orient=tk.HORIZONTAL)
+        paned.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        left = ttk.Frame(paned)
+        paned.add(left, weight=0)
+        right = ttk.Frame(paned)
+        paned.add(right, weight=1)
+
+        conn = ttk.LabelFrame(left, text="FTD Connection", padding=10)
+        conn.pack(fill=tk.X, padx=(0, 4), pady=(0, 4))
 
         ttk.Label(conn, text="FTD Host / IP:").grid(row=0, column=0, sticky=tk.W, pady=3)
         self.snmp_host_var = tk.StringVar()
@@ -1388,19 +1398,19 @@ class App(tk.Tk):
 
         # SNMPv3 settings
         snmp_opts = ttk.LabelFrame(
-            tab, text="SNMPv3 Settings (STIG: Auth/Priv - SHA auth + AES privacy)",
+            left, text="SNMPv3 Settings (STIG: Auth/Priv - SHA auth + AES privacy)",
             padding=10,
         )
-        snmp_opts.pack(fill=tk.X, padx=8, pady=4)
+        snmp_opts.pack(fill=tk.X, padx=(0, 4), pady=4)
 
         ttk.Label(snmp_opts, text="SNMP Manager IP(s):").grid(row=0, column=0, sticky=tk.W, pady=3)
         self.snmp_nms_var = tk.StringVar()
-        ttk.Entry(snmp_opts, textvariable=self.snmp_nms_var, width=40).grid(
+        ttk.Entry(snmp_opts, textvariable=self.snmp_nms_var, width=28).grid(
             row=0, column=1, sticky=tk.W, padx=4,
         )
         ttk.Label(
             snmp_opts, text="(comma-separated for multiple, e.g. 10.0.0.50, 10.1.0.50)",
-            foreground=_FG_DIM,
+            foreground=_FG_DIM, wraplength=220, justify=tk.LEFT,
         ).grid(row=0, column=2, sticky=tk.W, padx=4)
 
         ttk.Label(snmp_opts, text="SNMP Host Name (optional):").grid(row=1, column=0, sticky=tk.W, pady=3)
@@ -1411,7 +1421,7 @@ class App(tk.Tk):
         ttk.Label(
             snmp_opts, text="(base name for the SNMP host object(s); the manager "
                             "IP is appended. Default: snmpv3-host)",
-            foreground=_FG_DIM,
+            foreground=_FG_DIM, wraplength=220, justify=tk.LEFT,
         ).grid(row=1, column=2, sticky=tk.W, padx=4)
 
         ttk.Label(snmp_opts, text="SNMPv3 User Name:").grid(row=2, column=0, sticky=tk.W, pady=3)
@@ -1425,7 +1435,7 @@ class App(tk.Tk):
         ttk.Combobox(
             snmp_opts, textvariable=self.snmp_auth_alg_var,
             values=["SHA", "SHA256"], state="readonly", width=12,
-        ).grid(row=2, column=1, sticky=tk.W, padx=4)
+        ).grid(row=3, column=1, sticky=tk.W, padx=4)
 
         ttk.Label(snmp_opts, text="Auth Password:").grid(row=4, column=0, sticky=tk.W, pady=3)
         self.snmp_auth_pw_var = tk.StringVar()
@@ -1462,27 +1472,27 @@ class App(tk.Tk):
         )
         ttk.Label(
             snmp_opts, text="(logical name, e.g. outside - not Ethernet1/1)",
-            foreground=_FG_DIM,
+            foreground=_FG_DIM, wraplength=220, justify=tk.LEFT,
         ).grid(row=7, column=2, sticky=tk.W, padx=4)
 
         ttk.Label(snmp_opts, text="Location (optional):").grid(row=8, column=0, sticky=tk.W, pady=3)
         self.snmp_location_var = tk.StringVar()
-        ttk.Entry(snmp_opts, textvariable=self.snmp_location_var, width=40).grid(
+        ttk.Entry(snmp_opts, textvariable=self.snmp_location_var, width=28).grid(
             row=8, column=1, sticky=tk.W, padx=4,
         )
         ttk.Label(
             snmp_opts, text="(sysLocation, e.g. site/rack - no semicolons)",
-            foreground=_FG_DIM,
+            foreground=_FG_DIM, wraplength=220, justify=tk.LEFT,
         ).grid(row=8, column=2, sticky=tk.W, padx=4)
 
         ttk.Label(snmp_opts, text="Contact (optional):").grid(row=9, column=0, sticky=tk.W, pady=3)
         self.snmp_contact_var = tk.StringVar()
-        ttk.Entry(snmp_opts, textvariable=self.snmp_contact_var, width=40).grid(
+        ttk.Entry(snmp_opts, textvariable=self.snmp_contact_var, width=28).grid(
             row=9, column=1, sticky=tk.W, padx=4,
         )
         ttk.Label(
             snmp_opts, text="(sysContact, e.g. admin name/email - no semicolons)",
-            foreground=_FG_DIM,
+            foreground=_FG_DIM, wraplength=220, justify=tk.LEFT,
         ).grid(row=9, column=2, sticky=tk.W, padx=4)
 
         self.snmp_poll_var = tk.BooleanVar(value=True)
@@ -1507,14 +1517,14 @@ class App(tk.Tk):
                  "(one IP + its user name each time) - object names are suffixed "
                  "with the manager IP, so each push adds to earlier configs "
                  "instead of overwriting them.",
-            foreground=_FG_DIM, wraplength=720, justify=tk.LEFT,
+            foreground=_FG_DIM, wraplength=600, justify=tk.LEFT,
         ).grid(row=13, column=0, columnspan=3, sticky=tk.W, pady=(8, 0))
 
         snmp_opts.columnconfigure(1, weight=0)
 
         # Device-global trap event types (SNMPServer settings singleton)
-        trap_frame = ttk.LabelFrame(tab, text="Trap Events (device-wide)", padding=10)
-        trap_frame.pack(fill=tk.X, padx=8, pady=4)
+        trap_frame = ttk.LabelFrame(left, text="Trap Events (device-wide)", padding=10)
+        trap_frame.pack(fill=tk.X, padx=(0, 4), pady=4)
 
         self.snmp_trapevents_enable_var = tk.BooleanVar()
         ttk.Checkbutton(
@@ -1529,33 +1539,33 @@ class App(tk.Tk):
             ("SNMP authentication", "SNMP_AUTHENTICATION", True,
              "failed SNMP auth attempts"),
             ("Link up", "SNMP_LINKUP", True,
-             "an interface comes up"),
+             "interface comes up"),
             ("Link down", "SNMP_LINKDOWN", True,
-             "an interface goes down"),
+             "interface goes down"),
             ("Cold start", "SNMP_COLDSTART", True,
-             "device restarted / power-cycled"),
+             "device restarted"),
             ("Warm start", "SNMP_WARMSTART", True,
-             "SNMP agent restarted, no reload"),
+             "agent restart, no reload"),
             ("Syslog", "SYSLOG", False,
-             "every syslog message (noisy)"),
+             "every syslog msg (noisy)"),
             ("Connection limit reached", "CONNECTION_LIMIT_REACHED", False,
-             "configured conn limit was hit"),
+             "conn limit was hit"),
             ("NAT packet discard", "NAT_PACKET_DISCARD", False,
-             "NAT pool exhausted, drops"),
+             "NAT pool exhausted"),
             ("CPU threshold rising", "CPU_THRESHOLD_RISING", False,
-             "CPU usage crossed threshold"),
+             "CPU crossed threshold"),
             ("Memory threshold", "MEM_THRESHOLD", False,
-             "memory usage crossed threshold"),
+             "memory crossed threshold"),
             ("Failover state", "FAILOVER", False,
              "HA failover state changed"),
             ("Cluster state", "CLUSTER", False,
              "cluster membership changed"),
             ("Peer flap", "PEER_FLAP", False,
-             "routing peer (BGP) flapping"),
+             "BGP peer flapping"),
             ("FRU insert", "FRU_INSERT", False,
-             "hardware module inserted"),
+             "module inserted"),
             ("FRU remove", "FRU_REMOVE", False,
-             "hardware module removed"),
+             "module removed"),
             ("Config change", "CONFIG_CHANGE", False,
              "running config changed"),
         ]
@@ -1567,14 +1577,15 @@ class App(tk.Tk):
             row, col = divmod(i, 2)
             check = ttk.Checkbutton(trap_frame, text=label, variable=var, state=tk.DISABLED)
             check.grid(row=row + 1, column=col * 2, sticky=tk.W, padx=(6, 2), pady=1)
-            ttk.Label(trap_frame, text=f"- {note}", foreground=_FG_DIM).grid(
-                row=row + 1, column=col * 2 + 1, sticky=tk.W, padx=(0, 16), pady=1,
+            ttk.Label(trap_frame, text=f"- {note}", foreground=_FG_DIM,
+                      font=("Segoe UI", 8)).grid(
+                row=row + 1, column=col * 2 + 1, sticky=tk.W, padx=(0, 12), pady=1,
             )
             self._snmp_trap_checks.append(check)
 
         # Buttons
-        btn_frame = ttk.Frame(tab)
-        btn_frame.pack(fill=tk.X, padx=8, pady=4)
+        btn_frame = ttk.Frame(left)
+        btn_frame.pack(fill=tk.X, padx=(0, 4), pady=4)
         self.snmp_run_btn = ttk.Button(
             btn_frame, text="Push SNMP Config", command=self._run_snmp,
         )
@@ -1589,7 +1600,7 @@ class App(tk.Tk):
             command=lambda: self._clear_output(self.snmp_output),
         ).pack(side=tk.LEFT, padx=8)
 
-        self.snmp_output = self._make_output_area(tab)
+        self.snmp_output = self._make_output_area(right)
 
     def _toggle_snmp_trap_events(self):
         state = tk.NORMAL if self.snmp_trapevents_enable_var.get() else tk.DISABLED
@@ -2914,6 +2925,52 @@ class App(tk.Tk):
         dlg.wait_window()
         return result[0]
 
+    def _ask_yes_no(self, title, message):
+        """Show a themed modal Yes/No confirmation dialog.
+
+        Replacement for messagebox.askyesno, which always uses native OS
+        styling and ignores the app theme. Returns True if Yes was clicked.
+        """
+        result = [False]
+
+        dlg = tk.Toplevel(self)
+        dlg.title(title)
+        dlg.resizable(False, False)
+        dlg.transient(self)
+        dlg.grab_set()
+
+        ttk.Label(
+            dlg, text=message, justify=tk.LEFT, wraplength=380
+        ).pack(padx=20, pady=(18, 8), anchor=tk.W)
+
+        btn_frame = ttk.Frame(dlg)
+        btn_frame.pack(pady=(4, 16))
+
+        def on_yes(_event=None):
+            result[0] = True
+            dlg.destroy()
+
+        def on_no(_event=None):
+            dlg.destroy()
+
+        yes_btn = ttk.Button(btn_frame, text="Yes", command=on_yes, width=10)
+        yes_btn.pack(side=tk.LEFT, padx=8)
+        ttk.Button(btn_frame, text="No", command=on_no, width=10).pack(
+            side=tk.LEFT, padx=8
+        )
+        dlg.bind("<Return>", on_yes)
+        dlg.bind("<Escape>", on_no)
+        yes_btn.focus_set()
+
+        # Center over the main window
+        dlg.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() - dlg.winfo_width()) // 2
+        y = self.winfo_y() + (self.winfo_height() - dlg.winfo_height()) // 2
+        dlg.geometry(f"+{x}+{y}")
+
+        dlg.wait_window()
+        return result[0]
+
     def _manage_cleanup_password(self):
         """Change the cleanup password (requires current password first)."""
         # Verify current password
@@ -2965,7 +3022,7 @@ class App(tk.Tk):
             messagebox.showerror("Incorrect Password", "The current password is incorrect.")
             return
 
-        if not messagebox.askyesno(
+        if not self._ask_yes_no(
             "Confirm Reset",
             "This will reset the cleanup password to the built-in default.\n\n"
             "Are you sure?",
@@ -3053,7 +3110,7 @@ class App(tk.Tk):
 
             # Confirm before destructive cleanup
             if not self.cln_dry_var.get():
-                if not messagebox.askyesno(
+                if not self._ask_yes_no(
                     "Confirm Cleanup",
                     "This will DELETE objects from the PAN-OS device.\n\n"
                     "Are you sure you want to proceed?\n\n"
@@ -3095,7 +3152,7 @@ class App(tk.Tk):
 
             # Confirm before destructive cleanup
             if not self.cln_dry_var.get():
-                if not messagebox.askyesno(
+                if not self._ask_yes_no(
                     "Confirm Cleanup",
                     "This will DELETE objects from the FTD device.\n\n"
                     "Are you sure you want to proceed?\n\n"
