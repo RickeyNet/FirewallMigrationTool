@@ -137,8 +137,13 @@ class FTDSNMPConfig(FTDBaseClient):
                 )
                 action = "create"
 
-            if response.status_code in (200, 201):
-                obj = response.json()
+            if response.status_code in (200, 201, 204):
+                if response.content:
+                    obj = response.json()
+                else:
+                    # 204 No Content (e.g. an unchanged PUT) - re-fetch so
+                    # callers still get the full object for references
+                    obj = self._get_by_name(endpoint, name) or existing or payload
                 print(f"  {flair(action, 'OK', f'{label} {name}')}")
                 return True, obj
 

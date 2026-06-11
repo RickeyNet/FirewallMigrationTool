@@ -34,6 +34,10 @@ FortiGate allows VLAN interfaces on different parents (physical ports, port chan
 
 ### Fixes
 
+**SNMP push - HTTP 204 responses misreported as failures**
+
+Re-pushing SNMP config after a cleanup failed on the network-object step (and skipped `--deploy`) even though the update succeeded: FDM returns HTTP 204 (No Content) for a PUT that changes nothing - e.g. updating the surviving `snmpHost_<ip>` network object with the same IP - and the upsert only accepted 200/201. It now accepts 204 and re-fetches the object (the 204 body is empty) so downstream references still get the full object.
+
 **FTD cleanup - EtherChannel/bridge group deletion on HA pairs**
 
 Deleting EtherChannels (and bridge groups) failed on HA-enabled appliances with an "HA monitoring is on" error, because the pre-delete disable step was skipped whenever the API reported `monitorInterface` as off or omitted the field:
