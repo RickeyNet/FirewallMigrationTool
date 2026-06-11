@@ -12,7 +12,9 @@ sequence (CASA-ND-001050 / CASA-ND-001070):
 2. Look up the source interface by its logical name
 3. For EACH SNMP manager: create/update a network object for the NMS
    host and an SNMP host binding the NMS, user, and interface
-4. Optionally deploy the pending changes
+4. Optionally set the device-global location/contact (sysLocation /
+   sysContact via the SNMPServer settings object)
+5. Optionally deploy the pending changes
 
 Multiple SNMP managers are supported - they share the SNMPv3 user and
 source interface, and each manager gets its own network object and SNMP
@@ -286,6 +288,45 @@ class FTDSNMPConfig(FTDBaseClient):
         }
         return self._upsert("/object/snmphosts", payload, "SNMP host")
 
+    def set_server_info(self, location: Optional[str], contact: Optional[str]) -> bool:
+        """
+        Set the device-global SNMP location and/or contact (sysLocation /
+        sysContact) on the SNMPServer settings singleton. Fields passed as
+        None are left unchanged.
+        """
+        endpoint = "/devicesettings/default/snmpservers"
+        try:
+            response = self.session.get(
+                f"{self.base_url}{endpoint}", params={"limit": 10}, timeout=30,
+            )
+            if response.status_code != 200:
+                print(f"  {flair('lookup', 'FAIL', 'SNMP server settings', self._extract_error(response))}")
+                return False
+            items = response.json().get("items", [])
+            if not items or not items[0].get("id"):
+                print(f"  {flair('lookup', 'FAIL', 'SNMP server settings', 'no SNMPServer object on device')}")
+                return False
+
+            server = dict(items[0])
+            if location is not None:
+                server["location"] = location
+            if contact is not None:
+                server["contact"] = contact
+            for key in _META_KEYS:
+                server.pop(key, None)
+
+            put_resp = self.session.put(
+                f"{self.base_url}{endpoint}/{server['id']}", json=server, timeout=30,
+            )
+            if put_resp.status_code in (200, 201, 204):
+                print(f"  {flair('update', 'OK', 'SNMP location/contact')}")
+                return True
+            print(f"  {flair('update', 'FAIL', 'SNMP location/contact', self._extract_error(put_resp))}")
+            return False
+        except requests.exceptions.RequestException as exc:
+            print(f"  {flair('update', 'FAIL', 'SNMP location/contact', str(exc))}")
+            return False
+
     # ------------------------------------------------------------------
     # Orchestration
     # ------------------------------------------------------------------
@@ -310,6 +351,8 @@ class FTDSNMPConfig(FTDBaseClient):
         host_object_name: str,
         poll_enabled: bool = True,
         trap_enabled: bool = True,
+        location: Optional[str] = None,
+        contact: Optional[str] = None,
     ) -> bool:
         """
         Run the full SNMPv3 configuration sequence.
@@ -328,6 +371,10 @@ class FTDSNMPConfig(FTDBaseClient):
         print(f"  Source interface: {interface_name}")
         print(f"  Polling: {'enabled' if poll_enabled else 'disabled'}, "
               f"Traps: {'enabled' if trap_enabled else 'disabled'}")
+        if location is not None:
+            print(f"  Location: {location}")
+        if contact is not None:
+            print(f"  Contact:  {contact}")
         print()
 
         # Step 1: SNMPv3 user (shared by all managers)
@@ -368,12 +415,17 @@ class FTDSNMPConfig(FTDBaseClient):
             else:
                 failed += 1
 
+        # Step 4: device-global location/contact (optional)
+        info_ok = True
+        if location is not None or contact is not None:
+            info_ok = self.set_server_info(location, contact)
+
         print(f"\n  Summary: {configured} of {len(nms_ips)} SNMP manager(s) configured"
               f"{f', {failed} failed' if failed else ''}")
         if configured:
             print(f"  NMS access: UDP 161 (polling){' / UDP 162 (traps)' if trap_enabled else ''}")
             print(f"  Verify after deploy via SSH: show run snmp-server")
-        return failed == 0
+        return failed == 0 and info_ok
 
     def deploy_changes(self) -> bool:
         """Deploy pending changes."""
@@ -450,6 +502,12 @@ Examples:
     parser.add_argument('--host-object-name', default='snmpv3-host',
                         help='Base name for the SNMP host object(s) (default: snmpv3-host). '
                              'Each object name is suffixed with its manager IP.')
+    parser.add_argument('--location',
+                        help='SNMP system location (sysLocation), e.g. a site or rack '
+                             'identifier. Max 233 characters, no semicolons.')
+    parser.add_argument('--contact',
+                        help='SNMP system contact (sysContact), e.g. an administrator '
+                             'name or email. Max 234 characters, no semicolons.')
     parser.add_argument('--no-poll', action='store_true', help='Disable SNMP polling')
     parser.add_argument('--no-trap', action='store_true', help='Disable SNMP traps')
     parser.add_argument('--deploy', action='store_true', help='Deploy after configuring')
@@ -485,6 +543,17 @@ Examples:
         print("[WARNING] Security level AUTH (no privacy) is NOT STIG-compliant "
               "(CASA-ND-001070 requires AES encryption). Use PRIV for compliance.")
 
+    # FDM limits: location <= 233 chars, contact <= 234 chars, no semicolons
+    for flag, value, limit in (("--location", args.location, 233),
+                               ("--contact", args.contact, 234)):
+        if value is not None:
+            if ';' in value:
+                print(f"[ERROR] {flag} must not contain semicolons (FDM restriction).")
+                return 1
+            if len(value) > limit:
+                print(f"[ERROR] {flag} must be at most {limit} characters (FDM restriction).")
+                return 1
+
     client = FTDSNMPConfig(
         host=args.host,
         username=args.username,
@@ -508,6 +577,8 @@ Examples:
         host_object_name=args.host_object_name,
         poll_enabled=not args.no_poll,
         trap_enabled=not args.no_trap,
+        location=args.location,
+        contact=args.contact,
     )
 
     if not success:

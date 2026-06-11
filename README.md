@@ -921,6 +921,7 @@ FDM does not expose SNMPv3 in its GUI - locally managed FTDs must be configured 
 
 1. An **SNMPv3 user** with the chosen auth and privacy algorithms (Auth/Priv security level).
 2. A **network object** and **SNMP host** entry per manager IP, bound to the source interface. Object names are suffixed with the manager IP, so pushes are **additive** - each management tool can get its own SNMPv3 user by running the push once per tool without overwriting earlier configs.
+3. Optionally, the device-global **SNMP location and contact** (sysLocation / sysContact) via `--location` / `--contact`.
 
 Re-running with new values updates the existing objects in place (idempotent).
 
@@ -935,12 +936,14 @@ python FortiGateToFTDTool/ftd_snmp_config.py --host 192.168.1.1 -u admin \
 python FortiGateToFTDTool/ftd_snmp_config.py --host 192.168.1.1 -u admin \
     --nms-ip 10.0.0.50,10.1.0.50 --snmp-user FWADMIN --interface outside
 
-# Full specification with deploy
+# Full specification with location/contact and deploy
 python FortiGateToFTDTool/ftd_snmp_config.py --host 192.168.1.1 -u admin \
     --nms-ip 10.0.0.50 --snmp-user FWADMIN \
     --auth-algorithm SHA256 --auth-password 'AuthPass123' \
     --priv-algorithm AES256 --priv-password 'PrivPass123' \
-    --interface outside --deploy
+    --interface outside \
+    --location "DC-East Rack 12" --contact "netops@example.com" \
+    --deploy
 ```
 
 ### Command Reference
@@ -957,6 +960,8 @@ python FortiGateToFTDTool/ftd_snmp_config.py --host 192.168.1.1 -u admin \
 | `--auth-password` | Authentication password, min 8 characters (prompted if omitted) |
 | `--priv-algorithm` | `AES128`, `AES192`, or `AES256` (default: `AES256`; `AES128` is the STIG minimum) |
 | `--priv-password` | Privacy/encryption password, min 8 characters (prompted if omitted) |
+| `--location` | Device-global SNMP system location (sysLocation). Max 233 characters, no semicolons. Omitted = unchanged |
+| `--contact` | Device-global SNMP system contact (sysContact). Max 234 characters, no semicolons. Omitted = unchanged |
 | `--nms-object-name` | Base name for the NMS network object(s) (default: `snmpHost`) |
 | `--host-object-name` | Base name for the SNMP host object(s) (default: `snmpv3-host`) |
 | `--no-poll` | Disable SNMP polling (UDP 161) |
@@ -1521,6 +1526,8 @@ This tab pushes a STIG-compliant SNMPv3 configuration to an FDM-managed FTD. FDM
 | **Privacy Algorithm** | `AES128`, `AES192`, or `AES256` (default `AES256`; `AES128` is the STIG minimum). |
 | **Privacy Password** | Privacy/encryption password (masked, minimum 8 characters). |
 | **Source Interface** | Logical name of the interface the managers reach the FTD through (e.g., `outside` - not `Ethernet1/1`). Physical interfaces, EtherChannels, and subinterfaces are supported. |
+| **Location (optional)** | Device-global SNMP system location (sysLocation), e.g. a site or rack identifier. No semicolons. Left blank, the device's existing value is unchanged. |
+| **Contact (optional)** | Device-global SNMP system contact (sysContact), e.g. an admin name or email. No semicolons. Left blank, the device's existing value is unchanged. |
 | **Enable polling (UDP 161)** | Allow SNMP polling. On by default. |
 | **Enable traps (UDP 162)** | Allow SNMP traps. On by default. |
 | **Deploy after push** | Deploy the staged changes on the FTD after the push completes. |
@@ -1532,8 +1539,9 @@ This tab pushes a STIG-compliant SNMPv3 configuration to an FDM-managed FTD. FDM
 3. Enter the **SNMP Manager IP(s)** and **SNMPv3 User Name**.
 4. Choose the auth/privacy algorithms and enter both passwords (minimum 8 characters each).
 5. Enter the **Source Interface**'s logical name.
-6. Optionally check **Deploy after push** to activate immediately.
-7. Click **Push SNMP Config** and monitor the output console.
+6. Optionally enter a **Location** and/or **Contact** to set the device-global sysLocation/sysContact.
+7. Optionally check **Deploy after push** to activate immediately.
+8. Click **Push SNMP Config** and monitor the output console.
 
 **Notes:**
 - Pushes are **additive** - object names are suffixed with the manager IP, so running once per management tool never overwrites earlier configs. Re-running with new values updates in place.
@@ -1810,6 +1818,9 @@ python FortiGateToFTDTool/ftd_snmp_config.py --host IP -u admin --nms-ip 10.0.0.
 
 # Multiple SNMP managers
 python FortiGateToFTDTool/ftd_snmp_config.py --host IP -u admin --nms-ip 10.0.0.50,10.1.0.50 --snmp-user FWADMIN --interface outside
+
+# With device-global location and contact (sysLocation / sysContact)
+python FortiGateToFTDTool/ftd_snmp_config.py --host IP -u admin --nms-ip 10.0.0.50 --snmp-user FWADMIN --interface outside --location "DC-East Rack 12" --contact "netops@example.com"
 
 # Push and deploy
 python FortiGateToFTDTool/ftd_snmp_config.py --host IP -u admin --nms-ip 10.0.0.50 --snmp-user FWADMIN --interface outside --deploy

@@ -1454,20 +1454,40 @@ class App(tk.Tk):
             foreground=_FG_DIM,
         ).grid(row=6, column=2, sticky=tk.W, padx=4)
 
+        ttk.Label(snmp_opts, text="Location (optional):").grid(row=7, column=0, sticky=tk.W, pady=3)
+        self.snmp_location_var = tk.StringVar()
+        ttk.Entry(snmp_opts, textvariable=self.snmp_location_var, width=40).grid(
+            row=7, column=1, sticky=tk.W, padx=4,
+        )
+        ttk.Label(
+            snmp_opts, text="(sysLocation, e.g. site/rack - no semicolons)",
+            foreground=_FG_DIM,
+        ).grid(row=7, column=2, sticky=tk.W, padx=4)
+
+        ttk.Label(snmp_opts, text="Contact (optional):").grid(row=8, column=0, sticky=tk.W, pady=3)
+        self.snmp_contact_var = tk.StringVar()
+        ttk.Entry(snmp_opts, textvariable=self.snmp_contact_var, width=40).grid(
+            row=8, column=1, sticky=tk.W, padx=4,
+        )
+        ttk.Label(
+            snmp_opts, text="(sysContact, e.g. admin name/email - no semicolons)",
+            foreground=_FG_DIM,
+        ).grid(row=8, column=2, sticky=tk.W, padx=4)
+
         self.snmp_poll_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             snmp_opts, text="Enable polling (UDP 161)", variable=self.snmp_poll_var,
-        ).grid(row=7, column=1, sticky=tk.W, padx=4, pady=3)
+        ).grid(row=9, column=1, sticky=tk.W, padx=4, pady=3)
 
         self.snmp_trap_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             snmp_opts, text="Enable traps (UDP 162)", variable=self.snmp_trap_var,
-        ).grid(row=8, column=1, sticky=tk.W, padx=4, pady=3)
+        ).grid(row=10, column=1, sticky=tk.W, padx=4, pady=3)
 
         self.snmp_deploy_var = tk.BooleanVar()
         ttk.Checkbutton(
             snmp_opts, text="Deploy after push", variable=self.snmp_deploy_var,
-        ).grid(row=9, column=1, sticky=tk.W, padx=4, pady=3)
+        ).grid(row=11, column=1, sticky=tk.W, padx=4, pady=3)
 
         ttk.Label(
             snmp_opts,
@@ -1477,7 +1497,7 @@ class App(tk.Tk):
                  "with the manager IP, so each push adds to earlier configs "
                  "instead of overwriting them.",
             foreground=_FG_DIM, wraplength=720, justify=tk.LEFT,
-        ).grid(row=10, column=0, columnspan=3, sticky=tk.W, pady=(8, 0))
+        ).grid(row=12, column=0, columnspan=3, sticky=tk.W, pady=(8, 0))
 
         snmp_opts.columnconfigure(1, weight=0)
 
@@ -1549,6 +1569,12 @@ class App(tk.Tk):
             "--priv-password", priv_pw,
             "--interface", interface,
         ]
+        location = self.snmp_location_var.get().strip()
+        contact = self.snmp_contact_var.get().strip()
+        if location:
+            argv.extend(["--location", location])
+        if contact:
+            argv.extend(["--contact", contact])
         if not self.snmp_poll_var.get():
             argv.append("--no-poll")
         if not self.snmp_trap_var.get():
@@ -2216,6 +2242,11 @@ class App(tk.Tk):
         put("Ethernet1/1", "code")
         put("). Physical interfaces, EtherChannels, and subinterfaces are "
             "all supported.\n", "bullet")
+        put("•  Location / Contact (optional): ", "bullet")
+        put("Device-global SNMP system location and contact (sysLocation / "
+            "sysContact), e.g. a site identifier and an admin email. No "
+            "semicolons. Left blank, the device's existing values are "
+            "unchanged.\n", "bullet")
         put("•  Enable polling / Enable traps: ", "bullet")
         put("Allow SNMP polling (UDP 161) and/or traps (UDP 162). Both on "
             "by default.\n", "bullet")
