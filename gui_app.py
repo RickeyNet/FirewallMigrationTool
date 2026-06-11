@@ -1403,91 +1403,102 @@ class App(tk.Tk):
             foreground=_FG_DIM,
         ).grid(row=0, column=2, sticky=tk.W, padx=4)
 
-        ttk.Label(snmp_opts, text="SNMPv3 User Name:").grid(row=1, column=0, sticky=tk.W, pady=3)
-        self.snmp_v3user_var = tk.StringVar(value="FWADMIN")
-        ttk.Entry(snmp_opts, textvariable=self.snmp_v3user_var, width=30).grid(
+        ttk.Label(snmp_opts, text="SNMP Host Name (optional):").grid(row=1, column=0, sticky=tk.W, pady=3)
+        self.snmp_hostname_var = tk.StringVar()
+        ttk.Entry(snmp_opts, textvariable=self.snmp_hostname_var, width=30).grid(
             row=1, column=1, sticky=tk.W, padx=4,
         )
+        ttk.Label(
+            snmp_opts, text="(base name for the SNMP host object(s); the manager "
+                            "IP is appended. Default: snmpv3-host)",
+            foreground=_FG_DIM,
+        ).grid(row=1, column=2, sticky=tk.W, padx=4)
 
-        ttk.Label(snmp_opts, text="Auth Algorithm:").grid(row=2, column=0, sticky=tk.W, pady=3)
+        ttk.Label(snmp_opts, text="SNMPv3 User Name:").grid(row=2, column=0, sticky=tk.W, pady=3)
+        self.snmp_v3user_var = tk.StringVar(value="FWADMIN")
+        ttk.Entry(snmp_opts, textvariable=self.snmp_v3user_var, width=30).grid(
+            row=2, column=1, sticky=tk.W, padx=4,
+        )
+
+        ttk.Label(snmp_opts, text="Auth Algorithm:").grid(row=3, column=0, sticky=tk.W, pady=3)
         self.snmp_auth_alg_var = tk.StringVar(value="SHA")
         ttk.Combobox(
             snmp_opts, textvariable=self.snmp_auth_alg_var,
             values=["SHA", "SHA256"], state="readonly", width=12,
         ).grid(row=2, column=1, sticky=tk.W, padx=4)
 
-        ttk.Label(snmp_opts, text="Auth Password:").grid(row=3, column=0, sticky=tk.W, pady=3)
+        ttk.Label(snmp_opts, text="Auth Password:").grid(row=4, column=0, sticky=tk.W, pady=3)
         self.snmp_auth_pw_var = tk.StringVar()
         ttk.Entry(snmp_opts, textvariable=self.snmp_auth_pw_var, show="*", width=30).grid(
-            row=3, column=1, sticky=tk.W, padx=4,
+            row=4, column=1, sticky=tk.W, padx=4,
         )
         ttk.Label(
             snmp_opts, text="(min 8 characters)", foreground=_FG_DIM,
-        ).grid(row=3, column=2, sticky=tk.W, padx=4)
+        ).grid(row=4, column=2, sticky=tk.W, padx=4)
 
-        ttk.Label(snmp_opts, text="Privacy Algorithm:").grid(row=4, column=0, sticky=tk.W, pady=3)
+        ttk.Label(snmp_opts, text="Privacy Algorithm:").grid(row=5, column=0, sticky=tk.W, pady=3)
         self.snmp_priv_alg_var = tk.StringVar(value="AES256")
         ttk.Combobox(
             snmp_opts, textvariable=self.snmp_priv_alg_var,
             values=["AES128", "AES192", "AES256"], state="readonly", width=12,
-        ).grid(row=4, column=1, sticky=tk.W, padx=4)
+        ).grid(row=5, column=1, sticky=tk.W, padx=4)
         ttk.Label(
             snmp_opts, text="(AES128 = STIG minimum, AES256 preferred)", foreground=_FG_DIM,
-        ).grid(row=4, column=2, sticky=tk.W, padx=4)
+        ).grid(row=5, column=2, sticky=tk.W, padx=4)
 
-        ttk.Label(snmp_opts, text="Privacy Password:").grid(row=5, column=0, sticky=tk.W, pady=3)
+        ttk.Label(snmp_opts, text="Privacy Password:").grid(row=6, column=0, sticky=tk.W, pady=3)
         self.snmp_priv_pw_var = tk.StringVar()
         ttk.Entry(snmp_opts, textvariable=self.snmp_priv_pw_var, show="*", width=30).grid(
-            row=5, column=1, sticky=tk.W, padx=4,
+            row=6, column=1, sticky=tk.W, padx=4,
         )
         ttk.Label(
             snmp_opts, text="(min 8 characters)", foreground=_FG_DIM,
-        ).grid(row=5, column=2, sticky=tk.W, padx=4)
+        ).grid(row=6, column=2, sticky=tk.W, padx=4)
 
-        ttk.Label(snmp_opts, text="Source Interface:").grid(row=6, column=0, sticky=tk.W, pady=3)
+        ttk.Label(snmp_opts, text="Source Interface:").grid(row=7, column=0, sticky=tk.W, pady=3)
         self.snmp_intf_var = tk.StringVar()
         ttk.Entry(snmp_opts, textvariable=self.snmp_intf_var, width=30).grid(
-            row=6, column=1, sticky=tk.W, padx=4,
+            row=7, column=1, sticky=tk.W, padx=4,
         )
         ttk.Label(
             snmp_opts, text="(logical name, e.g. outside - not Ethernet1/1)",
             foreground=_FG_DIM,
-        ).grid(row=6, column=2, sticky=tk.W, padx=4)
+        ).grid(row=7, column=2, sticky=tk.W, padx=4)
 
-        ttk.Label(snmp_opts, text="Location (optional):").grid(row=7, column=0, sticky=tk.W, pady=3)
+        ttk.Label(snmp_opts, text="Location (optional):").grid(row=8, column=0, sticky=tk.W, pady=3)
         self.snmp_location_var = tk.StringVar()
         ttk.Entry(snmp_opts, textvariable=self.snmp_location_var, width=40).grid(
-            row=7, column=1, sticky=tk.W, padx=4,
+            row=8, column=1, sticky=tk.W, padx=4,
         )
         ttk.Label(
             snmp_opts, text="(sysLocation, e.g. site/rack - no semicolons)",
             foreground=_FG_DIM,
-        ).grid(row=7, column=2, sticky=tk.W, padx=4)
+        ).grid(row=8, column=2, sticky=tk.W, padx=4)
 
-        ttk.Label(snmp_opts, text="Contact (optional):").grid(row=8, column=0, sticky=tk.W, pady=3)
+        ttk.Label(snmp_opts, text="Contact (optional):").grid(row=9, column=0, sticky=tk.W, pady=3)
         self.snmp_contact_var = tk.StringVar()
         ttk.Entry(snmp_opts, textvariable=self.snmp_contact_var, width=40).grid(
-            row=8, column=1, sticky=tk.W, padx=4,
+            row=9, column=1, sticky=tk.W, padx=4,
         )
         ttk.Label(
             snmp_opts, text="(sysContact, e.g. admin name/email - no semicolons)",
             foreground=_FG_DIM,
-        ).grid(row=8, column=2, sticky=tk.W, padx=4)
+        ).grid(row=9, column=2, sticky=tk.W, padx=4)
 
         self.snmp_poll_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             snmp_opts, text="Enable polling (UDP 161)", variable=self.snmp_poll_var,
-        ).grid(row=9, column=1, sticky=tk.W, padx=4, pady=3)
+        ).grid(row=10, column=1, sticky=tk.W, padx=4, pady=3)
 
         self.snmp_trap_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             snmp_opts, text="Enable traps (UDP 162)", variable=self.snmp_trap_var,
-        ).grid(row=10, column=1, sticky=tk.W, padx=4, pady=3)
+        ).grid(row=11, column=1, sticky=tk.W, padx=4, pady=3)
 
         self.snmp_deploy_var = tk.BooleanVar()
         ttk.Checkbutton(
             snmp_opts, text="Deploy after push", variable=self.snmp_deploy_var,
-        ).grid(row=11, column=1, sticky=tk.W, padx=4, pady=3)
+        ).grid(row=12, column=1, sticky=tk.W, padx=4, pady=3)
 
         ttk.Label(
             snmp_opts,
@@ -1497,7 +1508,7 @@ class App(tk.Tk):
                  "with the manager IP, so each push adds to earlier configs "
                  "instead of overwriting them.",
             foreground=_FG_DIM, wraplength=720, justify=tk.LEFT,
-        ).grid(row=12, column=0, columnspan=3, sticky=tk.W, pady=(8, 0))
+        ).grid(row=13, column=0, columnspan=3, sticky=tk.W, pady=(8, 0))
 
         snmp_opts.columnconfigure(1, weight=0)
 
@@ -1569,6 +1580,9 @@ class App(tk.Tk):
             "--priv-password", priv_pw,
             "--interface", interface,
         ]
+        host_obj_name = self.snmp_hostname_var.get().strip()
+        if host_obj_name:
+            argv.extend(["--host-object-name", host_obj_name])
         location = self.snmp_location_var.get().strip()
         contact = self.snmp_contact_var.get().strip()
         if location:
@@ -2225,6 +2239,13 @@ class App(tk.Tk):
         put("•  SNMP Manager IP(s): ", "bullet")
         put("IP address(es) of your monitoring server(s). Comma-separated "
             "for multiple.\n", "bullet")
+        put("•  SNMP Host Name (optional): ", "bullet")
+        put("Base name for the SNMP host object(s) created on the FTD; the "
+            "manager IP is appended (e.g. ", "bullet")
+        put("SolarWinds_10_0_0_50", "code")
+        put("). Default: ", "bullet")
+        put("snmpv3-host", "code")
+        put(".\n", "bullet")
         put("•  SNMPv3 User Name: ", "bullet")
         put("Name of the SNMPv3 user to create (default ", "bullet")
         put("FWADMIN", "code")

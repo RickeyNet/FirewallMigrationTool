@@ -1520,6 +1520,7 @@ This tab pushes a STIG-compliant SNMPv3 configuration to an FDM-managed FTD. FDM
 | **Username** | Admin username. Defaults to `admin`. |
 | **Password** | Admin password (masked). |
 | **SNMP Manager IP(s)** | IP address(es) of your monitoring server(s). Comma-separated for multiple (e.g., `10.0.0.50, 10.1.0.50`). Each manager gets its own network object and SNMP host. |
+| **SNMP Host Name (optional)** | Base name for the SNMP host object(s) created on the FTD; the manager IP is appended (e.g., `SolarWinds_10_0_0_50`). Defaults to `snmpv3-host`. |
 | **SNMPv3 User Name** | Name of the SNMPv3 user to create. Defaults to `FWADMIN`. |
 | **Auth Algorithm** | `SHA` or `SHA256`. |
 | **Auth Password** | Authentication password (masked, minimum 8 characters). |
