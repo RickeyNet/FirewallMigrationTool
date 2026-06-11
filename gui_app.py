@@ -1469,6 +1469,16 @@ class App(tk.Tk):
             snmp_opts, text="Deploy after push", variable=self.snmp_deploy_var,
         ).grid(row=9, column=1, sticky=tk.W, padx=4, pady=3)
 
+        ttk.Label(
+            snmp_opts,
+            text="Note: All manager IPs in one push share the same SNMPv3 user. "
+                 "To give each manager its own user name, run one push per manager "
+                 "(one IP + its user name each time) - object names are suffixed "
+                 "with the manager IP, so each push adds to earlier configs "
+                 "instead of overwriting them.",
+            foreground=_FG_DIM, wraplength=720, justify=tk.LEFT,
+        ).grid(row=10, column=0, columnspan=3, sticky=tk.W, pady=(8, 0))
+
         snmp_opts.columnconfigure(1, weight=0)
 
         # Buttons
