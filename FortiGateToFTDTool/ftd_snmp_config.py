@@ -54,6 +54,17 @@ AUTH_ALGORITHMS = ["SHA", "SHA256"]
 PRIV_ALGORITHMS = ["AES128", "AES192", "AES256"]
 SECURITY_LEVELS = ["PRIV", "AUTH"]  # NOAUTH intentionally excluded (STIG)
 
+# Device-global trap event types supported by the FDM SNMPServer model.
+# (ASA CLI traps like ipsec/ikev2/interface-threshold are NOT exposed by FDM.)
+TRAP_EVENTS = [
+    "SNMP_AUTHENTICATION", "SNMP_LINKUP", "SNMP_LINKDOWN",
+    "SNMP_COLDSTART", "SNMP_WARMSTART", "SYSLOG",
+    "CONNECTION_LIMIT_REACHED", "NAT_PACKET_DISCARD",
+    "CPU_THRESHOLD_RISING", "MEM_THRESHOLD",
+    "FAILOVER", "CLUSTER", "PEER_FLAP",
+    "FRU_INSERT", "FRU_REMOVE", "CONFIG_CHANGE",
+]
+
 # Read-only FDM bookkeeping that must not be sent back in a PUT body
 _META_KEYS = ("links",)
 
@@ -288,11 +299,13 @@ class FTDSNMPConfig(FTDBaseClient):
         }
         return self._upsert("/object/snmphosts", payload, "SNMP host")
 
-    def set_server_info(self, location: Optional[str], contact: Optional[str]) -> bool:
+    def set_server_info(self, location: Optional[str], contact: Optional[str],
+                        traps: Optional[List[str]] = None) -> bool:
         """
-        Set the device-global SNMP location and/or contact (sysLocation /
-        sysContact) on the SNMPServer settings singleton. Fields passed as
-        None are left unchanged.
+        Update the device-global SNMPServer settings singleton: location /
+        contact (sysLocation / sysContact) and/or the list of enabled trap
+        event types. Fields passed as None are left unchanged; traps=[]
+        explicitly disables all trap events.
         """
         endpoint = "/devicesettings/default/snmpservers"
         try:
@@ -312,6 +325,8 @@ class FTDSNMPConfig(FTDBaseClient):
                 server["location"] = location
             if contact is not None:
                 server["contact"] = contact
+            if traps is not None:
+                server["traps"] = traps
             for key in _META_KEYS:
                 server.pop(key, None)
 
@@ -319,12 +334,12 @@ class FTDSNMPConfig(FTDBaseClient):
                 f"{self.base_url}{endpoint}/{server['id']}", json=server, timeout=30,
             )
             if put_resp.status_code in (200, 201, 204):
-                print(f"  {flair('update', 'OK', 'SNMP location/contact')}")
+                print(f"  {flair('update', 'OK', 'SNMP server settings')}")
                 return True
-            print(f"  {flair('update', 'FAIL', 'SNMP location/contact', self._extract_error(put_resp))}")
+            print(f"  {flair('update', 'FAIL', 'SNMP server settings', self._extract_error(put_resp))}")
             return False
         except requests.exceptions.RequestException as exc:
-            print(f"  {flair('update', 'FAIL', 'SNMP location/contact', str(exc))}")
+            print(f"  {flair('update', 'FAIL', 'SNMP server settings', str(exc))}")
             return False
 
     # ------------------------------------------------------------------
@@ -353,6 +368,7 @@ class FTDSNMPConfig(FTDBaseClient):
         trap_enabled: bool = True,
         location: Optional[str] = None,
         contact: Optional[str] = None,
+        trap_events: Optional[List[str]] = None,
     ) -> bool:
         """
         Run the full SNMPv3 configuration sequence.
@@ -375,6 +391,8 @@ class FTDSNMPConfig(FTDBaseClient):
             print(f"  Location: {location}")
         if contact is not None:
             print(f"  Contact:  {contact}")
+        if trap_events is not None:
+            print(f"  Trap events: {', '.join(trap_events) if trap_events else 'none (all disabled)'}")
         print()
 
         # Step 1: SNMPv3 user (shared by all managers)
@@ -415,10 +433,10 @@ class FTDSNMPConfig(FTDBaseClient):
             else:
                 failed += 1
 
-        # Step 4: device-global location/contact (optional)
+        # Step 4: device-global location/contact/trap events (optional)
         info_ok = True
-        if location is not None or contact is not None:
-            info_ok = self.set_server_info(location, contact)
+        if location is not None or contact is not None or trap_events is not None:
+            info_ok = self.set_server_info(location, contact, trap_events)
 
         print(f"\n  Summary: {configured} of {len(nms_ips)} SNMP manager(s) configured"
               f"{f', {failed} failed' if failed else ''}")
@@ -508,6 +526,11 @@ Examples:
     parser.add_argument('--contact',
                         help='SNMP system contact (sysContact), e.g. an administrator '
                              'name or email. Max 234 characters, no semicolons.')
+    parser.add_argument('--trap-events', action='append',
+                        help='Device-global SNMP trap event types to enable (sets the '
+                             'SNMPServer traps list). Comma-separate or repeat the flag. '
+                             'Use "none" to disable all trap events. Omitted = unchanged. '
+                             'Choices: ' + ', '.join(TRAP_EVENTS))
     parser.add_argument('--no-poll', action='store_true', help='Disable SNMP polling')
     parser.add_argument('--no-trap', action='store_true', help='Disable SNMP traps')
     parser.add_argument('--deploy', action='store_true', help='Deploy after configuring')
@@ -542,6 +565,24 @@ Examples:
     if args.security_level != 'PRIV':
         print("[WARNING] Security level AUTH (no privacy) is NOT STIG-compliant "
               "(CASA-ND-001070 requires AES encryption). Use PRIV for compliance.")
+
+    # Flatten/validate --trap-events; "none" alone means an explicit empty list
+    trap_events = None
+    if args.trap_events:
+        trap_events = []
+        for chunk in args.trap_events:
+            for event in chunk.split(','):
+                event = event.strip().upper()
+                if not event:
+                    continue
+                if event == "NONE":
+                    continue
+                if event not in TRAP_EVENTS:
+                    print(f"[ERROR] Unknown trap event '{event}'. "
+                          f"Choices: {', '.join(TRAP_EVENTS)} (or 'none').")
+                    return 1
+                if event not in trap_events:
+                    trap_events.append(event)
 
     # FDM limits: location <= 233 chars, contact <= 234 chars, no semicolons
     for flag, value, limit in (("--location", args.location, 233),
@@ -579,6 +620,7 @@ Examples:
         trap_enabled=not args.no_trap,
         location=args.location,
         contact=args.contact,
+        trap_events=trap_events,
     )
 
     if not success:

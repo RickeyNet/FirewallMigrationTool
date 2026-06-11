@@ -1512,6 +1512,66 @@ class App(tk.Tk):
 
         snmp_opts.columnconfigure(1, weight=0)
 
+        # Device-global trap event types (SNMPServer settings singleton)
+        trap_frame = ttk.LabelFrame(tab, text="Trap Events (device-wide)", padding=10)
+        trap_frame.pack(fill=tk.X, padx=8, pady=4)
+
+        self.snmp_trapevents_enable_var = tk.BooleanVar()
+        ttk.Checkbutton(
+            trap_frame,
+            text="Configure trap event types (unchecked = leave device unchanged)",
+            variable=self.snmp_trapevents_enable_var,
+            command=self._toggle_snmp_trap_events,
+        ).grid(row=0, column=0, columnspan=4, sticky=tk.W, pady=(0, 4))
+
+        # (label, FDM enum value, on by default - mirrors the ASA defaults, note)
+        trap_event_defs = [
+            ("SNMP authentication", "SNMP_AUTHENTICATION", True,
+             "failed SNMP auth attempts"),
+            ("Link up", "SNMP_LINKUP", True,
+             "an interface comes up"),
+            ("Link down", "SNMP_LINKDOWN", True,
+             "an interface goes down"),
+            ("Cold start", "SNMP_COLDSTART", True,
+             "device restarted / power-cycled"),
+            ("Warm start", "SNMP_WARMSTART", True,
+             "SNMP agent restarted, no reload"),
+            ("Syslog", "SYSLOG", False,
+             "every syslog message (noisy)"),
+            ("Connection limit reached", "CONNECTION_LIMIT_REACHED", False,
+             "configured conn limit was hit"),
+            ("NAT packet discard", "NAT_PACKET_DISCARD", False,
+             "NAT pool exhausted, drops"),
+            ("CPU threshold rising", "CPU_THRESHOLD_RISING", False,
+             "CPU usage crossed threshold"),
+            ("Memory threshold", "MEM_THRESHOLD", False,
+             "memory usage crossed threshold"),
+            ("Failover state", "FAILOVER", False,
+             "HA failover state changed"),
+            ("Cluster state", "CLUSTER", False,
+             "cluster membership changed"),
+            ("Peer flap", "PEER_FLAP", False,
+             "routing peer (BGP) flapping"),
+            ("FRU insert", "FRU_INSERT", False,
+             "hardware module inserted"),
+            ("FRU remove", "FRU_REMOVE", False,
+             "hardware module removed"),
+            ("Config change", "CONFIG_CHANGE", False,
+             "running config changed"),
+        ]
+        self.snmp_trap_vars = {}
+        self._snmp_trap_checks = []
+        for i, (label, key, default_on, note) in enumerate(trap_event_defs):
+            var = tk.BooleanVar(value=default_on)
+            self.snmp_trap_vars[key] = var
+            row, col = divmod(i, 2)
+            check = ttk.Checkbutton(trap_frame, text=label, variable=var, state=tk.DISABLED)
+            check.grid(row=row + 1, column=col * 2, sticky=tk.W, padx=(6, 2), pady=1)
+            ttk.Label(trap_frame, text=f"- {note}", foreground=_FG_DIM).grid(
+                row=row + 1, column=col * 2 + 1, sticky=tk.W, padx=(0, 16), pady=1,
+            )
+            self._snmp_trap_checks.append(check)
+
         # Buttons
         btn_frame = ttk.Frame(tab)
         btn_frame.pack(fill=tk.X, padx=8, pady=4)
@@ -1530,6 +1590,11 @@ class App(tk.Tk):
         ).pack(side=tk.LEFT, padx=8)
 
         self.snmp_output = self._make_output_area(tab)
+
+    def _toggle_snmp_trap_events(self):
+        state = tk.NORMAL if self.snmp_trapevents_enable_var.get() else tk.DISABLED
+        for check in self._snmp_trap_checks:
+            check.configure(state=state)
 
     def _run_snmp(self):
         host = self.snmp_host_var.get().strip()
@@ -1589,6 +1654,9 @@ class App(tk.Tk):
             argv.extend(["--location", location])
         if contact:
             argv.extend(["--contact", contact])
+        if self.snmp_trapevents_enable_var.get():
+            selected = [key for key, var in self.snmp_trap_vars.items() if var.get()]
+            argv.extend(["--trap-events", ",".join(selected) if selected else "none"])
         if not self.snmp_poll_var.get():
             argv.append("--no-poll")
         if not self.snmp_trap_var.get():
@@ -2269,8 +2337,17 @@ class App(tk.Tk):
             "semicolons. Left blank, the device's existing values are "
             "unchanged.\n", "bullet")
         put("•  Enable polling / Enable traps: ", "bullet")
-        put("Allow SNMP polling (UDP 161) and/or traps (UDP 162). Both on "
-            "by default.\n", "bullet")
+        put("Allow SNMP polling (UDP 161) and/or traps (UDP 162) for this "
+            "manager. Both on by default.\n", "bullet")
+        put("•  Trap Events (device-wide): ", "bullet")
+        put("Which event types fire traps (link up/down, cold/warm start, "
+            "syslog, failover, CPU/memory thresholds, etc.). Check "
+            "\"Configure trap event types\" to set them; left unchecked, the "
+            "device's current trap events are not touched. The default "
+            "selection mirrors the platform defaults (authentication, link "
+            "up/down, cold/warm start). Note: some ASA CLI traps (ipsec, "
+            "ikev2, interface-threshold) are not exposed by the FDM API and "
+            "cannot be set here.\n", "bullet")
         put("•  Deploy after push: ", "bullet")
         put("Deploy the staged changes on the FTD after the push "
             "completes.\n\n", "bullet")

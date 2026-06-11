@@ -962,6 +962,7 @@ python FortiGateToFTDTool/ftd_snmp_config.py --host 192.168.1.1 -u admin \
 | `--priv-password` | Privacy/encryption password, min 8 characters (prompted if omitted) |
 | `--location` | Device-global SNMP system location (sysLocation). Max 233 characters, no semicolons. Omitted = unchanged |
 | `--contact` | Device-global SNMP system contact (sysContact). Max 234 characters, no semicolons. Omitted = unchanged |
+| `--trap-events` | Device-global trap event types to enable. Comma-separate or repeat the flag; `none` disables all. Omitted = unchanged. Choices: `SNMP_AUTHENTICATION`, `SNMP_LINKUP`, `SNMP_LINKDOWN`, `SNMP_COLDSTART`, `SNMP_WARMSTART`, `SYSLOG`, `CONNECTION_LIMIT_REACHED`, `NAT_PACKET_DISCARD`, `CPU_THRESHOLD_RISING`, `MEM_THRESHOLD`, `FAILOVER`, `CLUSTER`, `PEER_FLAP`, `FRU_INSERT`, `FRU_REMOVE`, `CONFIG_CHANGE` |
 | `--nms-object-name` | Base name for the NMS network object(s) (default: `snmpHost`) |
 | `--host-object-name` | Base name for the SNMP host object(s) (default: `snmpv3-host`) |
 | `--no-poll` | Disable SNMP polling (UDP 161) |
@@ -972,6 +973,7 @@ python FortiGateToFTDTool/ftd_snmp_config.py --host 192.168.1.1 -u admin \
 ### Notes
 
 - **Credential hygiene:** `--auth-password` / `--priv-password` are redacted from the echoed command line and scrubbed from exception output, same as device passwords.
+- **Trap events:** the per-host "Enable traps" toggle controls whether a manager *receives* traps; `--trap-events` controls which event types *fire* device-wide. Per the FDM model, if the device's trap-event list is empty, no traps are sent even when a host has traps enabled. ASA CLI traps not exposed by the FDM API (`ipsec`, `ikev2`, `interface-threshold`, `remote-access session-threshold`) cannot be set this way.
 - **Removal:** use `ftd_api_cleanup.py --delete-snmp` (or the Cleanup tab's "SNMP Hosts & Users" checkbox) to remove SNMP hosts and users. SNMP cleanup is also included in `--delete-all`.
 - The GUI equivalent is the **SNMP (FTD)** tab, visible only when the target platform is Cisco FTD (see [GUI How-To Guide](#gui-how-to-guide)).
 
@@ -1529,8 +1531,9 @@ This tab pushes a STIG-compliant SNMPv3 configuration to an FDM-managed FTD. FDM
 | **Source Interface** | Logical name of the interface the managers reach the FTD through (e.g., `outside` - not `Ethernet1/1`). Physical interfaces, EtherChannels, and subinterfaces are supported. |
 | **Location (optional)** | Device-global SNMP system location (sysLocation), e.g. a site or rack identifier. No semicolons. Left blank, the device's existing value is unchanged. |
 | **Contact (optional)** | Device-global SNMP system contact (sysContact), e.g. an admin name or email. No semicolons. Left blank, the device's existing value is unchanged. |
-| **Enable polling (UDP 161)** | Allow SNMP polling. On by default. |
-| **Enable traps (UDP 162)** | Allow SNMP traps. On by default. |
+| **Enable polling (UDP 161)** | Allow SNMP polling for this manager. On by default. |
+| **Enable traps (UDP 162)** | Allow SNMP traps for this manager. On by default. |
+| **Trap Events (device-wide)** | Which event types fire traps (link up/down, cold/warm start, syslog, failover, CPU/memory thresholds, etc.). Check **Configure trap event types** to set them; left unchecked, the device's current trap events are untouched. Defaults mirror the platform defaults (authentication, link up/down, cold/warm start). |
 | **Deploy after push** | Deploy the staged changes on the FTD after the push completes. |
 
 #### How to Run an SNMP Push
