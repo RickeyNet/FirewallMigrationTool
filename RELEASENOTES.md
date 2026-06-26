@@ -1,12 +1,21 @@
 # Release Notes
 
-## v1.5.1 - SNMPv3 Configuration, VLAN Conflict Resolution, HA Cleanup Fix
+## v1.6.0 - Link Aggregation Scale-Up, SNMPv3, VLAN Conflict Resolution
 
 ### Overview
 
-Adds STIG-compliant SNMPv3 push for FDM-managed FTDs, fixes failed imports caused by duplicate VLAN IDs and failed cleanups caused by HA interface monitoring, tightens the importer's update-on-existing logic, adds restricted build profiles for cleanup-free executables, and expands the GUI theme set with three new themes and a redesigned Sandstone.
+Adds the ability to scale up link aggregation during FortiGate -> FTD migration - grow port channels, promote plain physical interfaces into new port channels, and grow virtual-switch bridge groups with extra 10G member links. Also includes STIG-compliant SNMPv3 push for FDM-managed FTDs, automatic VLAN conflict resolution, restricted build profiles for cleanup-free executables, an expanded GUI theme set, tightened importer update-on-existing logic, and interface conversion/cleanup reliability fixes.
 
 ### New Features
+
+**Scale up link aggregation during FortiGate -> FTD migration**
+
+Previously interface membership was copied 1:1 from the source. Three new options let you add bandwidth and redundancy on the Cisco side during conversion instead:
+
+- **EtherChannel member expansion (`--expand-portchannel`)** - Grow an existing FortiGate port channel to more 10G member links on the FTD side. SPEC is either a target total member count (e.g. `WAN_LAG=4`) or an explicit comma-separated list of FTD ports to add (e.g. `SRV_LAG=Ethernet1/5,Ethernet1/6`). Repeatable; also exposed as an "Expand Port-Channels" field on the GUI Convert tab.
+- **Physical interface -> EtherChannel promotion (`--promote-portchannel`)** - Migrate a plain (non-aggregate) FortiGate physical interface as a NEW FTD EtherChannel so it can carry multiple 10G links. The original FTD port becomes the first member and extra members are added per SPEC. The interface's MTU moves onto the port channel, which is left without an IP - in this design L3 addresses live on the VLAN subinterfaces riding on the channel. Interfaces that carry VLAN subinterfaces are not eligible (they convert normally with a warning). GUI: "Promote to Port-Channel" field.
+- **Bridge group member expansion (`--expand-bridgegroup`)** - Grow a FortiGate virtual switch (`system_switch-interface`) -> FTD bridge group (BVI) with more member links. SPEC is a target total member count or an explicit list of FTD ports to add. Added members get unique names, routed mode, and join the bridge group's security zone; the IP correctly stays on the BVI (bridge groups are L3, unlike port channels). GUI: "Expand Bridge Groups" field.
+- **Shared guardrails** - Out-of-range, malformed, or already-assigned ports are warned and skipped, and the conversion's Port Analysis estimate accounts for the extra members. Default behavior is unchanged when none of these options are used.
 
 **SNMPv3 configuration for FDM-managed FTD (new SNMP tab + CLI)**
 
@@ -21,12 +30,12 @@ FDM does not expose SNMPv3 in its GUI - locally managed FTDs must be configured 
 - **Credential hygiene** - `--auth-password` / `--priv-password` are redacted from the echoed command line and scrubbed from exception output, same as device passwords. Passwords are validated to the 8-character FDM minimum; NoAuth security level is not offered, and AUTH-only prints a STIG compliance warning.
 - **Cleanup support** - New `--delete-snmp` flag (and "SNMP Hosts & Users" checkbox in the Cleanup tab) removes SNMP hosts then users; included in `--delete-all` ahead of interfaces and address objects so the SNMP host's references never block deletion.
 
-**Automatic VLAN conflict resolution (FortiGate → FTD conversion)**
+**Automatic VLAN conflict resolution (FortiGate -> FTD conversion)**
 
 FortiGate allows VLAN interfaces on different parents (physical ports, port channels, virtual switches) to share the same VLAN ID; FTD requires VLAN IDs to be unique device-wide, so the duplicate subinterfaces failed to import. The converter now resolves these conflicts automatically in a new Phase 5B pass:
 
 - **Priority parents keep their VLAN IDs** - Subinterfaces on EtherChannels (port channels) and virtual switches (FTD bridge groups) always keep their original VLAN numbers.
-- **Physical-parent subinterfaces are remapped** - Conflicting subinterfaces on physical interfaces move to the nearest unused VLAN ID. `vlanId`, `subIntfId`, and the `hardwareName` suffix are updated together (e.g. `Ethernet1/3.100` → `Ethernet1/3.102`).
+- **Physical-parent subinterfaces are remapped** - Conflicting subinterfaces on physical interfaces move to the nearest unused VLAN ID. `vlanId`, `subIntfId`, and the `hardwareName` suffix are updated together (e.g. `Ethernet1/3.100` -> `Ethernet1/3.102`).
 - **References stay intact** - Logical names never change, so security zones, routes, and policies are unaffected. Zone generation runs after the remap and picks up corrected hardware names automatically.
 - **No cascade displacement** - A remap never takes a VLAN ID that another subinterface legitimately owns.
 - **Fully visible** - Every remap is printed during conversion, appended to the interface description (`[remapped from VLAN 100]`), and counted in the conversion summary (`Duplicate VLAN IDs remapped: N`). If two priority parents collide, the second is remapped with an explicit warning.
@@ -37,9 +46,9 @@ FortiGate allows VLAN interfaces on different parents (physical ports, port chan
 
 ### Fixes
 
-**SNMP push - HTTP 204 responses misreported as failures**
+**FTD conversion - bridge group members emitted twice**
 
-Re-pushing SNMP config after a cleanup failed on the network-object step (and skipped `--deploy`) even though the update succeeded: FDM returns HTTP 204 (No Content) for a PUT that changes nothing - e.g. updating the surviving `snmpHost_<ip>` network object with the same IP - and the upsert only accepted 200/201. It now accepts 204 and re-fetches the object (the 204 body is empty) so downstream references still get the full object.
+FortiGate virtual-switch member ports were being converted both as bridge group (BVI) members and as standalone physical interfaces, producing duplicate physical-interface payloads for the same hardware port. Switch members are now excluded from standalone conversion, the same way EtherChannel members already were.
 
 **FTD cleanup - EtherChannel/bridge group deletion on HA pairs**
 
@@ -65,13 +74,18 @@ Deleting EtherChannels (and bridge groups) failed on HA-enabled appliances with 
 - **Non-name duplicates resolve to updates** - When a duplicate is keyed on something other than the object name, the importer now finds and updates the existing object: EtherChannels match on `hardwareName` (Port-channel ID), subinterfaces on `vlanId`/`subIntfId` under the same parent. Exact name matches always take priority.
 - **Cleaner update PUTs** - Read-only `links` metadata is stripped from update payloads.
 
+**Code quality**
+
+- Complete type hints added across the codebase - every function now has parameter and return annotations, with a clean pyright run (0 errors).
+- Non-ASCII dashes (em/en) in documentation and comments normalized to ASCII hyphens.
+
 ---
 
 ## v1.5.0 - Major Release (since v1.4.0)
 
 ### Overview
 
-Public release following v1.4.0. Adds Palo Alto and Cisco FTD → FortiGate conversion paths, GUI source/target improvements, FTD import reliability fixes, and security hardening around credential handling in the GUI output window.
+Public release following v1.4.0. Adds Palo Alto and Cisco FTD -> FortiGate conversion paths, GUI source/target improvements, FTD import reliability fixes, and security hardening around credential handling in the GUI output window.
 
 ### Security
 
@@ -80,7 +94,7 @@ Several paths could expose operator passwords in the GUI output window:
 - **Command-line echo** - The GUI printed the full argv on every run, including `--password` values, as a banner line before the worker started.
 - **PAN-OS authentication** - Keygen used HTTP GET with credentials in the URL query string; connection-error tracebacks could include the full URL.
 - **FTD authentication** - Failed auth responses dumped raw `response.text`, which FDM can echo back including the submitted password.
-- **API error output** - Additional sites across the FTD importer, cleanup, FTD→FortiGate reader, and PAN-OS validation could print raw response bodies instead of parsed error descriptions.
+- **API error output** - Additional sites across the FTD importer, cleanup, FTD->FortiGate reader, and PAN-OS validation could print raw response bodies instead of parsed error descriptions.
 - **Exception handler** - Uncaught exceptions could surface Import/Cleanup tab passwords in tracebacks.
 
 Fixes applied:
@@ -96,7 +110,7 @@ Fixes applied:
 
 Two new conversion pipelines produce FortiGate CLI `.conf` files for manual apply (CLI paste or web UI restore). See README for application steps.
 
-| | Palo Alto → FortiGate | Cisco FTD → FortiGate |
+| | Palo Alto -> FortiGate | Cisco FTD -> FortiGate |
 |--|----------------------|----------------------|
 | **Input** | PAN-OS XML running config | FDM REST API (live) or exported JSON |
 | **Output** | FortiGate `.conf` | FortiGate `.conf` |
@@ -283,7 +297,7 @@ Adds Palo Alto PAN-OS as a second conversion target alongside Cisco FTD. FortiGa
 - **Address Groups** - Static address groups with nested group support
 - **Service Objects** - TCP/UDP port objects; dual-protocol services automatically split into separate PAN-OS objects (one protocol per object requirement)
 - **Service Groups** - Port groups with automatic split-service reference resolution and member deduplication
-- **Security Rules** - FortiGate policies mapped to PAN-OS security rules with zone-based source/destination, address objects, service objects, and action mapping (accept→allow, deny→deny); logging configurable
+- **Security Rules** - FortiGate policies mapped to PAN-OS security rules with zone-based source/destination, address objects, service objects, and action mapping (accept->allow, deny->deny); logging configurable
 - **Static Routes** - IPv4 routes using CIDR notation directly (no separate gateway objects); blackhole route filtering
 - **Interfaces** - Physical interfaces, VLAN subinterfaces, and aggregate-ethernet (LACP) with model-aware port mapping
 - **Zones** - Auto-generated from interface assignments
@@ -302,7 +316,7 @@ Adds Palo Alto PAN-OS as a second conversion target alongside Cisco FTD. FortiGa
 
 #### PAN-OS XML API Importer (`panos_api_importer.py`)
 
-- **Dependency-ordered import** - Zones → addresses → address groups → services → service groups → routes → security rules
+- **Dependency-ordered import** - Zones -> addresses -> address groups -> services -> service groups -> routes -> security rules
 - **API key authentication** - Automatic key generation via PAN-OS keygen endpoint
 - **Dry-run mode** - Preview import without making changes
 - **Optional auto-commit** - Commit configuration changes after import via `--commit`
@@ -312,7 +326,7 @@ Adds Palo Alto PAN-OS as a second conversion target alongside Cisco FTD. FortiGa
 #### PAN-OS Bulk Cleanup (`panos_api_cleanup.py`)
 
 - **Selective or full deletion** - Delete specific object types or all custom objects
-- **Reverse dependency order** - Security rules → service groups → services → address groups → addresses → routes → zones
+- **Reverse dependency order** - Security rules -> service groups -> services -> address groups -> addresses -> routes -> zones
 - **Dry-run mode** - Preview deletions
 - **Interactive confirmation** - Safety prompt before destructive operations
 - **Optional auto-commit** - Commit after cleanup
