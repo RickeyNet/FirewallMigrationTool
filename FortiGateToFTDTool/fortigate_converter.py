@@ -66,6 +66,7 @@ import json
 import argparse
 import sys
 from pathlib import Path
+from typing import Dict, List, Tuple, cast
 
 # Import our custom converter modules
 # These modules contain the logic for converting specific object types
@@ -630,7 +631,11 @@ Supported FTD Models:
     # Update the policy converter with service, address, and interface mappings
     policy_converter.set_split_services(
         split_services=split_services,
-        service_name_mapping=service_name_mapping,
+        # The mapping's values are lists of (FTD name, type) tuples at runtime;
+        # get_service_name_mapping()'s declared return type is too narrow.
+        service_name_mapping=cast(
+            Dict[str, List[Tuple[str, str]]], service_name_mapping
+        ),
         skipped_services=skipped_services,
         address_groups=address_groups,
         service_groups=service_groups,

@@ -1,6 +1,6 @@
 import sys
 from pathlib import Path
-from typing import cast
+from typing import Callable, Tuple, cast
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT / "FortiGateToFTDTool"))
@@ -47,6 +47,9 @@ def test_run_with_retry_stops_after_max_attempts(monkeypatch):
 
 
 class _FakeImporterClient:
+    # Tests graft the real client's bound compute_outcome onto instances.
+    compute_outcome: Callable[[], Tuple[int, str]]
+
     def __init__(self):
         self.stats = {
             "address_objects_created": 0,
@@ -333,18 +336,19 @@ def test_importer_validate_endpoints_all_ok():
     """All endpoints return 200 → validate_endpoints returns True."""
     client = ftd_api_importer.FTDAPIClient.__new__(ftd_api_importer.FTDAPIClient)
     client.base_url = "https://fake/api/fdm/latest"
-    client.session = _FakeSession()
+    session = _FakeSession()
+    client.session = session  # pyright: ignore[reportAttributeAccessIssue]
 
     assert client.validate_endpoints() is True
     # Should have probed 11 endpoints
-    assert len(client.session.calls) == 11
+    assert len(session.calls) == 11
 
 
 def test_importer_validate_endpoints_partial_fail():
     """One endpoint returns 403 → validate_endpoints returns False."""
     client = ftd_api_importer.FTDAPIClient.__new__(ftd_api_importer.FTDAPIClient)
     client.base_url = "https://fake/api/fdm/latest"
-    client.session = _FakeSession(responses={
+    client.session = _FakeSession(responses={  # pyright: ignore[reportAttributeAccessIssue]
         "/object/networks": _FakeResponse(403),
     })
 
@@ -355,17 +359,18 @@ def test_cleanup_validate_endpoints_all_ok():
     """All endpoints return 200 → validate_endpoints returns True."""
     client = ftd_api_cleanup.FTDBulkDelete.__new__(ftd_api_cleanup.FTDBulkDelete)
     client.base_url = "https://fake/api/fdm/latest"
-    client.session = _FakeSession()
+    session = _FakeSession()
+    client.session = session  # pyright: ignore[reportAttributeAccessIssue]
 
     assert client.validate_endpoints() is True
-    assert len(client.session.calls) == 11
+    assert len(session.calls) == 11
 
 
 def test_cleanup_validate_endpoints_partial_fail():
     """One endpoint returns 500 → validate_endpoints returns False."""
     client = ftd_api_cleanup.FTDBulkDelete.__new__(ftd_api_cleanup.FTDBulkDelete)
     client.base_url = "https://fake/api/fdm/latest"
-    client.session = _FakeSession(responses={
+    client.session = _FakeSession(responses={  # pyright: ignore[reportAttributeAccessIssue]
         "/object/tcpports": _FakeResponse(500),
     })
 

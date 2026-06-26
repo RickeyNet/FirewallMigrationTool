@@ -7,6 +7,9 @@
   ],
   "extraPaths": [
     "FortiGateToFTDTool",
-    "FortiGateToPaloAltoTool"
+    "FortiGateToPaloAltoTool",
+    "CiscoASAToPaloAltoTool",
+    "PaloAltoToFortiGateTool",
+    "CiscoFTDToFortiGateTool"
   ]
 }

@@ -173,7 +173,7 @@ class PANOSBaseClient:
         return self._config_request("delete", xpath)
 
     def _config_request(
-        self, action: str, xpath: str, element: str = None
+        self, action: str, xpath: str, element: Optional[str] = None
     ) -> Tuple[bool, str]:
         """Execute a type=config API request."""
         if not self.api_key:

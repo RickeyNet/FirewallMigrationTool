@@ -22,6 +22,7 @@ import io
 import json
 import queue
 import traceback
+from typing import List, Optional
 
 # ---------------------------------------------------------------------------
 # Path setup - ensure converter modules are importable regardless of CWD
@@ -94,6 +95,21 @@ if _PKG_DIR not in sys.path:
 from fortigate_converter import main as convert_main   # noqa: E402
 from ftd_api_importer import main as import_main       # noqa: E402
 from ftd_snmp_config import main as snmp_main          # noqa: E402
+
+# These names are bound conditionally below (behind _CLEANUP_ENABLED / try-except
+# ImportError). Initialize to None first so they are always bound for static
+# analysis; runtime usage is guarded by the corresponding availability flags.
+cleanup_main = None
+set_password = None
+verify_password = None
+has_custom_password = None
+reset_to_default = None
+pa_convert_main = None
+pa_import_main = None
+pa_cleanup_main = None
+asa_convert_main = None
+pa_to_fg_convert_main = None
+ftd_to_fg_convert_main = None
 
 if _CLEANUP_ENABLED:
     from ftd_api_cleanup import main as cleanup_main       # noqa: E402
@@ -395,7 +411,7 @@ class App(tk.Tk):
             pass
 
         self._running = False
-        self._worker_thread: threading.Thread | None = None
+        self._worker_thread: Optional[threading.Thread] = None
         self._output_queue: queue.Queue = queue.Queue()
 
         # Current platform selection
@@ -992,7 +1008,8 @@ class App(tk.Tk):
         # not on target lockout - restore it when unlocking.
         if not tabs_locked:
             self.cln_reset_pw_btn.configure(
-                state=tk.NORMAL if has_custom_password() else tk.DISABLED,
+                # has_custom_password is bound only when _CLEANUP_ENABLED; runtime-guarded.
+                state=tk.NORMAL if has_custom_password() else tk.DISABLED,  # pyright: ignore[reportOptionalCall]
             )
 
     def _set_tab_enabled(self, tab, skip=(), enabled=True):
@@ -1364,7 +1381,8 @@ class App(tk.Tk):
             btn_frame,
             text="Reset to Default Password",
             command=self._reset_cleanup_password,
-            state=tk.NORMAL if has_custom_password() else tk.DISABLED,
+            # has_custom_password is bound only when _CLEANUP_ENABLED; runtime-guarded.
+            state=tk.NORMAL if has_custom_password() else tk.DISABLED,  # pyright: ignore[reportOptionalCall]
         )
         self.cln_reset_pw_btn.pack(side=tk.RIGHT, padx=4)
 
@@ -2932,7 +2950,7 @@ class App(tk.Tk):
 
         Returns the entered string, or None if the user cancelled.
         """
-        result = [None]
+        result: List[Optional[str]] = [None]
 
         dlg = tk.Toplevel(self)
         dlg.title(title)
@@ -3020,7 +3038,7 @@ class App(tk.Tk):
         )
         if current is None:
             return
-        if not verify_password(current):
+        if not verify_password(current):  # pyright: ignore[reportOptionalCall]
             messagebox.showerror("Incorrect Password", "The current password is incorrect.")
             return
 
@@ -3046,7 +3064,7 @@ class App(tk.Tk):
             messagebox.showerror("Mismatch", "Passwords do not match.")
             return
 
-        set_password(new_pw)
+        set_password(new_pw)  # pyright: ignore[reportOptionalCall]
         self.cln_reset_pw_btn.configure(state=tk.NORMAL)
         messagebox.showinfo("Success", "Cleanup password has been changed.")
 
@@ -3058,7 +3076,7 @@ class App(tk.Tk):
         )
         if current is None:
             return
-        if not verify_password(current):
+        if not verify_password(current):  # pyright: ignore[reportOptionalCall]
             messagebox.showerror("Incorrect Password", "The current password is incorrect.")
             return
 
@@ -3069,7 +3087,7 @@ class App(tk.Tk):
         ):
             return
 
-        reset_to_default()
+        reset_to_default()  # pyright: ignore[reportOptionalCall]
         self.cln_reset_pw_btn.configure(state=tk.DISABLED)
         messagebox.showinfo("Success", "Cleanup password has been reset to default.")
 
@@ -3081,7 +3099,7 @@ class App(tk.Tk):
         )
         if entered is None:
             return False
-        if not verify_password(entered):
+        if not verify_password(entered):  # pyright: ignore[reportOptionalCall]
             messagebox.showerror("Access Denied", "Incorrect cleanup password.")
             return False
         return True

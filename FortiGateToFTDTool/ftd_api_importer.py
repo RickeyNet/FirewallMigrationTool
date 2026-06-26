@@ -44,7 +44,7 @@ import time
 import getpass
 import urllib3
 import threading
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
 from concurrency_utils import run_with_retry, run_indexed_thread_pool
 from platform_profiles import is_ftd_1000, is_ftd_3100
 from ftd_api_base import FTDBaseClient
@@ -150,7 +150,7 @@ class FTDAPIClient(FTDBaseClient):
         with self._stats_lock:
             self.stats[key] += 1
 
-    def record_failure(self, object_type: str, name: str, error: str) -> None:
+    def record_failure(self, object_type: str, name: str, error: Optional[str]) -> None:
         """Thread-safe recording of a failed import item."""
         with self._failed_items_lock:
             self.failed_items.append({
@@ -910,7 +910,7 @@ class FTDAPIClient(FTDBaseClient):
             return False, f"Failed to resolve references: {resolved_route}"
 
         endpoint = f"{self.base_url}/devices/default/routing/virtualrouters/{vr_id}/staticrouteentries"
-        return self._create_api_object(endpoint, resolved_route, "routes")
+        return self._create_api_object(endpoint, cast(Dict[str, Any], resolved_route), "routes")
     
     def create_access_rule(self, rule: Dict) -> Tuple[bool, Optional[str]]:
         """

@@ -9,7 +9,7 @@ FortiGate CLI naming rules:
 """
 
 import re
-from typing import List, Tuple
+from typing import List, Tuple, Union
 
 # Max name length for FortiGate objects
 FG_NAME_MAX_LENGTH = 64
@@ -18,7 +18,7 @@ FG_NAME_MAX_LENGTH = 64
 PA_ANY_TO_FG_ALL = "all"
 
 
-def cidr_to_netmask(prefix_len: int) -> str:
+def cidr_to_netmask(prefix_len: Union[int, str]) -> str:
     """Convert a CIDR prefix length to a dotted-decimal netmask.
 
     Example: 24 -> '255.255.255.0'
