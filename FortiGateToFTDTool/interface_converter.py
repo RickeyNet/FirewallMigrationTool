@@ -27,7 +27,7 @@ FTD INTERFACE NAME RULES:
 """
 
 import re
-from typing import Dict, List, Any, Set, Tuple, Optional
+from typing import Dict, List, Any, Set, Optional
 
 
 # =============================================================================
@@ -408,7 +408,8 @@ class InterfaceConverter:
                 if port_num > self.total_ports:
                     print(f"  Warning: {ftd_port} exceeds available ports for {self.target_model} (max: Ethernet1/{self.total_ports})")
                     continue
-            except:
+            except (ValueError, AttributeError):
+                # Non-numeric/unparseable port suffix - skip range validation
                 pass
             
             self.port_mapping[fg_port] = ftd_port
@@ -876,8 +877,8 @@ class InterfaceConverter:
             octets = netmask.split('.')
             binary_str = ''.join(bin(int(octet))[2:].zfill(8) for octet in octets)
             return binary_str.count('1')
-        except:
-            return 24  # Default
+        except (ValueError, AttributeError):
+            return 24  # Default for malformed/non-numeric netmask
     
     def convert(self) -> Dict[str, List[Dict]]:
         """

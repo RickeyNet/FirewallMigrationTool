@@ -25,7 +25,7 @@ import json
 import argparse
 import sys
 import getpass
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Callable, Dict, List
 
 from panos_api_base import PANOSBaseClient, XPATHS
 

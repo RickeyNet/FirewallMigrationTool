@@ -30,7 +30,6 @@ import yaml
 import json
 import argparse
 import sys
-from pathlib import Path
 from typing import List, Optional
 
 try:
@@ -40,7 +39,7 @@ try:
     from pa_service_group_converter import PAServiceGroupConverter
     from pa_policy_converter import PAPolicyConverter
     from pa_route_converter import PARouteConverter
-    from pa_interface_converter import PAInterfaceConverter, PA_MODELS
+    from pa_interface_converter import PAInterfaceConverter
 except ImportError as e:
     print("\n" + "=" * 60)
     print("ERROR: Missing converter module files!")

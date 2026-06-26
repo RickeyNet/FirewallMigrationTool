@@ -2,11 +2,13 @@ import sys
 from pathlib import Path
 from typing import Any, Dict
 
-# Ensure the tool modules are importable when running tests from repo root
+# Path setup is also handled in tests/conftest.py; kept here as a fallback for
+# running this module directly. Import below must stay after this block.
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT / "FortiGateToFTDTool"))
 
-from route_converter import RouteConverter
+from route_converter import RouteConverter  # noqa: E402
+
 
 
 def _minimal_interface(name: str, ip: str, netmask: str) -> Dict[str, Any]:

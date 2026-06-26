@@ -11,7 +11,9 @@ FortiGate CLI format.
 
 import os
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
+
+import requests
 
 # Allow importing FTDBaseClient from FortiGateToFTDTool
 _SELF_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -44,7 +46,7 @@ class FTDReader(FTDBaseClient):
             params: Dict[str, Any] = {"offset": offset, "limit": limit}
             try:
                 response = self.session.get(url, params=params, timeout=60)
-            except Exception as exc:
+            except requests.exceptions.RequestException as exc:
                 print(f"  [WARN] Request failed for {endpoint}: {exc}")
                 break
 

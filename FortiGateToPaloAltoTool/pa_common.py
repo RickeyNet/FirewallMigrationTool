@@ -9,7 +9,7 @@ PAN-OS naming rules differ from FTD:
 """
 
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 # PAN-OS allows alphanumeric, underscore, hyphen, and period
 _PA_SANITIZE_PATTERN = re.compile(r"[^a-zA-Z0-9_.\-]")

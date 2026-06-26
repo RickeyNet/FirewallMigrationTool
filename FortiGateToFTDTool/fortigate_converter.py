@@ -65,7 +65,7 @@ import yaml
 import json
 import argparse
 import sys
-from pathlib import Path
+
 from typing import Dict, List, Optional, Tuple, cast
 
 # Import our custom converter modules

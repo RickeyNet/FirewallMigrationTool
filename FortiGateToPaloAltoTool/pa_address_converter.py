@@ -124,11 +124,7 @@ class PAAddressConverter:
             return "fqdn"
 
         if "subnet" in properties:
-            subnet = properties["subnet"]
-            if isinstance(subnet, list) and len(subnet) >= 2:
-                netmask = str(subnet[1])
-                # All subnet-based addresses use ip-netmask in PAN-OS
-                return "ip-netmask"
+            # All subnet-based addresses use ip-netmask in PAN-OS
             return "ip-netmask"
 
         # Default: treat as host

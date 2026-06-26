@@ -426,7 +426,7 @@ class AddressConverter:
             
             return cidr_prefix
             
-        except Exception as e:
+        except (ValueError, AttributeError) as e:
             # If conversion fails (invalid netmask), print warning and default to /32
             # /32 is the safest default as it represents a single host
             print(f"  Warning: Could not convert netmask '{netmask}' to CIDR (Error: {e})")

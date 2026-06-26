@@ -287,10 +287,8 @@ class ServiceConverter:
                 self.failed_items.append({"name": service_name, "reason": "No TCP or UDP ports defined", "config": properties})
                 continue
             
-            # Track if this service was split
             total_objects = len(tcp_ports) + len(udp_ports)
-            needs_numbering = total_objects > 1
-            
+
             if has_tcp and has_udp:
                 self.split_count += 1
             

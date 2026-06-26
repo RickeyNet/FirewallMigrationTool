@@ -50,11 +50,9 @@ try:
     from ftd_reader import FTDReader
     from ftd_file_reader import FTDFileReader
     from fg_common import (
-        cidr_to_netmask,
         split_cidr,
         sanitize_fg_name,
         fg_members_str,
-        map_any_address,
     )
 except ImportError as e:
     print("\n" + "=" * 60)

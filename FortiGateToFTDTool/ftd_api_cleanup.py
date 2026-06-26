@@ -643,7 +643,8 @@ class FTDBulkDelete(FTDBaseClient):
                 try:
                     error_data = response.json()
                     error_msg = error_data.get('error', {}).get('messages', [{}])[0].get('description', response.text[:200])
-                except:
+                except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+                    # Body was not the expected JSON error shape - fall back to raw text
                     error_msg = response.text[:200]
                 return False, f"HTTP {response.status_code}: {error_msg}"
                 

@@ -244,7 +244,7 @@ class RouteConverter:
             try:
                 prefix = v.split("/", 1)[1].strip()
                 return "HOST" if prefix == "32" else "NETWORK"
-            except Exception:
+            except (IndexError, AttributeError):
                 return "NETWORK"
         return "HOST"
     
@@ -497,7 +497,7 @@ class RouteConverter:
             mask_octets = [int(o) for o in netmask.split('.')]
             network_octets = [ip_octets[i] & mask_octets[i] for i in range(4)]
             network_addr = '.'.join(str(o) for o in network_octets)
-        except Exception:
+        except (ValueError, IndexError, AttributeError):
             network_addr = ip_addr
 
         self._network_calc_cache[key] = network_addr
@@ -948,7 +948,7 @@ class RouteConverter:
             
             return cidr_prefix
             
-        except Exception as e:
+        except (ValueError, AttributeError):
             # If conversion fails, default to /32
             print(f"    Warning: Could not convert netmask '{netmask}' to CIDR")
             return 32

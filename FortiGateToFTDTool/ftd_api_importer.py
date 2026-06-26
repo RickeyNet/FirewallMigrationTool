@@ -1904,7 +1904,6 @@ class FTDAPIClient(FTDBaseClient):
         if "interfaces" in zone and zone["interfaces"]:
             resolved_interfaces = []
             for intf_ref in zone["interfaces"]:
-                intf_name = intf_ref.get("name")
                 hardware_name = intf_ref.get("hardwareName")
                 intf_type = intf_ref.get("type", "physicalinterface")
                 

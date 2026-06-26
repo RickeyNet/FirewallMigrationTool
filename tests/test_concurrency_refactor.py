@@ -2,12 +2,14 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
+# Path setup is also handled in tests/conftest.py; kept here as a fallback for
+# running this module directly. Imports below must stay after this block.
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT / "FortiGateToFTDTool"))
 
-import concurrency_utils
-import ftd_api_cleanup
-import ftd_api_importer
+import concurrency_utils  # noqa: E402
+import ftd_api_cleanup  # noqa: E402
+import ftd_api_importer  # noqa: E402
 
 
 def test_run_with_retry_retries_transient_then_succeeds(monkeypatch: Any) -> None:

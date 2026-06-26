@@ -26,12 +26,11 @@ HOW TO RUN:
     python panos_api_cleanup.py --host 10.0.0.1 --username admin --delete-address-objects --commit
 """
 
-import json
 import argparse
 import sys
 import getpass
 import xml.etree.ElementTree as ET
-from typing import Dict, List, Tuple
+from typing import List, Tuple
 
 from panos_api_base import PANOSBaseClient, XPATHS
 

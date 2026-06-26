@@ -18,7 +18,6 @@ Supported ASA config sections:
     - NAT rules (parsed for reference, not auto-converted)
 """
 
-import re
 from typing import Any, Dict, List, Optional, Tuple
 
 
