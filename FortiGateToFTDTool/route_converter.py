@@ -798,7 +798,7 @@ class RouteConverter:
             interface_obj = self._get_interface_object(ftd_interface_name) # type: ignore
             if not interface_obj:
                 print(f"  Warning: Route [{route_id}] - Could not find interface object for {ftd_interface_name}")
-                print(f"           Using basic interface reference")
+                print("           Using basic interface reference")
                 # Create basic interface reference as fallback
                 interface_obj = {
                     "name": ftd_interface_name,
@@ -1036,7 +1036,7 @@ class RouteConverter:
             return result
         
         if self.debug:
-            print(f"    [DEBUG] No interface found, trying address objects...")
+            print("    [DEBUG] No interface found, trying address objects...")
         
         # FALLBACK: Try legacy address object lookup
         cidr_notation = f"{ip_addr}/{cidr}"
@@ -1100,7 +1100,7 @@ class RouteConverter:
             return result
         
         if self.debug:
-            print(f"    [DEBUG] No interface found, trying address objects...")
+            print("    [DEBUG] No interface found, trying address objects...")
         
         # FALLBACK: Try legacy address object lookup
         if gateway_cidr in self.ip_to_name: # pyright: ignore[reportAttributeAccessIssue]

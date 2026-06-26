@@ -71,8 +71,8 @@ def main() -> None:
     with open(auth_path, "w") as f:
         f.write(content)
 
-    print(f"Default cleanup password updated in cleanup_auth.py.")
-    print(f"Rebuild the exe for the change to take effect.")
+    print("Default cleanup password updated in cleanup_auth.py.")
+    print("Rebuild the exe for the change to take effect.")
 
 
 if __name__ == "__main__":

@@ -130,7 +130,7 @@ class FTDBulkDelete(FTDBaseClient):
                         # Retry this page with the new token.
                         response = self.session.get(url, params=params, timeout=30)
                     if response.status_code == 401:
-                        print(f"    Warning: HTTP 401 (token refresh failed)")
+                        print("    Warning: HTTP 401 (token refresh failed)")
                         break
 
                 if response.status_code == 200:
@@ -142,7 +142,7 @@ class FTDBulkDelete(FTDBaseClient):
                     
                     # Debug: Show first object
                     if self.debug and items and offset == 0:
-                        print(f"\n    [DEBUG] First object:")
+                        print("\n    [DEBUG] First object:")
                         print(f"      Name: {items[0].get('name')}")
                         print(f"      ID: {items[0].get('id')}")
                         print(f"      Type: {items[0].get('type')}")
@@ -219,7 +219,7 @@ class FTDBulkDelete(FTDBaseClient):
         print(f"\n  Found {len(routes)} static routes")
 
         # Show what will be deleted
-        print(f"\n  Static routes to delete:")
+        print("\n  Static routes to delete:")
         for r in routes[:10]:
             name = r.get("name", "UNNAMED")
             rid = r.get("id", "")
@@ -387,7 +387,7 @@ class FTDBulkDelete(FTDBaseClient):
             return True
         
         # Show sample of what will be deleted
-        print(f"\n  Sample custom objects found:")
+        print("\n  Sample custom objects found:")
         for obj in custom_objects[:10]:
             name = obj.get('name', 'UNNAMED')
             obj_id = obj.get('id', 'NO_ID')
@@ -403,8 +403,8 @@ class FTDBulkDelete(FTDBaseClient):
                 name = obj.get('name', 'UNNAMED')
                 print(f"  [{i}/{len(custom_objects)}] Would delete: {name}")
             print("\n  Summary:")
-            print(f"    Deleted: 0")
-            print(f"    Failed: 0")
+            print("    Deleted: 0")
+            print("    Failed: 0")
             return True
 
         print(f"\n  Deleting {len(custom_objects)} custom objects with up to {max_workers} workers...")
@@ -452,12 +452,12 @@ class FTDBulkDelete(FTDBaseClient):
         self.stats["deleted"] += counters["deleted"]
         self.stats["failed"] += counters["failed"]
 
-        print(f"\n  Summary:")
+        print("\n  Summary:")
         print(f"    Deleted: {counters['deleted']}")
         print(f"    Failed: {counters['failed']}")
 
         if failed_objects:
-            print(f"\n  Failed objects:")
+            print("\n  Failed objects:")
             for name, error in failed_objects[:10]:
                 print(f"    - {name}: {error}")
             if len(failed_objects) > 10:
@@ -705,7 +705,7 @@ class FTDBulkDelete(FTDBaseClient):
             return True
         
         # Show what will be reset
-        print(f"\n  Interfaces to reset:")
+        print("\n  Interfaces to reset:")
         for intf in configured_interfaces[:10]:
             hardware = intf.get('hardwareName', 'Unknown')
             name = intf.get('name', '(unnamed)')
@@ -746,7 +746,7 @@ class FTDBulkDelete(FTDBaseClient):
         self.stats["deleted"] += success_count
         self.stats["failed"] += fail_count
 
-        print(f"\n  Summary:")
+        print("\n  Summary:")
         print(f"    Reset: {success_count}")
         print(f"    Failed: {fail_count}")
 
@@ -883,7 +883,7 @@ class FTDBulkDelete(FTDBaseClient):
         print(f"\n  Found {len(all_subinterfaces)} subinterfaces total")
 
         # Show what will be deleted
-        print(f"\n  Subinterfaces to delete:")
+        print("\n  Subinterfaces to delete:")
         for intf in all_subinterfaces[:10]:
             name = intf.get('name', 'UNNAMED')
             hardware = intf.get('hardwareName', 'Unknown')
@@ -941,7 +941,7 @@ class FTDBulkDelete(FTDBaseClient):
         print(f"\n  Summary: {counters['deleted']} deleted, {counters['failed']} failed")
 
         if failed_objects:
-            print(f"\n  Failed subinterfaces:")
+            print("\n  Failed subinterfaces:")
             for name, error in failed_objects[:10]:
                 print(f"    - {name}: {error}")
             if len(failed_objects) > 10:
@@ -1058,7 +1058,7 @@ class FTDBulkDelete(FTDBaseClient):
         print(f"\n  Found {len(all_etherchannels)} etherchannels")
         
         # Show what will be deleted
-        print(f"\n  EtherChannels to delete:")
+        print("\n  EtherChannels to delete:")
         for intf in all_etherchannels[:10]:
             name = intf.get('name', 'UNNAMED')
             hardware = intf.get('hardwareName', 'Unknown')
@@ -1158,7 +1158,7 @@ class FTDBulkDelete(FTDBaseClient):
         print(f"\n  Found {len(all_bridge_groups)} bridge groups")
         
         # Show what will be deleted
-        print(f"\n  Bridge groups to delete:")
+        print("\n  Bridge groups to delete:")
         for intf in all_bridge_groups[:10]:
             name = intf.get('name', 'UNNAMED')
             bvi_id = intf.get('bridgeGroupId', '?')

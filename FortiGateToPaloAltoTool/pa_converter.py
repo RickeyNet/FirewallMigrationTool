@@ -245,7 +245,7 @@ Examples:
     zone_mapping = interface_converter.get_zone_mapping()
 
     intf_stats = interface_converter.get_statistics()
-    print(f"\n[OK] Interface/Zone conversion complete:")
+    print("\n[OK] Interface/Zone conversion complete:")
     print(f"  - Interfaces mapped: {intf_stats['mapped_interfaces']}")
     print(f"  - Physical interfaces: {intf_stats['physical_interfaces']}")
     print(f"  - Subinterfaces: {intf_stats['subinterfaces']}")
@@ -363,7 +363,7 @@ Examples:
     # ========================================================================
     # STEP 12: Write output files
     # ========================================================================
-    print(f"\n" + "-" * 60)
+    print("\n" + "-" * 60)
     print("Saving output files...")
     print("-" * 60)
 
@@ -476,7 +476,7 @@ Examples:
     print("\n" + "=" * 60)
     print("CONVERSION COMPLETE")
     print("=" * 60)
-    print(f"\nOutput Files Created:")
+    print("\nOutput Files Created:")
     print(f"  1. {interfaces_output}")
     print(f"     - Interfaces: {len(pa_interfaces)}")
     print(f"       (Physical: {intf_stats['physical_interfaces']}, "
@@ -499,7 +499,7 @@ Examples:
     print(f"\n  8. {static_routes_output}")
     print(f"     - Static Routes: {route_stats['converted']}")
     print(f"\n  9. {summary_output}")
-    print(f"     - Conversion statistics")
+    print("     - Conversion statistics")
     print("\n" + "=" * 60)
     print("IMPORT ORDER FOR PAN-OS:")
     print("=" * 60)

@@ -819,7 +819,7 @@ Examples:
     # ====================================================================
     # Write output files
     # ====================================================================
-    print(f"\n" + "-" * 60)
+    print("\n" + "-" * 60)
     print("Saving output files...")
     print("-" * 60)
 
@@ -905,7 +905,7 @@ Examples:
     print("=" * 60)
     print(f"\nSource: Cisco ASA ({hostname})")
     print(f"Target: Palo Alto {args.target_model}")
-    print(f"\nOutput Files:")
+    print("\nOutput Files:")
     print(f"  1. {base}_interfaces.json      ({len(pa_interfaces)} interfaces)")
     print(f"  2. {base}_zones.json            ({len(pa_zones)} zones)")
     print(f"  3. {base}_address_objects.json  ({len(address_objects)} objects)")

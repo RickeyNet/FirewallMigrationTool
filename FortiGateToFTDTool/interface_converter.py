@@ -283,6 +283,14 @@ class InterfaceConverter:
         # bridge group). Maps a lowercased switch-interface identifier -> int
         # (target total member count) or list of FTD hardware names to add.
         self.bridgegroup_expansion = {}
+
+        # Bridge group promotion config (set via set_bridgegroup_promotion()).
+        # Lets a plain (non-aggregate) FortiGate physical interface be migrated
+        # as a NEW FTD bridge group (BVI) so its subnet can span several bridged
+        # ports on the Cisco side. The interface's IP/MTU move onto the BVI.
+        # Maps a lowercased physical-interface identifier -> int (total member
+        # count, incl. the original port) or list of extra FTD ports to add.
+        self.promote_to_bridgegroup = {}
     
     def set_target_model(self, model: str) -> None:
         """
@@ -381,8 +389,8 @@ class InterfaceConverter:
     
         # Warn if using port 1 (often used for management/uplink)
         if port_num == 1:
-            print(f"\nWARNING: Using Ethernet1/1 as HA port. This is typically the first data port.")
-            print(f"         Ensure this doesn't conflict with your network design.\n")
+            print("\nWARNING: Using Ethernet1/1 as HA port. This is typically the first data port.")
+            print("         Ensure this doesn't conflict with your network design.\n")
 
     def set_port_mapping(self, mapping: Dict[str, str]) -> None:
         """
@@ -700,6 +708,49 @@ class InterfaceConverter:
                 return self.bridgegroup_expansion[str(key).strip().lower()]
         return None
 
+    def set_bridgegroup_promotion(self, promotion: Dict[str, Any]) -> None:
+        """
+        Configure promotion of plain physical interfaces to NEW bridge groups.
+
+        This is the bridge-group analog of set_etherchannel_promotion(): when a
+        source FortiGate interface is a regular physical port but on the target
+        Cisco firewall its subnet should span several bridged ports, this
+        migrates it as a NEW FTD bridge group (BVI). The original FTD port
+        becomes the first member; additional members are added per the spec.
+
+        Unlike port-channel promotion (which leaves the channel IP-less), the
+        interface's IPv4 address and MTU MOVE ONTO the BVI - a bridge group is
+        the Layer-3 interface for the bridged segment.
+
+        Args:
+            promotion: Dict mapping a FortiGate physical-interface identifier
+                (interface name or alias) to either:
+                  - an int: the desired TOTAL member count, INCLUDING the
+                    original port. Extra members are auto-assigned from the
+                    available FTD port pool.
+                  - a list of FTD hardware names to ADD as members alongside the
+                    original port.
+
+        Matching is case-insensitive. Interfaces that carry VLAN subinterfaces
+        are not eligible (a warning is printed and they convert normally).
+        """
+        normalized: Dict[str, Any] = {}
+        for key, spec in (promotion or {}).items():
+            if key is None:
+                continue
+            normalized[str(key).strip().lower()] = spec
+        self.promote_to_bridgegroup = normalized
+
+    def _get_bridgegroup_promotion_spec(self, fg_name: str, alias: str) -> Any:
+        """Look up the bridge group promotion spec for a physical interface by
+        its FortiGate name or alias (case-insensitive)."""
+        if not self.promote_to_bridgegroup:
+            return None
+        for key in (fg_name, alias):
+            if key and str(key).strip().lower() in self.promote_to_bridgegroup:
+                return self.promote_to_bridgegroup[str(key).strip().lower()]
+        return None
+
     def _bridgegroup_member_name(self, bridge_ftd_name: str, ftd_hardware: str) -> str:
         """Synthesize a unique, valid FTD interface name for an ADDED bridge
         group member that has no FortiGate source (e.g. 'srv_bridge_e1_7')."""
@@ -982,12 +1033,15 @@ class InterfaceConverter:
             else:
                 expansion_extra += len(spec)
 
-        # Account for physical->EtherChannel promotion (extra members added
-        # alongside the original port when a plain interface becomes a LAG).
+        # Account for physical->EtherChannel and physical->bridge group
+        # promotion (extra members added alongside the original port when a
+        # plain interface becomes a LAG or a bridged segment).
         promotion_extra = 0
         for fg_name, props in physical_standalone:
             alias = props.get('alias', fg_name)
             spec = self._get_promotion_spec(fg_name, alias)
+            if spec is None:
+                spec = self._get_bridgegroup_promotion_spec(fg_name, alias)
             if spec is None:
                 continue
             if isinstance(spec, int):
@@ -1021,7 +1075,7 @@ class InterfaceConverter:
 
         print(f"\n  Port Analysis for {self.model_info['name']}:") # pyright: ignore[reportOptionalSubscript]
         print(f"    Available FTD ports: {available}")
-        print(f"    FortiGate interfaces to convert:")
+        print("    FortiGate interfaces to convert:")
         print(f"      - EtherChannel members: {etherch_member_count}")
         if expansion_extra:
             print(f"      - EtherChannel expansion (extra members): {expansion_extra}")
@@ -1038,11 +1092,11 @@ class InterfaceConverter:
         
         if total_needed > available:
             print(f"\n  [WARNING] Not enough ports! Need {total_needed}, have {available}")
-            print(f"  [INFO] Using priority-based assignment:")
-            print(f"         1. EtherChannels (aggregate traffic)")
-            print(f"         2. Bridge Groups (switch ports)")
-            print(f"         3. Interfaces with subinterfaces (carry VLANs)")
-            print(f"         4. Standalone interfaces (if ports remain)")
+            print("  [INFO] Using priority-based assignment:")
+            print("         1. EtherChannels (aggregate traffic)")
+            print("         2. Bridge Groups (switch ports)")
+            print("         3. Interfaces with subinterfaces (carry VLANs)")
+            print("         4. Standalone interfaces (if ports remain)")
         
         # ====================================================================
         # PHASE 4: Convert in PRIORITY ORDER
@@ -1065,9 +1119,13 @@ class InterfaceConverter:
         print("\n  [Priority 3] Converting Physical Interfaces with Subinterfaces...")
         for fg_name, properties in physical_with_subs:
             # Promotion of interfaces that carry VLAN subinterfaces is not
-            # supported (the subinterfaces would have to move onto the EC too).
-            if self._get_promotion_spec(fg_name, properties.get('alias', fg_name)) is not None:
+            # supported (the subinterfaces would have to move onto the parent).
+            alias = properties.get('alias', fg_name)
+            if self._get_promotion_spec(fg_name, alias) is not None:
                 print(f"    [WARNING] {fg_name}: cannot promote to EtherChannel "
+                      f"(it has VLAN subinterfaces) - converting as physical interface")
+            elif self._get_bridgegroup_promotion_spec(fg_name, alias) is not None:
+                print(f"    [WARNING] {fg_name}: cannot promote to bridge group "
                       f"(it has VLAN subinterfaces) - converting as physical interface")
             self._convert_physical_interface(fg_name, properties)
         
@@ -1088,11 +1146,15 @@ class InterfaceConverter:
                     self.stats['skipped'] += 1
                     self.failed_items.append({"name": fg_name, "reason": "no ports available", "config": properties})
                 else:
-                    # Promote to a new EtherChannel if requested, otherwise
-                    # convert as a standalone physical interface.
-                    promo_spec = self._get_promotion_spec(fg_name, properties.get('alias', fg_name))
-                    if promo_spec is not None:
-                        self._promote_physical_to_etherchannel(fg_name, properties, promo_spec)
+                    # Promote to a new EtherChannel or bridge group if requested,
+                    # otherwise convert as a standalone physical interface.
+                    alias = properties.get('alias', fg_name)
+                    ec_spec = self._get_promotion_spec(fg_name, alias)
+                    bvi_spec = self._get_bridgegroup_promotion_spec(fg_name, alias)
+                    if ec_spec is not None:
+                        self._promote_physical_to_etherchannel(fg_name, properties, ec_spec)
+                    elif bvi_spec is not None:
+                        self._promote_physical_to_bridgegroup(fg_name, properties, bvi_spec)
                     else:
                         self._convert_physical_interface(fg_name, properties)
         
@@ -1114,7 +1176,7 @@ class InterfaceConverter:
         self._generate_security_zones()
         
         # Print final port allocation summary
-        print(f"\n  Port Allocation Summary:")
+        print("\n  Port Allocation Summary:")
         print(f"    Ports used: {len(self.assigned_ftd_ports) - len(self.skip_ftd_ports)}")
         print(f"    Ports remaining: {len(self.available_ftd_ports)}")
         print(f"    Security zones created: {len(self.security_zones)}")
@@ -1453,6 +1515,84 @@ class InterfaceConverter:
 
         member_str = ', '.join([m['hardwareName'] for m in ftd_members])
         print(f"    Promoted: {fg_name} -> {ftd_name} (Port-channel{etherchannel_id}) members: [{member_str}]")
+
+    def _promote_physical_to_bridgegroup(self, fg_name: str, properties: Dict, spec: Any) -> None:
+        """
+        Promote a plain FortiGate physical interface to a NEW FTD bridge group
+        (BVI) so its subnet can span several bridged ports on the Cisco side.
+
+        The original FTD port becomes the first member and extra members are
+        added per `spec` (an int total member count INCLUDING the original port,
+        or a list of FTD ports to add). Unlike port-channel promotion, the
+        interface's IPv4 address and MTU MOVE ONTO the BVI - a bridge group is
+        the Layer-3 interface for the bridged segment.
+        """
+        alias = properties.get('alias', fg_name)
+        ftd_name = sanitize_interface_name(alias)
+
+        # Assign the original interface's FTD port - it becomes member #1
+        original_hardware = self._get_ftd_hardware_name(fg_name)
+        if not original_hardware:
+            print(f"    Skipped promotion: {fg_name} (no available FTD port)")
+            self.stats['skipped'] += 1
+            self.failed_items.append({"name": fg_name, "reason": "no available FTD port (bridge promotion)", "config": properties})
+            return
+        if original_hardware in self.skip_ftd_ports:
+            print(f"    Skipped promotion: {fg_name} -> {original_hardware} (reserved port)")
+            self.stats['skipped'] += 1
+            self.failed_items.append({"name": fg_name, "reason": f"reserved port ({original_hardware})", "config": properties})
+            return
+
+        # Reserved names that conflict with FTD built-ins (same rule as physical)
+        reserved_names = {'management', 'diagnostic', 'inside', 'outside'}
+        if ftd_name.lower() in reserved_names:
+            original_reserved = ftd_name
+            port_num = original_hardware.split('/')[-1] if '/' in original_hardware else '1'
+            ftd_name = f"{ftd_name}_port{port_num}"
+            print(f"      Note: '{original_reserved}' is reserved, renamed to '{ftd_name}'")
+
+        # Build member list: original port first (synthesized member name so it
+        # does not collide with the BVI name), then expansion members.
+        ftd_members: List[Dict[str, Any]] = []
+        base_member_name = self._bridgegroup_member_name(ftd_name, original_hardware)
+        if self._add_bridgegroup_member(fg_name, ftd_name, original_hardware,
+                                        ftd_members, base_member_name):
+            print(f"      Promoted base member: {fg_name} -> {original_hardware} (routed mode, BVI member)")
+        self._apply_bridgegroup_expansion(fg_name, ftd_name, spec, ftd_members)
+
+        # Store name mapping so routes/policies follow the interface to the BVI
+        self.interface_name_mapping[fg_name] = ftd_name
+        self.interface_name_mapping[alias] = ftd_name
+
+        bridge_group_id = len(self.bridge_groups) + 1
+
+        ftd_interface: Dict[str, Any] = {
+            "name": ftd_name,
+            "bridgeGroupId": bridge_group_id,
+            "description": properties.get('description', alias),
+            "enabled": properties.get('status', 'up') != 'down',
+            "selectedInterfaces": ftd_members,
+            "type": "bridgegroupinterface"
+        }
+
+        # A bridge group is the L3 interface for the segment, so the source
+        # interface's IP moves onto the BVI (unlike port-channel promotion).
+        ipv4 = self._build_ipv4_config(properties.get('ip'))
+        if ipv4:
+            ftd_interface["ipv4"] = ipv4
+
+        # Add MTU if overridden (cap at 9000 - FTD maximum)
+        if properties.get('mtu-override') == 'enable':
+            mtu = properties.get('mtu', 1500)
+            if mtu > 9000:
+                mtu = 9000
+            ftd_interface["mtu"] = mtu
+
+        self.bridge_groups.append(ftd_interface)
+        self.stats['bridge_groups_created'] += 1
+
+        member_str = ', '.join([m['hardwareName'] for m in ftd_members])
+        print(f"    Promoted: {fg_name} -> {ftd_name} (BVI{bridge_group_id}) members: [{member_str}]")
 
     def _convert_aggregate_interface(self, fg_name: str, properties: Dict) -> None:
         """Convert a FortiGate aggregate interface to FTD EtherChannel."""

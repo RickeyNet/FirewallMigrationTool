@@ -332,7 +332,7 @@ def _make_inline_addr_block(inline_objects: List[Dict]) -> str:
             lines.append(f"        set end-ip {obj['end']}")
         else:
             lines.append(f"        set subnet {obj['ip']} {obj['mask']}")
-        lines.append(f'        set comment "Auto-created from group literal"')
+        lines.append('        set comment "Auto-created from group literal"')
         lines.append("    next")
     lines.append("end")
     return "\n".join(lines)

@@ -1125,7 +1125,19 @@ class App(tk.Tk):
         )
         self.conv_bridge_hint.grid(row=11, column=1, sticky=tk.W)
 
-        # Row 12: FTD file mode toggle (hidden unless source is Cisco FTD)
+        # Row 12: Promote physical interface -> bridge group (FortiGate->FTD only)
+        self.conv_bridgepromote_label = ttk.Label(opts, text="Promote to Bridge Group (optional):")
+        self.conv_bridgepromote_label.grid(row=12, column=0, sticky=tk.W, pady=3)
+        self.conv_bridgepromote_var = tk.StringVar()
+        self.conv_bridgepromote_entry = ttk.Entry(opts, textvariable=self.conv_bridgepromote_var, width=40)
+        self.conv_bridgepromote_entry.grid(row=12, column=1, sticky=tk.EW, padx=4)
+        self.conv_bridgepromote_hint = ttk.Label(
+            opts,
+            text="turn a plain interface into a bridged segment (BVI), e.g. lan1=2; dmz1=Ethernet1/7   (IP moves to the BVI)",
+        )
+        self.conv_bridgepromote_hint.grid(row=13, column=1, sticky=tk.W)
+
+        # Row 14: FTD file mode toggle (hidden unless source is Cisco FTD)
         self.conv_ftd_file_var = tk.BooleanVar(value=False)
         self.conv_ftd_file_check = ttk.Checkbutton(
             opts,
@@ -1133,14 +1145,14 @@ class App(tk.Tk):
             variable=self.conv_ftd_file_var,
             command=self._on_ftd_mode_change,
         )
-        self.conv_ftd_file_check.grid(row=12, column=1, sticky=tk.W, padx=4, pady=3)
+        self.conv_ftd_file_check.grid(row=14, column=1, sticky=tk.W, padx=4, pady=3)
         self.conv_ftd_file_check.grid_remove()  # hidden until FTD source is selected
 
-        # Row 13: Pretty-print
+        # Row 15: Pretty-print
         self.conv_pretty_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             opts, text="Pretty-print JSON output", variable=self.conv_pretty_var,
-        ).grid(row=13, column=1, sticky=tk.W, padx=4, pady=3)
+        ).grid(row=15, column=1, sticky=tk.W, padx=4, pady=3)
 
         opts.columnconfigure(1, weight=1)
 
@@ -2885,6 +2897,13 @@ class App(tk.Tk):
                         spec = spec.strip()
                         if spec:
                             argv.extend(["--expand-bridgegroup", spec])
+
+                bridgepromote_raw = self.conv_bridgepromote_var.get().strip()
+                if bridgepromote_raw:
+                    for spec in bridgepromote_raw.replace("\n", ";").split(";"):
+                        spec = spec.strip()
+                        if spec:
+                            argv.extend(["--promote-bridgegroup", spec])
 
             if self.conv_pretty_var.get():
                 argv.append("--pretty")

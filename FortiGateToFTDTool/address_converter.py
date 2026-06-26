@@ -430,7 +430,7 @@ class AddressConverter:
             # If conversion fails (invalid netmask), print warning and default to /32
             # /32 is the safest default as it represents a single host
             print(f"  Warning: Could not convert netmask '{netmask}' to CIDR (Error: {e})")
-            print(f"    Defaulting to /32 (single host)")
+            print("    Defaulting to /32 (single host)")
             return 32
     
     def _is_valid_address_value(self, value: str) -> bool:

@@ -442,7 +442,7 @@ class FTDSNMPConfig(FTDBaseClient):
               f"{f', {failed} failed' if failed else ''}")
         if configured:
             print(f"  NMS access: UDP 161 (polling){' / UDP 162 (traps)' if trap_enabled else ''}")
-            print(f"  Verify after deploy via SSH: show run snmp-server")
+            print("  Verify after deploy via SSH: show run snmp-server")
         return failed == 0 and info_ok
 
     def deploy_changes(self) -> bool:

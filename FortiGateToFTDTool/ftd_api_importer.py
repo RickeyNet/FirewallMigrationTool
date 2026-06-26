@@ -856,7 +856,7 @@ class FTDAPIClient(FTDBaseClient):
                             "type": "networkobject"
                         })
                     else:
-                        return False, f"Could not resolve built-in object: any-ipv4"
+                        return False, "Could not resolve built-in object: any-ipv4"
                 else:
                     success, net_obj = self.get_network_object_by_name(net_name)
                     if success and isinstance(net_obj, dict):
@@ -1481,7 +1481,7 @@ class FTDAPIClient(FTDBaseClient):
         parent_is_etherchannel = parent_hardware.lower().startswith('port-channel')
         
         if self.debug:
-            print(f"\n      [DEBUG] Parent interface lookup:")
+            print("\n      [DEBUG] Parent interface lookup:")
             print(f"              Hardware name: {parent_hardware}")
             print(f"              Type: {'EtherChannel' if parent_is_etherchannel else 'Physical'}")
         
@@ -1490,18 +1490,18 @@ class FTDAPIClient(FTDBaseClient):
             # Try to find it as an etherchannel (from cache)
             success, parent_intf = self.get_cached_etherchannel(parent_hardware)
             if self.debug and not success:
-                print(f"              Result: EtherChannel not found in cache")
+                print("              Result: EtherChannel not found in cache")
         else:
             # Try to find it as a physical interface (from cache)
             success, parent_intf = self.get_cached_physical_interface(parent_hardware)
             if self.debug and not success:
-                print(f"              Result: Physical interface not found in cache")
+                print("              Result: Physical interface not found in cache")
         
         if not success:
             # Parent interface not found - skip
             self.stats["subinterfaces_skipped"] += 1
             if self.debug:
-                print(f"              Skipping subinterface creation (parent not available)")
+                print("              Skipping subinterface creation (parent not available)")
             return True, f"SKIPPED: Parent interface {parent_hardware} not found"
 
         if not isinstance(parent_intf, dict):
@@ -1841,7 +1841,7 @@ class FTDAPIClient(FTDBaseClient):
                 return False, "No valid member interfaces found (all members failed to resolve)"
         
         if self.debug:
-            print(f"\n      [DEBUG] Bridge group payload:")
+            print("\n      [DEBUG] Bridge group payload:")
             print(f"                Name: {intf.get('name')}")
             print(f"                Members: {len(intf.get('selectedInterfaces', []))}")
         
@@ -1926,7 +1926,7 @@ class FTDAPIClient(FTDBaseClient):
                 zone_payload["interfaces"] = resolved_interfaces
         
         if self.debug:
-            print(f"\n      [DEBUG] Creating security zone:")
+            print("\n      [DEBUG] Creating security zone:")
             print(f"              Name: {zone_payload.get('name')}")
             print(f"              Interfaces: {len(zone_payload.get('interfaces', []))}")
         
@@ -2083,56 +2083,56 @@ class FTDAPIClient(FTDBaseClient):
         if self.update_existing:
             print("  (Update-existing mode enabled)")
         print(f"{'='*60}")
-        print(f"\nPhysical Interfaces:")
+        print("\nPhysical Interfaces:")
         print(f"  Updated: {self.stats['physical_interfaces_updated']}")
         print(f"  Skipped: {self.stats['physical_interfaces_skipped']}")
         print(f"  Failed:  {self.stats['physical_interfaces_failed']}")
-        print(f"\nEtherChannels:")
+        print("\nEtherChannels:")
         print(f"  Created: {self.stats['etherchannels_created']}")
         print(f"  Updated: {self.stats['etherchannels_updated']}")
         print(f"  Skipped: {self.stats['etherchannels_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['etherchannels_failed']}")
-        print(f"\nBridge Groups:")
+        print("\nBridge Groups:")
         print(f"  Created: {self.stats['bridge_groups_created']}")
         print(f"  Updated: {self.stats['bridge_groups_updated']}")
         print(f"  Skipped: {self.stats['bridge_groups_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['bridge_groups_failed']}")
-        print(f"\nSubinterfaces:")
+        print("\nSubinterfaces:")
         print(f"  Created: {self.stats['subinterfaces_created']}")
         print(f"  Updated: {self.stats['subinterfaces_updated']}")
         print(f"  Skipped: {self.stats['subinterfaces_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['subinterfaces_failed']}")
-        print(f"\nSecurity Zones:")
+        print("\nSecurity Zones:")
         print(f"  Created: {self.stats['security_zones_created']}")
         print(f"  Updated: {self.stats['security_zones_updated']}")
         print(f"  Skipped: {self.stats['security_zones_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['security_zones_failed']}")
-        print(f"\nAddress Objects:")
+        print("\nAddress Objects:")
         print(f"  Created: {self.stats['address_objects_created']}")
         print(f"  Updated: {self.stats['address_objects_updated']}")
         print(f"  Skipped: {self.stats['address_objects_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['address_objects_failed']}")
-        print(f"\nAddress Groups:")
+        print("\nAddress Groups:")
         print(f"  Created: {self.stats['address_groups_created']}")
         print(f"  Updated: {self.stats['address_groups_updated']}")
         print(f"  Skipped: {self.stats['address_groups_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['address_groups_failed']}")
-        print(f"\nPort Objects:")
+        print("\nPort Objects:")
         print(f"  Created: {self.stats['port_objects_created']}")
         print(f"  Updated: {self.stats['port_objects_updated']}")
         print(f"  Skipped: {self.stats['port_objects_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['port_objects_failed']}")
-        print(f"\nPort Groups:")
+        print("\nPort Groups:")
         print(f"  Created: {self.stats['port_groups_created']}")
         print(f"  Updated: {self.stats['port_groups_updated']}")
         print(f"  Skipped: {self.stats['port_groups_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['port_groups_failed']}")
-        print(f"\nStatic Routes:")
+        print("\nStatic Routes:")
         print(f"  Created: {self.stats['routes_created']}")
         print(f"  Updated: {self.stats['routes_updated']}")
         print(f"  Skipped: {self.stats['routes_skipped']} (already exist)")
         print(f"  Failed:  {self.stats['routes_failed']}")
-        print(f"\nAccess Rules:")
+        print("\nAccess Rules:")
         print(f"  Created: {self.stats['rules_created']}")
         print(f"  Updated: {self.stats['rules_updated']}")
         print(f"  Skipped: {self.stats['rules_skipped']} (already exist)")
