@@ -2538,6 +2538,57 @@ class App(tk.Tk):
         put("[remapped from VLAN N]", "code")
         put("), and counted in the conversion summary.\n\n", "bullet")
 
+        put("Interface Aggregation Scale-Up (FortiGate \u2192 FTD)\n", "h2")
+        put("Optional. Lets you add bandwidth and redundancy on the Cisco side "
+            "during conversion - grow an existing aggregate, or turn a plain "
+            "physical interface into one. The ", "")
+        put("Interface Aggregation", "bold")
+        put(" panel appears on the Convert tab only for FortiGate \u2192 FTD "
+            "migrations. Leave it empty to migrate interfaces 1:1 (default).\n\n", "")
+        put("To use it, click ", "")
+        put("+ Add Interface", "bold")
+        put(" to add a row, then for each row:\n\n", "")
+        put("\u2022  Interface: ", "bullet")
+        put("Pick the interface from the dropdown. The list is read from the "
+            "selected FortiGate config and shows each interface's logical name "
+            "(alias) when it has one. Click ", "bullet")
+        put("\u21bb Refresh from config", "bold")
+        put(" after changing the input file to reload it.\n", "bullet")
+        put("\u2022  Action and Target: ", "bullet")
+        put("Auto-detected from the chosen interface - ", "bullet")
+        put("Expand", "italic")
+        put(" for an interface that is already an aggregate, ", "bullet")
+        put("Promote", "italic")
+        put(" for a plain physical port; ", "bullet")
+        put("Port-Channel", "italic")
+        put(" (Layer 2, no IP) or ", "bullet")
+        put("Bridge Group", "italic")
+        put(" (BVI, keeps the IP). You can override either dropdown.\n", "bullet")
+        put("\u2022  Members: ", "bullet")
+        put("Either a target total member count (e.g. ", "bullet")
+        put("4", "code")
+        put(") or an explicit comma-separated list of FTD ports to add (e.g. ", "bullet")
+        put("Ethernet1/5,Ethernet1/6", "code")
+        put("). Leave a row's Members empty to skip it.\n\n", "bullet")
+        put("The four resulting combinations:\n\n", "")
+        put("\u2022  Expand + Port-Channel: ", "bullet")
+        put("grow an existing FortiGate port channel with more 10G member "
+            "links.\n", "bullet")
+        put("\u2022  Promote + Port-Channel: ", "bullet")
+        put("convert a plain physical interface into a new EtherChannel (the IP "
+            "moves to VLAN subinterfaces on the channel).\n", "bullet")
+        put("\u2022  Expand + Bridge Group: ", "bullet")
+        put("grow a FortiGate virtual switch into a larger FTD bridge group "
+            "(BVI).\n", "bullet")
+        put("\u2022  Promote + Bridge Group: ", "bullet")
+        put("convert a plain physical interface into a new bridge group so its "
+            "subnet can span several bridged ports (the IP moves to the BVI).\n\n",
+            "bullet")
+        put("Tip: ", "tip")
+        put("The dropdown lists only valid targets - it hides interfaces that "
+            "already belong to a port channel or virtual switch (only the parent "
+            "is shown) and the dedicated management and HA ports.\n\n", "italic")
+
         put("How to Run\n", "h2")
         put("1.  Pick Source and Target in the toolbar.\n", "bullet")
         put("2.  Provide the input (browse to a file, or for FTD live mode "
