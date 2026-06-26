@@ -2321,6 +2321,27 @@ class App(tk.Tk):
         tab = ttk.Frame(notebook)
         notebook.add(tab, text="  How-To Guide  ")
 
+        # Search bar - lets users jump to keywords in the guide
+        search_bar = ttk.Frame(tab)
+        search_bar.pack(fill=tk.X, padx=8, pady=(8, 0))
+        ttk.Label(search_bar, text="Search:").pack(side=tk.LEFT)
+        self._help_search_var = tk.StringVar()
+        help_search_entry = ttk.Entry(
+            search_bar, textvariable=self._help_search_var, width=30,
+        )
+        help_search_entry.pack(side=tk.LEFT, padx=4)
+        help_search_entry.bind("<Return>", lambda e: self._help_find_next())
+        help_search_entry.bind("<Shift-Return>", lambda e: self._help_find_prev())
+        ttk.Button(
+            search_bar, text="Find Next", command=self._help_find_next,
+        ).pack(side=tk.LEFT, padx=2)
+        ttk.Button(
+            search_bar, text="Find Prev", command=self._help_find_prev,
+        ).pack(side=tk.LEFT, padx=2)
+        self._help_match_label = ttk.Label(search_bar, text="")
+        self._help_match_label.pack(side=tk.LEFT, padx=6)
+        self._help_search_idx = "1.0"
+
         # Scrollable text widget for the guide content
         frame = ttk.Frame(tab)
         frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
@@ -2339,6 +2360,7 @@ class App(tk.Tk):
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         help_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self._tk_widgets.append(help_text)
+        self._help_text = help_text
 
         # Tag styles for rich formatting
         help_text.tag_configure("title", font=("Segoe UI", 18, "bold"), foreground=_ACCENT,
@@ -2356,6 +2378,9 @@ class App(tk.Tk):
         help_text.tag_configure("tip", foreground=_ACCENT_H, font=("Segoe UI", 10, "italic"))
         help_text.tag_configure("warning", foreground=_ACCENT, font=("Segoe UI", 10, "bold"))
         help_text.tag_configure("separator", font=("Segoe UI", 4), spacing1=6, spacing3=6)
+        # Search highlight tags (raised above formatting tags so they win)
+        help_text.tag_configure("search_hit", background="#3a3a00", foreground=_OUT_FG)
+        help_text.tag_configure("search_current", background="#48ea33", foreground="#000000")
 
         # Helper to insert styled text
         def put(text: str, *tags: str) -> None:
@@ -2942,6 +2967,90 @@ class App(tk.Tk):
             "Python installation is needed.\n", "bullet")
 
         help_text.configure(state=tk.DISABLED)
+
+    def _help_clear_highlights(self) -> None:
+        self._help_text.tag_remove("search_hit", "1.0", tk.END)
+        self._help_text.tag_remove("search_current", "1.0", tk.END)
+
+    def _help_find(self, forwards: bool = True) -> None:
+        """Search the How-To Guide, highlighting all matches and stepping to the
+        next/previous one (case-insensitive, wraps around). Mirrors the Config
+        Viewer search."""
+        query = self._help_search_var.get()
+        if not query:
+            self._help_clear_highlights()
+            self._help_match_label.configure(text="")
+            return
+
+        self._help_clear_highlights()
+
+        # Highlight every match
+        count_var = tk.IntVar()
+        total = 0
+        pos = "1.0"
+        while True:
+            pos = self._help_text.search(
+                query, pos, stopindex=tk.END, nocase=True, count=count_var,
+            )
+            if not pos:
+                break
+            end = f"{pos}+{count_var.get()}c"
+            self._help_text.tag_add("search_hit", pos, end)
+            total += 1
+            pos = end
+
+        if total == 0:
+            self._help_match_label.configure(text="No matches")
+            return
+
+        # Step to the next/previous match from the current position
+        if forwards:
+            hit = self._help_text.search(
+                query, self._help_search_idx, stopindex=tk.END,
+                nocase=True, count=count_var,
+            )
+            if not hit:  # wrap to the top
+                hit = self._help_text.search(
+                    query, "1.0", stopindex=tk.END, nocase=True, count=count_var,
+                )
+        else:
+            hit = self._help_text.search(
+                query, self._help_search_idx, stopindex="1.0",
+                backwards=True, nocase=True, count=count_var,
+            )
+            if not hit:  # wrap to the bottom
+                hit = self._help_text.search(
+                    query, tk.END, stopindex="1.0", backwards=True,
+                    nocase=True, count=count_var,
+                )
+
+        if hit:
+            end = f"{hit}+{count_var.get()}c"
+            self._help_text.tag_add("search_current", hit, end)
+            self._help_text.see(hit)
+            self._help_search_idx = end if forwards else hit
+
+        # Report which match we landed on
+        match_num = 0
+        pos = "1.0"
+        while hit and pos:
+            pos = self._help_text.search(
+                query, pos, stopindex=tk.END, nocase=True, count=count_var,
+            )
+            if not pos:
+                break
+            match_num += 1
+            if self._help_text.compare(pos, "==", hit):
+                break
+            pos = f"{pos}+{count_var.get()}c"
+
+        self._help_match_label.configure(text=f"{match_num} of {total}")
+
+    def _help_find_next(self) -> None:
+        self._help_find(forwards=True)
+
+    def _help_find_prev(self) -> None:
+        self._help_find(forwards=False)
 
     # ------------------------------------------------------------------
     # Shared widgets / helpers

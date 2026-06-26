@@ -70,6 +70,10 @@ Deleting EtherChannels (and bridge groups) failed on HA-enabled appliances with 
 - **Sandstone redesigned** - Now a dark olive-green palette with warm orange accents and muted green output text, replacing the previous lighter red-accented look.
 - All themes remain switchable live from the dropdown in the top-right corner; help-tab descriptions updated to match.
 
+**How-To Guide - keyword search**
+
+- The How-To Guide tab now has a search bar. Type a keyword and use Find Next / Find Prev (or Enter / Shift+Enter) to jump through matches; every match is highlighted, the current one is emphasized and scrolled into view, and a counter shows the position (e.g. "2 of 8"). Search is case-insensitive and wraps around, mirroring the Config Viewer's search.
+
 **FTD import - update-on-existing matching**
 
 - **Unchanged groups and rules now skip correctly** - Payload comparison is recursive and ignores FDM bookkeeping fields (`id`, `version`, `links`) at every nesting level, so a group whose member refs differ only by server-side metadata is recognized as identical and skipped instead of re-PUT (avoids FDM "no changes detected" rejections).
