@@ -196,6 +196,31 @@ PLATFORM_LIST = _profile_list(
 DEFAULT_SOURCE_PLATFORM = SOURCE_PLATFORM_LIST[0]
 DEFAULT_TARGET_PLATFORM = PLATFORM_LIST[0]
 
+# ---------------------------------------------------------------------------
+# Interface link-aggregation builder (Convert tab, FortiGate -> FTD only)
+# ---------------------------------------------------------------------------
+# Each builder row describes one interface to scale up on the FTD side. The
+# (action x target) pair maps to a converter CLI flag:
+#   Expand   + Port-Channel  -> --expand-portchannel
+#   Promote  + Port-Channel  -> --promote-portchannel
+#   Expand   + Bridge Group  -> --expand-bridgegroup
+#   Promote  + Bridge Group  -> --promote-bridgegroup
+AGG_ACTION_EXPAND = "Expand"
+AGG_ACTION_PROMOTE = "Promote"
+AGG_ACTIONS = [AGG_ACTION_EXPAND, AGG_ACTION_PROMOTE]
+
+AGG_TARGET_PORTCHANNEL = "Port-Channel"
+AGG_TARGET_BRIDGEGROUP = "Bridge Group"
+AGG_TARGETS = [AGG_TARGET_PORTCHANNEL, AGG_TARGET_BRIDGEGROUP]
+
+# (action, target) -> converter flag
+AGG_FLAG_MAP = {
+    (AGG_ACTION_EXPAND, AGG_TARGET_PORTCHANNEL): "--expand-portchannel",
+    (AGG_ACTION_PROMOTE, AGG_TARGET_PORTCHANNEL): "--promote-portchannel",
+    (AGG_ACTION_EXPAND, AGG_TARGET_BRIDGEGROUP): "--expand-bridgegroup",
+    (AGG_ACTION_PROMOTE, AGG_TARGET_BRIDGEGROUP): "--promote-bridgegroup",
+}
+
 SUPPORTED_PAIRS_TEXT = _profile_text(
     "supported_pairs_text",
     (
@@ -417,6 +442,15 @@ class App(tk.Tk):
         # Current platform selection
         self._current_platform = DEFAULT_TARGET_PLATFORM
         self._current_source = DEFAULT_SOURCE_PLATFORM
+
+        # Interface link-aggregation builder state (Convert tab). Each entry in
+        # _agg_rows is a dict of the row's widgets/vars; the index maps a
+        # (lowercased) FortiGate interface name to its category so the builder
+        # can auto-detect Expand vs Promote and Port-Channel vs Bridge Group.
+        self._agg_rows: List[Dict[str, Any]] = []
+        self._agg_iface_index: Dict[str, str] = {}
+        self._agg_iface_names: List[str] = []
+        self._agg_visible = False
 
         # Import/Cleanup tab lockout state (set by _retitle_import_cleanup_tabs
         # when target doesn't support API-based import/cleanup).
@@ -963,6 +997,9 @@ class App(tk.Tk):
 
             self._set_window_title(f"FortiGate to Cisco FTD Converter v{APP_VERSION}")
 
+        # Show/hide the interface-aggregation builder for the new direction.
+        self._update_aggregation_visibility()
+
     def _retitle_import_cleanup_tabs(self, target: str) -> None:
         """Update Import/Cleanup tab titles, section frame labels, and enabled state
         for the target platform. When target is FortiGate, API-based import/cleanup
@@ -1089,53 +1126,9 @@ class App(tk.Tk):
         self.conv_ha_hint = ttk.Label(opts, text="e.g. Ethernet1/5  (leave blank = no HA port)")
         self.conv_ha_hint.grid(row=5, column=1, sticky=tk.W)
 
-        # Row 6: Expand port-channels (optional) - scale up 10G LAG members (FortiGate->FTD only)
-        self.conv_expand_label = ttk.Label(opts, text="Expand Port-Channels (optional):")
-        self.conv_expand_label.grid(row=6, column=0, sticky=tk.W, pady=3)
-        self.conv_expand_var = tk.StringVar()
-        self.conv_expand_entry = ttk.Entry(opts, textvariable=self.conv_expand_var, width=40)
-        self.conv_expand_entry.grid(row=6, column=1, sticky=tk.EW, padx=4)
-        self.conv_expand_hint = ttk.Label(
-            opts,
-            text="e.g. WAN_LAG=4; SRV_LAG=Ethernet1/5,Ethernet1/6   (blank = keep source member count)",
-        )
-        self.conv_expand_hint.grid(row=7, column=1, sticky=tk.W)
-
-        # Row 8: Promote physical interface -> EtherChannel (FortiGate->FTD only)
-        self.conv_promote_label = ttk.Label(opts, text="Promote to Port-Channel (optional):")
-        self.conv_promote_label.grid(row=8, column=0, sticky=tk.W, pady=3)
-        self.conv_promote_var = tk.StringVar()
-        self.conv_promote_entry = ttk.Entry(opts, textvariable=self.conv_promote_var, width=40)
-        self.conv_promote_entry.grid(row=8, column=1, sticky=tk.EW, padx=4)
-        self.conv_promote_hint = ttk.Label(
-            opts,
-            text="turn a plain interface into a LAG, e.g. wan1=2; srv1=Ethernet1/6   (blank = keep as physical)",
-        )
-        self.conv_promote_hint.grid(row=9, column=1, sticky=tk.W)
-
-        # Row 10: Expand bridge groups (virtual switch -> BVI) - FortiGate->FTD only
-        self.conv_bridge_label = ttk.Label(opts, text="Expand Bridge Groups (optional):")
-        self.conv_bridge_label.grid(row=10, column=0, sticky=tk.W, pady=3)
-        self.conv_bridge_var = tk.StringVar()
-        self.conv_bridge_entry = ttk.Entry(opts, textvariable=self.conv_bridge_var, width=40)
-        self.conv_bridge_entry.grid(row=10, column=1, sticky=tk.EW, padx=4)
-        self.conv_bridge_hint = ttk.Label(
-            opts,
-            text="add members to a virtual-switch bridge group, e.g. lan_switch=4; srv_switch=Ethernet1/7,Ethernet1/8",
-        )
-        self.conv_bridge_hint.grid(row=11, column=1, sticky=tk.W)
-
-        # Row 12: Promote physical interface -> bridge group (FortiGate->FTD only)
-        self.conv_bridgepromote_label = ttk.Label(opts, text="Promote to Bridge Group (optional):")
-        self.conv_bridgepromote_label.grid(row=12, column=0, sticky=tk.W, pady=3)
-        self.conv_bridgepromote_var = tk.StringVar()
-        self.conv_bridgepromote_entry = ttk.Entry(opts, textvariable=self.conv_bridgepromote_var, width=40)
-        self.conv_bridgepromote_entry.grid(row=12, column=1, sticky=tk.EW, padx=4)
-        self.conv_bridgepromote_hint = ttk.Label(
-            opts,
-            text="turn a plain interface into a bridged segment (BVI), e.g. lan1=2; dmz1=Ethernet1/7   (IP moves to the BVI)",
-        )
-        self.conv_bridgepromote_hint.grid(row=13, column=1, sticky=tk.W)
+        # Interface link-aggregation scale-up (Expand/Promote Port-Channels and
+        # Bridge Groups) lives in its own builder section below the opts grid -
+        # see _build_aggregation_section(). It is FortiGate->FTD only.
 
         # Row 14: FTD file mode toggle (hidden unless source is Cisco FTD)
         self.conv_ftd_file_var = tk.BooleanVar(value=False)
@@ -1156,9 +1149,13 @@ class App(tk.Tk):
 
         opts.columnconfigure(1, weight=1)
 
+        # Interface aggregation builder (FortiGate->FTD only; hidden otherwise)
+        self._build_aggregation_section(tab)
+
         # Buttons
         btn_frame = ttk.Frame(tab)
         btn_frame.pack(fill=tk.X, padx=8, pady=4)
+        self._conv_btn_frame = btn_frame
         self.conv_run_btn = ttk.Button(
             btn_frame, text="Run Conversion", command=self._run_convert,
         )
@@ -1174,6 +1171,358 @@ class App(tk.Tk):
         ).pack(side=tk.LEFT, padx=8)
 
         self.conv_output = self._make_output_area(tab)
+
+        # Sync builder visibility with the initial source/target selection.
+        self._update_aggregation_visibility()
+
+    # ==================== INTERFACE AGGREGATION BUILDER ====================
+    def _build_aggregation_section(self, tab: ttk.Frame) -> None:
+        """Build the interface link-aggregation builder (FortiGate -> FTD only).
+
+        Replaces the old four free-text 'Expand/Promote' fields with a small
+        per-interface table. Each row picks an interface (from the parsed
+        config), the converter auto-detects Expand vs Promote and the target
+        type, and the user just supplies a member count or explicit port list.
+        The whole section is hidden unless the migration is FortiGate -> FTD.
+        """
+        frame = ttk.LabelFrame(
+            tab, text="Interface Aggregation  (FortiGate → FTD)", padding=10,
+        )
+        self._agg_frame = frame
+
+        ttk.Label(
+            frame,
+            text=(
+                "Optional: scale up link aggregation on the FTD side. Add a row "
+                "per interface to grow into a Port-Channel or Bridge Group.\n"
+                "Members = a target count (e.g. 4) or an explicit port list "
+                "(e.g. Ethernet1/5,Ethernet1/6). Leave empty to migrate 1:1."
+            ),
+            justify=tk.LEFT,
+        ).grid(row=0, column=0, columnspan=5, sticky=tk.W, pady=(0, 8))
+
+        # Column header
+        header = ttk.Frame(frame)
+        header.grid(row=1, column=0, columnspan=5, sticky=tk.EW)
+        for col, (text, width) in enumerate((
+            ("Interface", 22), ("Action", 12), ("Target", 16),
+            ("Members (count or ports)", 28), ("", 4),
+        )):
+            ttk.Label(header, text=text, width=width, anchor=tk.W).grid(
+                row=0, column=col, sticky=tk.W, padx=2,
+            )
+
+        # Container that holds the dynamic rows
+        self._agg_rows_container = ttk.Frame(frame)
+        self._agg_rows_container.grid(row=2, column=0, columnspan=5, sticky=tk.EW)
+
+        # Empty-state hint, shown only when there are no rows
+        self._agg_empty_label = ttk.Label(
+            frame,
+            text="No interfaces queued - click \"+ Add Interface\" to scale one up.",
+            foreground=_FG_DIM,
+        )
+        self._agg_empty_label.grid(row=3, column=0, columnspan=5, sticky=tk.W, pady=(2, 6))
+
+        # Action buttons
+        btns = ttk.Frame(frame)
+        btns.grid(row=4, column=0, columnspan=5, sticky=tk.W, pady=(4, 0))
+        ttk.Button(btns, text="+ Add Interface", command=lambda: self._agg_add_row()).pack(
+            side=tk.LEFT,
+        )
+        ttk.Button(
+            btns, text="↻ Refresh from config",
+            command=lambda: self._agg_refresh_interfaces(silent=False),
+        ).pack(side=tk.LEFT, padx=8)
+
+        frame.columnconfigure(0, weight=1)
+        # Packed/un-packed by _update_aggregation_visibility(); start hidden.
+
+    def _agg_add_row(
+        self, iface: str = "", action: str = "", target: str = "", members: str = "",
+    ) -> None:
+        """Append one interface row to the builder."""
+        container = self._agg_rows_container
+        rf = ttk.Frame(container)
+        rf.grid(row=len(self._agg_rows), column=0, sticky=tk.EW, pady=2)
+
+        iface_var = tk.StringVar(value=iface)
+        iface_combo = ttk.Combobox(
+            rf, textvariable=iface_var, values=self._agg_iface_names, width=20,
+        )
+        iface_combo.grid(row=0, column=0, sticky=tk.W, padx=2)
+
+        action_var = tk.StringVar(value=action or AGG_ACTION_PROMOTE)
+        action_combo = ttk.Combobox(
+            rf, textvariable=action_var, values=AGG_ACTIONS,
+            state="readonly", width=10,
+        )
+        action_combo.grid(row=0, column=1, sticky=tk.W, padx=2)
+
+        target_var = tk.StringVar(value=target or AGG_TARGET_PORTCHANNEL)
+        target_combo = ttk.Combobox(
+            rf, textvariable=target_var, values=AGG_TARGETS,
+            state="readonly", width=14,
+        )
+        target_combo.grid(row=0, column=2, sticky=tk.W, padx=2)
+
+        members_var = tk.StringVar(value=members)
+        members_entry = ttk.Entry(rf, textvariable=members_var, width=28)
+        members_entry.grid(row=0, column=3, sticky=tk.W, padx=2)
+
+        row: Dict[str, Any] = {
+            "frame": rf,
+            "iface_var": iface_var,
+            "action_var": action_var,
+            "target_var": target_var,
+            "members_var": members_var,
+        }
+
+        remove_btn = ttk.Button(
+            rf, text="✕", width=3, command=lambda: self._agg_remove_row(row),
+        )
+        remove_btn.grid(row=0, column=4, sticky=tk.W, padx=2)
+
+        # Auto-detect action/target from the chosen interface's category.
+        iface_combo.bind(
+            "<<ComboboxSelected>>", lambda _e: self._agg_on_iface_selected(row),
+        )
+        iface_var.trace_add("write", lambda *_a: self._agg_on_iface_selected(row))
+
+        self._agg_rows.append(row)
+        self._agg_empty_label.grid_remove()
+
+    def _agg_remove_row(self, row: Dict[str, Any]) -> None:
+        """Remove one interface row and re-flow the remaining rows."""
+        if row not in self._agg_rows:
+            return
+        row["frame"].destroy()
+        self._agg_rows.remove(row)
+        for idx, r in enumerate(self._agg_rows):
+            r["frame"].grid_configure(row=idx)
+        if not self._agg_rows:
+            self._agg_empty_label.grid()
+
+    def _agg_clear_rows(self) -> None:
+        """Destroy all interface rows (used when the section is hidden/reset)."""
+        for row in self._agg_rows:
+            row["frame"].destroy()
+        self._agg_rows.clear()
+        if getattr(self, "_agg_empty_label", None) is not None:
+            self._agg_empty_label.grid()
+
+    def _agg_on_iface_selected(self, row: Dict[str, Any]) -> None:
+        """Auto-set Action/Target from the selected interface's category.
+
+        aggregate -> Expand / Port-Channel; switch -> Expand / Bridge Group;
+        physical (or unknown) -> Promote, keeping whatever target the user
+        already chose. Users can still override either dropdown afterwards.
+        """
+        name = row["iface_var"].get().strip().lower()
+        category = self._agg_iface_index.get(name)
+        if category == "aggregate":
+            row["action_var"].set(AGG_ACTION_EXPAND)
+            row["target_var"].set(AGG_TARGET_PORTCHANNEL)
+        elif category == "switch":
+            row["action_var"].set(AGG_ACTION_EXPAND)
+            row["target_var"].set(AGG_TARGET_BRIDGEGROUP)
+        elif category == "physical":
+            row["action_var"].set(AGG_ACTION_PROMOTE)
+
+    def _agg_refresh_interfaces(self, silent: bool = True) -> None:
+        """Parse the selected FortiGate YAML and index its interfaces.
+
+        Builds a name -> category map (aggregate / switch / physical) used to
+        populate the row dropdowns and auto-detect Expand vs Promote. Best
+        effort: any parse failure leaves the dropdowns editable (free-text)
+        so the feature still works without a readable config.
+        """
+        self._agg_iface_index = {}
+        self._agg_iface_names = []
+
+        path = self.conv_input_var.get().strip()
+        if not path or not os.path.isfile(path):
+            if not silent:
+                self._show_message(
+                    "No Config Selected",
+                    "Select a FortiGate YAML file first, then refresh to list "
+                    "its interfaces.",
+                )
+            self._agg_apply_iface_values()
+            return
+
+        try:
+            import yaml  # lazy: only needed when the builder is used
+            from fortigate_converter import preprocess_yaml_file
+
+            cfg = yaml.safe_load(preprocess_yaml_file(path)) or {}
+        except Exception as exc:  # noqa: BLE001 - best-effort parse, stay editable
+            if not silent:
+                self._show_message(
+                    "Could Not Read Interfaces",
+                    f"Unable to parse interfaces from the config:\n{exc}\n\n"
+                    "You can still type interface names manually.",
+                    kind="warning",
+                )
+            self._agg_apply_iface_values()
+            return
+
+        names: List[str] = []
+
+        def to_ports(value: Any) -> List[str]:
+            """Normalize a FortiGate interface-list value to a list of names.
+            May be a list, a single string, or a space-separated string (e.g.
+            'member' or HA 'hbdev')."""
+            if isinstance(value, str):
+                return value.split()  # FortiGate may store "port5 port6"
+            if isinstance(value, list):
+                return [str(m) for m in value]
+            return []
+
+        # First pass: collect ports that should be hidden from the candidate
+        # list. Two groups:
+        #   member_set  - ports that belong to an aggregate or a virtual switch;
+        #                 only the parent Port-Channel / Bridge Group is a valid
+        #                 target, so showing the members too is confusing.
+        #   special_set - the dedicated management port and HA heartbeat ports;
+        #                 these are infrastructure links, never aggregation
+        #                 targets.
+        member_set: set = set()
+        special_set: set = set()
+        # Conventional FortiGate names for the mgmt and HA interfaces.
+        _MGMT_HA_NAMES = {"mgmt", "mgmt1", "mgmt2", "management", "ha", "ha1", "ha2"}
+
+        for intf_dict in cfg.get("system_interface", []) or []:
+            if not isinstance(intf_dict, dict) or not intf_dict:
+                continue
+            name = next(iter(intf_dict))
+            props = intf_dict[name]
+            nm = str(name).strip().lower()
+            if not isinstance(props, dict):
+                continue
+            if props.get("type") == "aggregate":
+                for m in to_ports(props.get("member", [])):
+                    member_set.add(m.strip().lower())
+            # Dedicated management port: "set dedicated-to management", or a
+            # conventional mgmt*/ha* name.
+            dedicated = str(
+                props.get("dedicated-to", props.get("dedicated_to", "")),
+            ).strip().lower()
+            if dedicated == "management" or nm in _MGMT_HA_NAMES:
+                special_set.add(nm)
+
+        for sw_dict in cfg.get("system_switch-interface", []) or []:
+            if not isinstance(sw_dict, dict) or not sw_dict:
+                continue
+            sw_props = sw_dict[next(iter(sw_dict))]
+            if isinstance(sw_props, dict):
+                for m in to_ports(sw_props.get("member", [])):
+                    member_set.add(m.strip().lower())
+
+        # HA heartbeat / HA-management ports from `config system ha`. hbdev can
+        # interleave interface names with numeric priorities (e.g.
+        # "port10 50 port9 50"), so drop pure-number tokens.
+        ha_cfg = cfg.get("system_ha")
+        if isinstance(ha_cfg, list):
+            ha_cfg = next((x for x in ha_cfg if isinstance(x, dict)), None)
+        if isinstance(ha_cfg, dict):
+            for field in (
+                "hbdev", "ha-mgmt-interface", "ha_mgmt_interface", "session-sync-dev",
+            ):
+                for tok in to_ports(ha_cfg.get(field, [])):
+                    t = tok.strip().lower()
+                    if t and not t.isdigit():
+                        special_set.add(t)
+
+        # Physical / aggregate interfaces live under system_interface. The dict
+        # key is the FortiGate port (e.g. "port1"); the human-facing interface
+        # name is the optional 'alias'. The converter matches a spec by either
+        # one, so we display the alias when present (that's what users recognize)
+        # and index both the alias and the port so matching/auto-detect work
+        # regardless of which the user types.
+        for intf_dict in cfg.get("system_interface", []) or []:
+            if not isinstance(intf_dict, dict) or not intf_dict:
+                continue
+            intf_name = next(iter(intf_dict))
+            props = intf_dict[intf_name]
+            if not isinstance(props, dict):
+                continue
+            if "interface" in props and "vlanid" in props:
+                continue  # VLAN subinterface - not an aggregation candidate
+            intf_type = props.get("type", "physical")
+            if intf_type == "aggregate":
+                category = "aggregate"
+            elif intf_type == "physical":
+                category = "physical"
+            else:
+                continue  # tunnel, loopback, etc.
+            port = str(intf_name).strip()
+            # Hide physical ports that are members of a Port-Channel / Bridge
+            # Group (only the parent is a valid target), plus the dedicated
+            # management and HA ports.
+            if category == "physical" and (
+                port.lower() in member_set or port.lower() in special_set
+            ):
+                continue
+            alias = str(props.get("alias", "")).strip()
+            display = alias or port
+            # Index every identifier the converter will accept.
+            self._agg_iface_index[port.lower()] = category
+            if alias:
+                self._agg_iface_index[alias.lower()] = category
+            names.append(display)
+
+        # Virtual-switch bridge groups live under system_switch-interface
+        for sw_dict in cfg.get("system_switch-interface", []) or []:
+            if not isinstance(sw_dict, dict) or not sw_dict:
+                continue
+            sw_name = next(iter(sw_dict))
+            sw_props = sw_dict[sw_name]
+            sw_alias = ""
+            if isinstance(sw_props, dict):
+                sw_alias = str(sw_props.get("alias", "")).strip()
+            port = str(sw_name).strip()
+            self._agg_iface_index[port.lower()] = "switch"
+            if sw_alias:
+                self._agg_iface_index[sw_alias.lower()] = "switch"
+            names.append(sw_alias or port)
+
+        self._agg_iface_names = sorted(names, key=str.lower)
+        self._agg_apply_iface_values()
+
+        if not silent:
+            self._show_message(
+                "Interfaces Loaded",
+                f"Found {len(self._agg_iface_names)} interface(s) available to "
+                "scale up.",
+            )
+
+    def _agg_apply_iface_values(self) -> None:
+        """Push the current interface-name list into every row's combobox."""
+        for row in self._agg_rows:
+            combo = row["frame"].grid_slaves(row=0, column=0)
+            if combo:
+                combo[0].configure(values=self._agg_iface_names)
+
+    def _update_aggregation_visibility(self) -> None:
+        """Show the builder only for FortiGate -> FTD; hide it otherwise."""
+        frame = getattr(self, "_agg_frame", None)
+        if frame is None:
+            return
+        is_fg_to_ftd = (
+            self._current_source == "FortiGate"
+            and self._current_platform == "Cisco FTD"
+        )
+        if is_fg_to_ftd:
+            if not self._agg_visible:
+                frame.pack(
+                    fill=tk.X, padx=8, pady=4, before=self._conv_btn_frame,
+                )
+                self._agg_visible = True
+            self._agg_refresh_interfaces(silent=True)
+        elif self._agg_visible:
+            frame.pack_forget()
+            self._agg_visible = False
 
     # ==================== IMPORT TAB ====================
     def _build_import_tab(self, notebook: ttk.Notebook) -> None:
@@ -2618,6 +2967,9 @@ class App(tk.Tk):
             self.conv_input_var.set(path)
             # Auto-set output directory to same folder as the input file
             self.conv_outdir_var.set(os.path.dirname(path))
+            # Refresh the aggregation builder's interface list from the new file
+            if self._agg_visible:
+                self._agg_refresh_interfaces(silent=True)
 
     def _browse_outdir(self) -> None:
         d = filedialog.askdirectory(title="Select Output Directory")
@@ -2875,35 +3227,20 @@ class App(tk.Tk):
                 ha_port = self.conv_ha_var.get().strip()
                 argv.extend(["--ha-port", ha_port if ha_port else "none"])
 
-            # EtherChannel expansion/promotion is only supported on FortiGate->FTD
+            # Interface link-aggregation scale-up is only supported on
+            # FortiGate->FTD. Each builder row -> one converter flag, derived
+            # from its (action, target) pair via AGG_FLAG_MAP.
             if not is_pa and not is_asa:
-                expand_raw = self.conv_expand_var.get().strip()
-                if expand_raw:
-                    for spec in expand_raw.replace("\n", ";").split(";"):
-                        spec = spec.strip()
-                        if spec:
-                            argv.extend(["--expand-portchannel", spec])
-
-                promote_raw = self.conv_promote_var.get().strip()
-                if promote_raw:
-                    for spec in promote_raw.replace("\n", ";").split(";"):
-                        spec = spec.strip()
-                        if spec:
-                            argv.extend(["--promote-portchannel", spec])
-
-                bridge_raw = self.conv_bridge_var.get().strip()
-                if bridge_raw:
-                    for spec in bridge_raw.replace("\n", ";").split(";"):
-                        spec = spec.strip()
-                        if spec:
-                            argv.extend(["--expand-bridgegroup", spec])
-
-                bridgepromote_raw = self.conv_bridgepromote_var.get().strip()
-                if bridgepromote_raw:
-                    for spec in bridgepromote_raw.replace("\n", ";").split(";"):
-                        spec = spec.strip()
-                        if spec:
-                            argv.extend(["--promote-bridgegroup", spec])
+                for row in self._agg_rows:
+                    name = row["iface_var"].get().strip()
+                    members = row["members_var"].get().strip()
+                    if not name or not members:
+                        continue
+                    flag = AGG_FLAG_MAP.get(
+                        (row["action_var"].get(), row["target_var"].get())
+                    )
+                    if flag:
+                        argv.extend([flag, f"{name}={members}"])
 
             if self.conv_pretty_var.get():
                 argv.append("--pretty")
@@ -3028,6 +3365,54 @@ class App(tk.Tk):
 
         dlg.wait_window()
         return result[0]
+
+    def _show_message(self, title: str, message: str, kind: str = "info") -> None:
+        """Show a themed modal message dialog (info / warning / error).
+
+        Replacement for messagebox.showinfo/showwarning/showerror, which always
+        use native OS styling and ignore the app theme. The ttk widgets pick up
+        the current theme's styles automatically.
+        """
+        glyph, glyph_fg = {
+            "info": ("ℹ", _ACCENT),     # information source
+            "warning": ("⚠", _ACCENT_H),  # warning sign
+            "error": ("✖", "#ff6b6b"),  # heavy multiplication x
+        }.get(kind, ("ℹ", _ACCENT))
+
+        dlg = tk.Toplevel(self)
+        dlg.title(title)
+        dlg.resizable(False, False)
+        dlg.transient(self)
+        dlg.grab_set()
+
+        body = ttk.Frame(dlg, padding=(20, 18, 20, 8))
+        body.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(
+            body, text=glyph, foreground=glyph_fg, font=("Segoe UI", 20),
+        ).grid(row=0, column=0, sticky=tk.N, padx=(0, 14))
+        ttk.Label(
+            body, text=message, justify=tk.LEFT, wraplength=380,
+        ).grid(row=0, column=1, sticky=tk.W)
+
+        btn_frame = ttk.Frame(dlg)
+        btn_frame.pack(pady=(4, 16))
+
+        def on_ok(_event: Optional[Any] = None) -> None:
+            dlg.destroy()
+
+        ok_btn = ttk.Button(btn_frame, text="OK", command=on_ok, width=10)
+        ok_btn.pack()
+        dlg.bind("<Return>", on_ok)
+        dlg.bind("<Escape>", on_ok)
+        ok_btn.focus_set()
+
+        # Center over the main window
+        dlg.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() - dlg.winfo_width()) // 2
+        y = self.winfo_y() + (self.winfo_height() - dlg.winfo_height()) // 2
+        dlg.geometry(f"+{x}+{y}")
+
+        dlg.wait_window()
 
     def _ask_yes_no(self, title: str, message: str) -> bool:
         """Show a themed modal Yes/No confirmation dialog.
