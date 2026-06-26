@@ -628,7 +628,7 @@ class ASAParser:
 class _TokenStream:
     """Simple forward-only token stream for ACE parsing."""
 
-    def __init__(self, tokens: List[str]):
+    def __init__(self, tokens: List[str]) -> None:
         self._tokens = tokens
         self._pos = 0
 

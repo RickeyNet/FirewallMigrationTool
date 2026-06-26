@@ -30,7 +30,7 @@ class PARouteConverter:
         self,
         fortigate_config: Dict[str, Any],
         interface_name_mapping: Optional[Dict[str, str]] = None,
-    ):
+    ) -> None:
         self.fg_config = fortigate_config
         self.pa_static_routes: List[Dict] = []
         self.failed_items: List[Dict] = []

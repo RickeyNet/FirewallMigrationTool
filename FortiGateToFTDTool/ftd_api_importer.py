@@ -65,7 +65,7 @@ class FTDAPIClient(FTDBaseClient):
     - Error handling and retry logic
     """
 
-    def __init__(self, host: str, username: str, password: str, verify_ssl: bool = False, update_existing: bool = True):
+    def __init__(self, host: str, username: str, password: str, verify_ssl: bool = False, update_existing: bool = True) -> None:
         """
         Initialize the FTD API client.
 
@@ -164,9 +164,9 @@ class FTDAPIClient(FTDBaseClient):
 
         Returns:
             (exit_code, outcome_label) where:
-                0, "SUCCESS"         – every item succeeded or was skipped
-                2, "PARTIAL_FAILURE" – at least one item failed but some succeeded/skipped
-                3, "ALL_FAILED"      – every attempted item failed (nothing created/updated/skipped)
+                0, "SUCCESS"         - every item succeeded or was skipped
+                2, "PARTIAL_FAILURE" - at least one item failed but some succeeded/skipped
+                3, "ALL_FAILED"      - every attempted item failed (nothing created/updated/skipped)
         """
         total_failed = sum(v for k, v in self.stats.items() if k.endswith("_failed"))
         total_ok = sum(
@@ -502,7 +502,7 @@ class FTDAPIClient(FTDBaseClient):
     # REFERENCE CACHING METHODS
     # =========================================================================
     
-    def prefetch_interface_cache(self):
+    def prefetch_interface_cache(self) -> None:
         """
         Prefetch and cache all physical interfaces and etherchannels.
         
@@ -562,7 +562,7 @@ class FTDAPIClient(FTDBaseClient):
         self._caches_populated = True
 
 
-    def prefetch_network_object_cache(self):
+    def prefetch_network_object_cache(self) -> None:
         """
         Prefetch and cache all network objects.
         
@@ -660,7 +660,7 @@ class FTDAPIClient(FTDBaseClient):
             self._etherchannel_cache[hardware_name] = result
         return success, result
     
-    def populate_physical_interface_cache(self):
+    def populate_physical_interface_cache(self) -> None:
         """
         Fetch all existing physical interfaces and cache them by hardwareName for quick lookup.
         Caching behavior:
@@ -713,7 +713,7 @@ class FTDAPIClient(FTDBaseClient):
         except (requests.exceptions.RequestException, ValueError, TypeError, KeyError) as e:
             print(f"[WARN] Exception while fetching physical interfaces: {e}")
     
-    def clear_caches(self):
+    def clear_caches(self) -> None:
         """Clear all reference caches."""
         self._physical_interface_cache.clear()
         self._etherchannel_cache.clear()
@@ -2074,7 +2074,7 @@ class FTDAPIClient(FTDBaseClient):
             print(f"FAIL Deployment error: {e}")
             return False
     
-    def print_statistics(self):
+    def print_statistics(self) -> None:
         """
         Print a summary of import statistics.
         """
@@ -2142,7 +2142,7 @@ class FTDAPIClient(FTDBaseClient):
         print(f"\nOutcome: {outcome} (exit code {exit_code})")
         print(f"{'='*60}")
 
-    def print_failure_summary(self):
+    def print_failure_summary(self) -> None:
         """Print a detailed summary of every item that failed to import."""
         if not self.failed_items:
             return
@@ -2273,7 +2273,7 @@ def physical_interface_matches_json_config(current: Dict, desired_json: Dict) ->
         "monitorInterface",
     )
 
-    def _norm_scalar(v):
+    def _norm_scalar(v: Any) -> Any:
         # Normalize empty strings vs None (FDM sometimes flips these)
         if v == "":
             return None
@@ -3070,7 +3070,7 @@ def import_access_rules(client: FTDAPIClient, filename: str, delay: float = 0.2)
     return all_success
 
 
-def main(argv=None):
+def main(argv: Optional[List[str]] = None) -> int:
     """
     Main function that orchestrates the import process.
 
@@ -3192,7 +3192,7 @@ Examples:
     # Track per-phase timings for simple performance comparisons
     phase_timings = []
 
-    def record_phase(label: str, func, *func_args, **func_kwargs):
+    def record_phase(label: str, func: Callable[..., Any], *func_args: Any, **func_kwargs: Any) -> Any:
         """Run a phase, time it, and capture success for summary output."""
         # Snapshot stats before the phase to compute per-phase counts
         stats_before = dict(client.stats)

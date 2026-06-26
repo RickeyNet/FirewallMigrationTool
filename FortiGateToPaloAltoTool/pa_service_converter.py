@@ -37,7 +37,7 @@ _PA_BUILTIN_SERVICES = {
 class PAServiceConverter:
     """Convert FortiGate service custom objects to PAN-OS service format."""
 
-    def __init__(self, fortigate_config: Dict[str, Any]):
+    def __init__(self, fortigate_config: Dict[str, Any]) -> None:
         self.fg_config = fortigate_config
         self.pa_service_objects: List[Dict] = []
         self.failed_items: List[Dict] = []
@@ -202,7 +202,7 @@ class PAServiceConverter:
         return objects
 
     @staticmethod
-    def _parse_ports(raw) -> List[str]:
+    def _parse_ports(raw: Any) -> List[str]:
         """Parse FortiGate port definitions into a list of PAN-OS port strings.
 
         FortiGate formats:

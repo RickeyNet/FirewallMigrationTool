@@ -42,7 +42,7 @@ from fg_common import sanitize_fg_name, fg_members_str, split_cidr
 class FGInterfaceConverter:
     """Convert PAN-OS interfaces and zones to FortiGate format."""
 
-    def __init__(self, pa_config: Dict[str, Any]):
+    def __init__(self, pa_config: Dict[str, Any]) -> None:
         self.pa_config = pa_config
         self.failed_items: List[Dict] = []
         self._stats = {

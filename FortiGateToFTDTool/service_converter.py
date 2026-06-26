@@ -99,7 +99,7 @@ class ServiceConverter:
     6. Handling special protocols (IP, ICMP, etc.)
     """
     
-    def __init__(self, fortigate_config: Dict[str, Any]):
+    def __init__(self, fortigate_config: Dict[str, Any]) -> None:
         """
         Initialize the converter with FortiGate configuration data.
         

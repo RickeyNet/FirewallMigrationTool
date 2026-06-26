@@ -41,7 +41,7 @@ import time
 import getpass
 import urllib3
 import threading
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from concurrency_utils import run_with_retry, run_indexed_thread_pool
 from platform_profiles import is_ftd_1000, is_ftd_3100
 from ftd_api_base import FTDBaseClient
@@ -56,7 +56,7 @@ class FTDBulkDelete(FTDBaseClient):
     Client for bulk deleting all objects from Cisco FTD via FDM API.
     """
 
-    def __init__(self, host: str, username: str, password: str, verify_ssl: bool = False, debug: bool = False):
+    def __init__(self, host: str, username: str, password: str, verify_ssl: bool = False, debug: bool = False) -> None:
         """
         Initialize the FTD API client.
 
@@ -83,9 +83,9 @@ class FTDBulkDelete(FTDBaseClient):
 
         Returns:
             (exit_code, outcome_label) where:
-                0, "SUCCESS"         – every item succeeded
-                2, "PARTIAL_FAILURE" – at least one item failed but some succeeded
-                3, "ALL_FAILED"      – every attempted item failed
+                0, "SUCCESS"         - every item succeeded
+                2, "PARTIAL_FAILURE" - at least one item failed but some succeeded
+                3, "ALL_FAILED"      - every attempted item failed
         """
         if self.stats["failed"] == 0:
             return 0, "SUCCESS"
@@ -1249,7 +1249,7 @@ class FTDBulkDelete(FTDBaseClient):
             return False
 
 
-def main(argv=None):
+def main(argv: Optional[List[str]] = None) -> int:
     """Main function.
 
     Args:
@@ -1419,7 +1419,7 @@ Examples:
     # Track per-phase timings for performance comparisons
     phase_timings = []
 
-    def record_phase(label: str, func, *func_args, **func_kwargs):
+    def record_phase(label: str, func: Callable[..., bool], *func_args: Any, **func_kwargs: Any) -> bool:
         """Run a phase, time it, and capture success for summary output."""
         stats_before = dict(client.stats)
         start = time.perf_counter()

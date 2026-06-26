@@ -67,7 +67,7 @@ class PANOSBaseClient:
         password: str,
         verify_ssl: bool = False,
         debug: bool = False,
-    ):
+    ) -> None:
         self.host = host
         self.username = username
         self.password = password

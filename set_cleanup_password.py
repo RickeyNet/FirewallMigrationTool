@@ -19,7 +19,7 @@ _ITERATIONS = 600_000
 _HASH_LEN = 32
 
 
-def main():
+def main() -> None:
     if len(sys.argv) != 2 or sys.argv[1] in ("-h", "--help"):
         print("Usage: python set_cleanup_password.py <new-password>")
         sys.exit(1)

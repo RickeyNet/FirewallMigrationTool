@@ -70,7 +70,7 @@ def _convert_pa_ports(port_str: str) -> str:
 class FGServiceConverter:
     """Convert PAN-OS service objects to FortiGate service custom format."""
 
-    def __init__(self, pa_config: Dict[str, Any]):
+    def __init__(self, pa_config: Dict[str, Any]) -> None:
         self.pa_config = pa_config
         self.failed_items: List[Dict] = []
 

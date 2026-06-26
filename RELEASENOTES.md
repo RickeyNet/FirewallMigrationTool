@@ -77,11 +77,11 @@ Public release following v1.4.0. Adds Palo Alto and Cisco FTD → FortiGate conv
 
 Several paths could expose operator passwords in the GUI output window:
 
-- **Command-line echo** — The GUI printed the full argv on every run, including `--password` values, as a banner line before the worker started.
-- **PAN-OS authentication** — Keygen used HTTP GET with credentials in the URL query string; connection-error tracebacks could include the full URL.
-- **FTD authentication** — Failed auth responses dumped raw `response.text`, which FDM can echo back including the submitted password.
-- **API error output** — Additional sites across the FTD importer, cleanup, FTD→FortiGate reader, and PAN-OS validation could print raw response bodies instead of parsed error descriptions.
-- **Exception handler** — Uncaught exceptions could surface Import/Cleanup tab passwords in tracebacks.
+- **Command-line echo** - The GUI printed the full argv on every run, including `--password` values, as a banner line before the worker started.
+- **PAN-OS authentication** - Keygen used HTTP GET with credentials in the URL query string; connection-error tracebacks could include the full URL.
+- **FTD authentication** - Failed auth responses dumped raw `response.text`, which FDM can echo back including the submitted password.
+- **API error output** - Additional sites across the FTD importer, cleanup, FTD→FortiGate reader, and PAN-OS validation could print raw response bodies instead of parsed error descriptions.
+- **Exception handler** - Uncaught exceptions could surface Import/Cleanup tab passwords in tracebacks.
 
 Fixes applied:
 
@@ -420,7 +420,7 @@ Custom HA port override supported via `--ha-port`.
 - **11 selective import filters** - Physical interfaces, EtherChannels, subinterfaces, bridge groups, security zones, address objects, address groups, service objects, service groups, static routes, and access rules
 - **Dependency-ordered import** - Objects created in the correct sequence to satisfy FTD reference requirements
 - **Idempotent operations** - Existing objects are skipped without error
-- **Multithreaded** - Configurable worker count (1–32, default 6) for concurrent object creation
+- **Multithreaded** - Configurable worker count (1-32, default 6) for concurrent object creation
 - **OAuth 2.0 authentication** - Automatic token refresh with thread-safe locking and fallback re-authentication
 - **Retry with exponential backoff** - Up to 4 attempts with jittered delays for transient errors (429, 503, 504)
 - **Optional deployment** - Trigger FTD deployment immediately after import

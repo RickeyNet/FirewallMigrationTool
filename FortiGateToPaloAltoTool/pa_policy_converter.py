@@ -36,7 +36,7 @@ from pa_common import sanitize_name
 class PAPolicyConverter:
     """Convert FortiGate firewall policies to PAN-OS security rules."""
 
-    def __init__(self, fortigate_config: Dict[str, Any]):
+    def __init__(self, fortigate_config: Dict[str, Any]) -> None:
         self.fg_config = fortigate_config
         self.pa_security_rules: List[Dict] = []
         self.failed_items: List[Dict] = []
@@ -179,7 +179,7 @@ class PAPolicyConverter:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _resolve_zones(self, raw) -> List[str]:
+    def _resolve_zones(self, raw: Any) -> List[str]:
         """Map FortiGate interface names to PAN-OS zone names."""
         items = _to_list(raw)
         zones: List[str] = []
@@ -215,7 +215,7 @@ class PAPolicyConverter:
         # Fallback: use sanitized interface name as zone name
         return sanitize_name(interface_name)
 
-    def _resolve_addresses(self, raw) -> List[str]:
+    def _resolve_addresses(self, raw: Any) -> List[str]:
         """Resolve FortiGate address references to PAN-OS names."""
         items = _to_list(raw)
         addresses: List[str] = []
@@ -233,7 +233,7 @@ class PAPolicyConverter:
 
         return addresses
 
-    def _resolve_services(self, raw) -> List[str]:
+    def _resolve_services(self, raw: Any) -> List[str]:
         """Resolve FortiGate service references to PAN-OS service names."""
         items = _to_list(raw)
         services: List[str] = []
@@ -268,7 +268,7 @@ class PAPolicyConverter:
         return services
 
 
-def _to_list(raw) -> List:
+def _to_list(raw: Any) -> List:
     """Normalize raw value to a list."""
     if raw is None:
         return []

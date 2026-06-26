@@ -101,9 +101,9 @@ This checklist tracks technical debt, performance hardening, and usability impro
 
 - [x] Extract shared API base class for importer and cleanup
   - Done: Created `FTDBaseClient` in `FortiGateToFTDTool/ftd_api_base.py` with:
-    - `authenticate()` – unified OAuth 2.0 token flow
-    - `validate_endpoints()` – preflight probe of all FDM endpoints
-    - `get_default_virtual_router_id()` – cached VR discovery
+    - `authenticate()` - unified OAuth 2.0 token flow
+    - `validate_endpoints()` - preflight probe of all FDM endpoints
+    - `get_default_virtual_router_id()` - cached VR discovery
     - Shared `__init__` for host/session/token attributes
   - Both `FTDAPIClient` and `FTDBulkDelete` now inherit from `FTDBaseClient`.
   - `compute_outcome()` remains in each subclass (different stat structures).

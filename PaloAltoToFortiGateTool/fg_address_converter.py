@@ -34,7 +34,7 @@ from fg_common import sanitize_fg_name, split_cidr
 class FGAddressConverter:
     """Convert PAN-OS address objects to FortiGate address format."""
 
-    def __init__(self, pa_config: Dict[str, Any]):
+    def __init__(self, pa_config: Dict[str, Any]) -> None:
         self.pa_config = pa_config
         self.failed_items: List[Dict] = []
         self._stats = {

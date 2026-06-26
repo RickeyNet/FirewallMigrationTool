@@ -56,7 +56,7 @@ class AddressGroupConverter:
     5. Handling edge cases (empty groups, single vs multiple members)
     """
     
-    def __init__(self, fortigate_config: Dict[str, Any], address_object_names: Optional[set] = None):
+    def __init__(self, fortigate_config: Dict[str, Any], address_object_names: Optional[set] = None) -> None:
         """
         Initialize the converter with FortiGate configuration data.
         

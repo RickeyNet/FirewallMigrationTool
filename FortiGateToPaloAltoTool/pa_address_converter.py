@@ -26,7 +26,7 @@ from pa_common import sanitize_name, netmask_to_cidr
 class PAAddressConverter:
     """Convert FortiGate address objects to PAN-OS address format."""
 
-    def __init__(self, fortigate_config: Dict[str, Any]):
+    def __init__(self, fortigate_config: Dict[str, Any]) -> None:
         self.fg_config = fortigate_config
         self.pa_address_objects: List[Dict] = []
         self.failed_items: List[Dict] = []

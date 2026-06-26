@@ -80,7 +80,7 @@ class RouteConverter:
     interface_name_mapping: Optional[Dict[str, str]] = None,
     converted_interfaces: Optional[Dict[str, List[Dict]]] = None,
     debug: bool = False
-    ):
+    ) -> None:
 
         """
         Initialize the converter with FortiGate configuration data.
@@ -165,7 +165,7 @@ class RouteConverter:
         # Track items that failed/were skipped during conversion
         self.failed_items = []
 
-    def _build_network_object_lookup(self):
+    def _build_network_object_lookup(self) -> None:
         """Build lookup from network object name to full object."""
         for obj in self.network_objects:
             name = obj.get('name')
@@ -248,7 +248,7 @@ class RouteConverter:
                 return "NETWORK"
         return "HOST"
     
-    def _build_ip_to_network_object_lookup(self):
+    def _build_ip_to_network_object_lookup(self) -> None:
         """
         Build lookup from IP/CIDR to network object name.
 
@@ -444,7 +444,7 @@ class RouteConverter:
             return []
 
 
-    def _build_interface_object_lookup(self):
+    def _build_interface_object_lookup(self) -> None:
         """Build lookup from interface name to full interface object."""
         for interface_type in ['physical_interfaces', 'subinterfaces', 'etherchannels', 'bridge_groups']:
             interfaces = self.converted_interfaces.get(interface_type, [])
@@ -455,7 +455,7 @@ class RouteConverter:
                     self.name_to_interface_object[name] = intf
 
 
-    def _build_ip_to_interface_name_lookup(self):
+    def _build_ip_to_interface_name_lookup(self) -> None:
         """Build lookup from IP/network to interface name."""
         for interface_type in ['physical_interfaces', 'subinterfaces', 'etherchannels', 'bridge_groups']:
             interfaces = self.converted_interfaces.get(interface_type, [])

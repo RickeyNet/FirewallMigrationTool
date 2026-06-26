@@ -427,7 +427,7 @@ The conversion script automatically adjusts port availability based on your HA p
 | Default on 3105+ (Ethernet1/2) | Ethernet1/2 | Ethernet1/1, 1/3-16 on 16-port models (15 ports) |
 | Custom (Ethernet1/5)  | Ethernet1/5           | Ethernet1/1-4, 1/6-16 (15 ports on ftd-3120) |
 | Custom (Ethernet1/10) | Ethernet1/10          | Ethernet1/1-9, 1/11-24 (23 ports on ftd-3140) |
-| No HA port (default on 1010–2140, or `--ha-port none`) | None | All model data ports available |
+| No HA port (default on 1010-2140, or `--ha-port none`) | None | All model data ports available |
 
 #### Verification
 

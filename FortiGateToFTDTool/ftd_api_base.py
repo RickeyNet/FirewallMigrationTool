@@ -12,7 +12,7 @@ import requests
 import threading
 import time
 import urllib3
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from flair import flair
 
@@ -52,7 +52,7 @@ class FTDBaseClient:
         password: str,
         verify_ssl: bool = False,
         debug: bool = False,
-    ):
+    ) -> None:
         self.host = host
         self.username = username
         self.password = password
@@ -79,7 +79,7 @@ class FTDBaseClient:
     # ------------------------------------------------------------------
     # 401 auto-retry hook
     # ------------------------------------------------------------------
-    def _auto_refresh_hook(self, response, *args, **kwargs):
+    def _auto_refresh_hook(self, response: Any, *args: Any, **kwargs: Any) -> Any:
         """Session hook: on 401, refresh the token once and retry the request.
 
         Skips the auth endpoint itself (refreshing during refresh would loop)
@@ -99,7 +99,7 @@ class FTDBaseClient:
         new_req.headers["Authorization"] = self.session.headers.get("Authorization", "")
         new_req._ftd_retried = True
         # Reuse the original send settings (verify, cert, proxies, timeout).
-        send_kwargs = {
+        send_kwargs: Dict[str, Any] = {
             "verify": kwargs.get("verify", self.session.verify),
             "cert": kwargs.get("cert", self.session.cert),
             "proxies": kwargs.get("proxies"),
@@ -168,7 +168,7 @@ class FTDBaseClient:
             print(flair("auth", "FAIL", detail=f"connection error: {self._scrub_secrets(str(e))}"))
             return False
 
-    def _safe_auth_error(self, response) -> str:
+    def _safe_auth_error(self, response: requests.Response) -> str:
         """Extract a short error description from an FDM auth response.
 
         Avoids dumping the full body because FDM error replies sometimes

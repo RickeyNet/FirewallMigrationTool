@@ -23,7 +23,7 @@ from fg_common import sanitize_fg_name, fg_members_str
 class FGAddressGroupConverter:
     """Convert PAN-OS address groups to FortiGate addrgrp format."""
 
-    def __init__(self, pa_config: Dict[str, Any]):
+    def __init__(self, pa_config: Dict[str, Any]) -> None:
         self.pa_config = pa_config
         self.failed_items: List[Dict] = []
         self._stats = {"total": 0, "skipped": 0}

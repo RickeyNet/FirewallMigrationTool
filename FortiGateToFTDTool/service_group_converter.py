@@ -67,7 +67,7 @@ class ServiceGroupConverter:
     def __init__(self, fortigate_config: Dict[str, Any],
                  split_services: Optional[Set[str]] = None,
                  service_name_mapping: Optional[Dict[str, List[str]]] = None,
-                 skipped_services: Optional[Set[str]] = None):
+                 skipped_services: Optional[Set[str]] = None) -> None:
         """
         Initialize the converter with FortiGate configuration data.
         
@@ -275,7 +275,7 @@ class ServiceGroupConverter:
     
     def set_split_services(self, split_services: Optional[Set[str]] = None,
                            service_name_mapping: Optional[Dict[str, List[str]]] = None,
-                           skipped_services: Optional[Set[str]] = None):
+                           skipped_services: Optional[Set[str]] = None) -> None:
 
         """
         Update the service expansion information.

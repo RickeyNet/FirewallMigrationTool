@@ -51,7 +51,7 @@ class FGPolicyConverter:
         self,
         pa_config: Dict[str, Any],
         service_name_map: Dict[str, str],
-    ):
+    ) -> None:
         self.pa_config = pa_config
         self._service_name_map = service_name_map
         self.failed_items: List[Dict] = []

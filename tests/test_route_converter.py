@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+from typing import Any, Dict
 
 # Ensure the tool modules are importable when running tests from repo root
 ROOT = Path(__file__).resolve().parents[1]
@@ -8,7 +9,7 @@ sys.path.append(str(ROOT / "FortiGateToFTDTool"))
 from route_converter import RouteConverter
 
 
-def _minimal_interface(name: str, ip: str, netmask: str):
+def _minimal_interface(name: str, ip: str, netmask: str) -> Dict[str, Any]:
     return {
         "name": name,
         "ipv4": {
@@ -20,7 +21,7 @@ def _minimal_interface(name: str, ip: str, netmask: str):
     }
 
 
-def test_network_calc_cache_initialized_and_reused():
+def test_network_calc_cache_initialized_and_reused() -> None:
     rc = RouteConverter(
         fortigate_config={"router_static": []},
         converted_interfaces={"physical_interfaces": []},
@@ -38,7 +39,7 @@ def test_network_calc_cache_initialized_and_reused():
     assert second == "10.0.0.0-CACHED"
 
 
-def test_ip_to_interface_lookup_populates_and_uses_cache():
+def test_ip_to_interface_lookup_populates_and_uses_cache() -> None:
     interfaces = {"physical_interfaces": [_minimal_interface("port1", "192.0.2.10", "255.255.255.0")]}
 
     rc = RouteConverter(

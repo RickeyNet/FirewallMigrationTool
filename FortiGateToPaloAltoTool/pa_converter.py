@@ -31,6 +31,7 @@ import json
 import argparse
 import sys
 from pathlib import Path
+from typing import List, Optional
 
 try:
     from pa_address_converter import PAAddressConverter
@@ -120,7 +121,7 @@ def write_json_file(path: str, data: object, pretty: bool = False) -> None:
             json.dump(data, f, separators=(",", ":"))
 
 
-def main(argv=None):
+def main(argv: Optional[List[str]] = None) -> int:
     """Main function that orchestrates the entire conversion process."""
     # ========================================================================
     # STEP 1: Parse command-line arguments

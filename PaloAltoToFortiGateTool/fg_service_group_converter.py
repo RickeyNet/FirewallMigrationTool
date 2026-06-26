@@ -28,7 +28,7 @@ class FGServiceGroupConverter:
         self,
         pa_config: Dict[str, Any],
         service_name_map: Dict[str, str],
-    ):
+    ) -> None:
         self.pa_config = pa_config
         self._name_map = service_name_map
         self.failed_items: List[Dict] = []

@@ -37,6 +37,7 @@ import argparse
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import List, Optional
 
 try:
     from fg_pa_parser import parse_panos_xml
@@ -66,7 +67,7 @@ except ImportError as e:
     raise
 
 
-def main(argv=None):
+def main(argv: Optional[List[str]] = None) -> int:
     """Main function that orchestrates the entire conversion process."""
 
     # ====================================================================

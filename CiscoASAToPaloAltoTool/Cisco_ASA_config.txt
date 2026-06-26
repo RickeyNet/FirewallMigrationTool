@@ -117,7 +117,7 @@ access-list DMZ1-OUT extended permit object-group OG_WEB_SERVICES host 192.168.1
 access-list DMZ1-OUT extended permit object-group OG_DNS_SERVICES host 192.168.1.10 object OBJ_DNS_SERVER
 access-group DMZ1-OUT in interface dmz1
 !
-! Management network – SSH/HTTPS from inside only
+! Management network - SSH/HTTPS from inside only
 access-list MGMT-IN extended permit object-group OG_ADMIN_SERVICES object OBJ_INSIDE_NET host 192.168.100.1
 access-group MGMT-IN in interface management
 !

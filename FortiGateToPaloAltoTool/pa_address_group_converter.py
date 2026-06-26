@@ -23,7 +23,7 @@ from pa_common import sanitize_name
 class PAAddressGroupConverter:
     """Convert FortiGate address groups to PAN-OS address-group format."""
 
-    def __init__(self, fortigate_config: Dict[str, Any]):
+    def __init__(self, fortigate_config: Dict[str, Any]) -> None:
         self.fg_config = fortigate_config
         self.pa_address_groups: List[Dict] = []
         self.failed_items: List[Dict] = []

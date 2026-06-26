@@ -85,7 +85,7 @@ class PolicyConverter:
                  address_group_members: Optional[Dict[str, List[str]]] = None,
                  address_groups: Optional[Set[str]] = None,
                  service_groups: Optional[Set[str]] = None,
-                 interface_name_mapping: Optional[Dict[str, str]] = None):
+                 interface_name_mapping: Optional[Dict[str, str]] = None) -> None:
         """
         Initialize the converter with FortiGate configuration data.
         
@@ -549,7 +549,7 @@ class PolicyConverter:
                            address_group_members: Optional[Dict[str, List[str]]] = None,
                            address_groups: Optional[Set[str]] = None,
                            service_groups: Optional[Set[str]] = None,
-                           interface_name_mapping: Optional[Dict[str, str]] = None):
+                           interface_name_mapping: Optional[Dict[str, str]] = None) -> None:
         """
         Update the service and address mappings.
         

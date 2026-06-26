@@ -66,7 +66,7 @@ import json
 import argparse
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple, cast
+from typing import Dict, List, Optional, Tuple, cast
 
 # Import our custom converter modules
 # These modules contain the logic for converting specific object types
@@ -156,7 +156,7 @@ def preprocess_yaml_file(input_file: str) -> str:
     print(f"  [OK] Pre-processing complete")
     return cleaned_yaml
 
-def parse_expansion_specs(specs) -> dict:
+def parse_expansion_specs(specs: Optional[List[str]]) -> dict:
     """
     Parse --expand-portchannel CLI values into a dict for the InterfaceConverter.
 
@@ -236,7 +236,7 @@ def write_json_file(path: str, data: object, pretty: bool = False) -> None:
         else:
             json.dump(data, f, separators=(",", ":"))
 
-def main(argv=None):
+def main(argv: Optional[List[str]] = None) -> int:
     """
     Main function that orchestrates the entire conversion process.
 

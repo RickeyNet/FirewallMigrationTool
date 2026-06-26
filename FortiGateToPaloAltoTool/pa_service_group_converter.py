@@ -23,7 +23,7 @@ from pa_common import sanitize_name, build_group_lookup
 class PAServiceGroupConverter:
     """Convert FortiGate service groups to PAN-OS service-group format."""
 
-    def __init__(self, fortigate_config: Dict[str, Any]):
+    def __init__(self, fortigate_config: Dict[str, Any]) -> None:
         self.fg_config = fortigate_config
         self.pa_service_groups: List[Dict] = []
         self.failed_items: List[Dict] = []

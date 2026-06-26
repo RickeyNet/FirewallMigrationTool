@@ -639,7 +639,7 @@ def _dedup_name(name: str, used: Set[str]) -> str:
 # Main entry point
 # ═══════════════════════════════════════════════════════════════════════════
 
-def main(argv=None):
+def main(argv: Optional[List[str]] = None) -> int:
     """Main function - parse ASA config and produce PAN-OS JSON files."""
 
     parser = argparse.ArgumentParser(

@@ -25,7 +25,7 @@ from fg_common import sanitize_fg_name, split_cidr
 class FGRouteConverter:
     """Convert PAN-OS static routes to FortiGate router static format."""
 
-    def __init__(self, pa_config: Dict[str, Any]):
+    def __init__(self, pa_config: Dict[str, Any]) -> None:
         self.pa_config = pa_config
         self.failed_items: List[Dict] = []
         self._stats = {

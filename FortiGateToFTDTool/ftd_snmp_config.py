@@ -73,7 +73,7 @@ class FTDSNMPConfig(FTDBaseClient):
     """Pushes SNMPv3 configuration objects to an FDM-managed FTD."""
 
     def __init__(self, host: str, username: str, password: str,
-                 verify_ssl: bool = False, debug: bool = False):
+                 verify_ssl: bool = False, debug: bool = False) -> None:
         super().__init__(host, username, password, verify_ssl, debug)
 
     # ------------------------------------------------------------------
@@ -466,7 +466,7 @@ class FTDSNMPConfig(FTDBaseClient):
             return False
 
 
-def main(argv=None):
+def main(argv: Optional[List[str]] = None) -> int:
     """Main function.
 
     Args:

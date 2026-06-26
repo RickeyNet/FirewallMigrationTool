@@ -146,7 +146,7 @@ def get_supported_models() -> list:
     """Return list of supported firewall model names."""
     return sorted(FTD_MODELS.keys())
 
-def print_supported_models():
+def print_supported_models() -> None:
     """Print a table of supported firewall models."""
     print("\nSupported FTD Firewall Models:")
     print("=" * 70)
@@ -199,7 +199,7 @@ class InterfaceConverter:
     Use set_target_model() to configure for a specific firewall.
     """
     
-    def __init__(self, fortigate_config: Dict[str, Any], target_model: str = 'ftd-3120', custom_ha_port: str = None): # pyright: ignore[reportArgumentType]
+    def __init__(self, fortigate_config: Dict[str, Any], target_model: str = 'ftd-3120', custom_ha_port: str = None) -> None: # pyright: ignore[reportArgumentType]
         """
         Initialize the converter with FortiGate configuration data.
         
@@ -277,7 +277,7 @@ class InterfaceConverter:
         # count, incl. the original port) or list of extra FTD ports to add.
         self.promote_to_etherchannel = {}
     
-    def set_target_model(self, model: str):
+    def set_target_model(self, model: str) -> None:
         """
         Set the target FTD firewall model.
         
@@ -336,7 +336,7 @@ class InterfaceConverter:
             print(f"  HA port (skipped): {self.ha_port}")
         print(f"  Port assignment order: Starting from Ethernet1/{self.total_ports} down to Ethernet1/1")
     
-    def _validate_custom_ha_port(self, ha_port: str):
+    def _validate_custom_ha_port(self, ha_port: str) -> None:
         """
         Validate that the custom HA port is valid for the target model.
         
@@ -377,7 +377,7 @@ class InterfaceConverter:
             print(f"\nWARNING: Using Ethernet1/1 as HA port. This is typically the first data port.")
             print(f"         Ensure this doesn't conflict with your network design.\n")
 
-    def set_port_mapping(self, mapping: Dict[str, str]):
+    def set_port_mapping(self, mapping: Dict[str, str]) -> None:
         """
         Set explicit port mapping for specific interfaces.
         
@@ -403,7 +403,7 @@ class InterfaceConverter:
             if ftd_port in self.available_ftd_ports:
                 self.available_ftd_ports.remove(ftd_port)
     
-    def set_skip_ports(self, ports: Set[str]):
+    def set_skip_ports(self, ports: Set[str]) -> None:
         """
         Set additional FTD ports to skip.
         
@@ -416,7 +416,7 @@ class InterfaceConverter:
         # Remove from available list
         self.available_ftd_ports = [p for p in self.available_ftd_ports if p not in ports]
 
-    def set_etherchannel_expansion(self, expansion: Dict[str, Any]):
+    def set_etherchannel_expansion(self, expansion: Dict[str, Any]) -> None:
         """
         Configure EtherChannel member expansion to scale up link aggregation
         during migration.
@@ -447,7 +447,7 @@ class InterfaceConverter:
             normalized[str(key).strip().lower()] = spec
         self.etherchannel_expansion = normalized
 
-    def _get_expansion_spec(self, fg_name: str, alias: str, ftd_name: str):
+    def _get_expansion_spec(self, fg_name: str, alias: str, ftd_name: str) -> Any:
         """Look up the expansion spec for an aggregate interface by any of its
         identifiers (FortiGate name, alias, or sanitized FTD name)."""
         if not self.etherchannel_expansion:
@@ -457,7 +457,7 @@ class InterfaceConverter:
                 return self.etherchannel_expansion[str(key).strip().lower()]
         return None
 
-    def set_etherchannel_promotion(self, promotion: Dict[str, Any]):
+    def set_etherchannel_promotion(self, promotion: Dict[str, Any]) -> None:
         """
         Configure promotion of plain physical interfaces to NEW EtherChannels.
 
@@ -493,7 +493,7 @@ class InterfaceConverter:
             normalized[str(key).strip().lower()] = spec
         self.promote_to_etherchannel = normalized
 
-    def _get_promotion_spec(self, fg_name: str, alias: str):
+    def _get_promotion_spec(self, fg_name: str, alias: str) -> Any:
         """Look up the promotion spec for a physical interface by its FortiGate
         name or alias (case-insensitive)."""
         if not self.promote_to_etherchannel:
@@ -503,7 +503,7 @@ class InterfaceConverter:
                 return self.promote_to_etherchannel[str(key).strip().lower()]
         return None
 
-    def _build_ipv4_config(self, ip_config) -> Optional[Dict]:
+    def _build_ipv4_config(self, ip_config: Any) -> Optional[Dict]:
         """
         Build an FTD interfaceipv4 block from a FortiGate 'ip' value
         (a [address, netmask] list). Returns None if there is no usable static
@@ -602,7 +602,7 @@ class InterfaceConverter:
             self.available_ftd_ports.remove(ftd_hardware)
         return True
 
-    def _apply_etherchannel_expansion(self, fg_name: str, spec,
+    def _apply_etherchannel_expansion(self, fg_name: str, spec: Any,
                                       ftd_members: List[Dict]) -> List[str]:
         """
         Add extra member links to an EtherChannel per the expansion spec.
@@ -949,7 +949,7 @@ class InterfaceConverter:
             'security_zones': self.security_zones
         }
     
-    def _generate_security_zones(self):
+    def _generate_security_zones(self) -> None:
         """
         Generate security zones for all converted interfaces.
         
@@ -1085,7 +1085,7 @@ class InterfaceConverter:
             else:
                 print(f"    Created zone: {zone_name} (interface: {interfaces[0]['hardwareName']})")
 
-    def _convert_physical_interface(self, fg_name: str, properties: Dict):
+    def _convert_physical_interface(self, fg_name: str, properties: Dict) -> None:
         """Convert a FortiGate physical interface to FTD format."""
         
         # Skip certain interfaces
@@ -1193,7 +1193,7 @@ class InterfaceConverter:
 
         print(f"    Converted: {fg_name} -> {ftd_name} ({ftd_hardware})")
 
-    def _promote_physical_to_etherchannel(self, fg_name: str, properties: Dict, spec):
+    def _promote_physical_to_etherchannel(self, fg_name: str, properties: Dict, spec: Any) -> None:
         """
         Promote a plain FortiGate physical interface to a NEW FTD EtherChannel so
         it can carry multiple 10G member links.
@@ -1276,7 +1276,7 @@ class InterfaceConverter:
         member_str = ', '.join([m['hardwareName'] for m in ftd_members])
         print(f"    Promoted: {fg_name} -> {ftd_name} (Port-channel{etherchannel_id}) members: [{member_str}]")
 
-    def _convert_aggregate_interface(self, fg_name: str, properties: Dict):
+    def _convert_aggregate_interface(self, fg_name: str, properties: Dict) -> None:
         """Convert a FortiGate aggregate interface to FTD EtherChannel."""
         
         # Get interface name
@@ -1347,7 +1347,7 @@ class InterfaceConverter:
         member_str = ', '.join([m['hardwareName'] for m in ftd_members])
         print(f"    Converted: {fg_name} -> {ftd_name} (Port-channel{etherchannel_id}) members: [{member_str}]")
     
-    def _convert_switch_interface(self, fg_name: str, properties: Dict):
+    def _convert_switch_interface(self, fg_name: str, properties: Dict) -> None:
         """Convert a FortiGate switch interface to FTD Bridge Group."""
         
         # Get interface name
@@ -1480,7 +1480,7 @@ class InterfaceConverter:
         
         return {}
     
-    def _convert_vlan_interface(self, fg_name: str, properties: Dict):
+    def _convert_vlan_interface(self, fg_name: str, properties: Dict) -> None:
         """
         Convert a FortiGate VLAN interface to FTD Subinterface.
         
@@ -1643,7 +1643,7 @@ class InterfaceConverter:
                 return candidate
         return None
 
-    def _resolve_vlan_conflicts(self):
+    def _resolve_vlan_conflicts(self) -> None:
         """
         Remap duplicate VLAN IDs so every subinterface is unique device-wide.
 

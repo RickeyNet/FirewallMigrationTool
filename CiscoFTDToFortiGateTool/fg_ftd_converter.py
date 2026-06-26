@@ -840,7 +840,7 @@ def _write_conf(sections: List[str], output_path: str, host: str) -> None:
 # main()
 # ===========================================================================
 
-def main(argv=None) -> int:
+def main(argv: Optional[List[str]] = None) -> int:
     """Entry point called by the GUI and CLI."""
 
     parser = argparse.ArgumentParser(

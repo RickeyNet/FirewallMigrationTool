@@ -99,7 +99,7 @@ def get_supported_models() -> list:
     return sorted(PA_MODELS.keys())
 
 
-def print_supported_models():
+def print_supported_models() -> None:
     """Print a table of supported Palo Alto models."""
     print("\nSupported Palo Alto Models:")
     print("=" * 70)
@@ -132,7 +132,7 @@ class PAInterfaceConverter:
         self,
         fortigate_config: Dict[str, Any],
         target_model: str = "pa-440",
-    ):
+    ) -> None:
         self.fg_config = fortigate_config
         self.target_model = target_model
         self.model_info = PA_MODELS.get(target_model, PA_MODELS["pa-440"])

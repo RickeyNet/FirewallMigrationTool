@@ -47,7 +47,7 @@ class PANOSBulkDelete(PANOSBaseClient):
         verify_ssl: bool = False,
         debug: bool = False,
         dry_run: bool = False,
-    ):
+    ) -> None:
         super().__init__(host, username, password, verify_ssl, debug)
         self.dry_run = dry_run
 
@@ -253,7 +253,7 @@ class PANOSBulkDelete(PANOSBaseClient):
         self.stats["deleted"] += reset_count
         print(f"\n  ethernet interfaces reset: {reset_count}")
 
-    def print_summary(self):
+    def print_summary(self) -> None:
         """Print cleanup summary."""
         print(f"\n{'=' * 60}")
         print("CLEANUP SUMMARY")
@@ -266,7 +266,7 @@ class PANOSBulkDelete(PANOSBaseClient):
         print(f"{'=' * 60}")
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(
         description="Bulk delete objects from Palo Alto PAN-OS",
         formatter_class=argparse.RawDescriptionHelpFormatter,

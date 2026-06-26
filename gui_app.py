@@ -22,7 +22,7 @@ import io
 import json
 import queue
 import traceback
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # Path setup - ensure converter modules are importable regardless of CWD
@@ -52,7 +52,7 @@ _TOOL_DIRS = {
 }
 
 
-def _load_runtime_profile():
+def _load_runtime_profile() -> Dict[str, Any]:
     profile_path = os.environ.get("FMT_BUILD_PROFILE_FILE", "").strip()
     candidates = [profile_path] if profile_path else []
     candidates.extend([
@@ -75,7 +75,7 @@ _RUNTIME_PROFILE = _load_runtime_profile()
 _ENABLED_TOOL_DIR_NAMES = _RUNTIME_PROFILE.get("tool_dirs") or list(_TOOL_DIRS)
 
 
-def _profile_feature(name, default=True):
+def _profile_feature(name: str, default: bool = True) -> bool:
     features = _RUNTIME_PROFILE.get("features")
     if isinstance(features, dict) and name in features:
         return bool(features[name])
@@ -173,14 +173,14 @@ PA_MODEL_LIST = [
     "pa-5220",
 ]
 
-def _profile_list(key, default):
+def _profile_list(key: str, default: List[str]) -> List[str]:
     value = _RUNTIME_PROFILE.get(key)
     if isinstance(value, list) and all(isinstance(item, str) for item in value):
         return value or default
     return default
 
 
-def _profile_text(key, default=""):
+def _profile_text(key: str, default: str = "") -> str:
     value = _RUNTIME_PROFILE.get(key)
     return value.strip() if isinstance(value, str) and value.strip() else default
 
@@ -215,7 +215,7 @@ DEFAULT_OUTPUT_BASES = {"", "ftd_config", "pa_config", "fg_config"}
 DEFAULT_DIR = APP_DIR
 
 
-def _profile_title(default):
+def _profile_title(default: str) -> str:
     if APP_TITLE_OVERRIDE:
         return APP_TITLE_OVERRIDE.format(version=APP_VERSION)
     return default
@@ -233,7 +233,7 @@ _SENSITIVE_FLAGS = frozenset({
 })
 
 
-def _redact_argv(argv):
+def _redact_argv(argv: List[str]) -> List[str]:
     """Return a copy of ``argv`` with values following sensitive flags
     replaced by ``***REDACTED***``. Used before echoing the command line to
     the GUI output widget so admin passwords don't leak into the run log.
@@ -257,20 +257,20 @@ def _redact_argv(argv):
 class _QueueWriter(io.TextIOBase):
     """Thread-safe stdout/stderr substitute that feeds text into a Queue."""
 
-    def __init__(self, q: queue.Queue, tag):
+    def __init__(self, q: queue.Queue, tag: Any) -> None:
         super().__init__()
         self._q = q
         self._tag = tag
 
-    def write(self, text):
+    def write(self, text: str) -> int:
         if text:
             self._q.put((self._tag, text))
         return len(text) if text else 0
 
-    def flush(self):
+    def flush(self) -> None:
         pass
 
-    def isatty(self):
+    def isatty(self) -> bool:
         return False
 
 
@@ -394,7 +394,7 @@ APP_VERSION = "1.5.1"
 class App(tk.Tk):
     """Main application window."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self._set_window_title(f"Firewall Migration Tool v{APP_VERSION}")
         self.geometry("960x720")
@@ -431,13 +431,13 @@ class App(tk.Tk):
         self._apply_theme(THEMES[self._current_theme])
         self._build_ui()
 
-    def _set_window_title(self, default):
+    def _set_window_title(self, default: str) -> None:
         self.title(_profile_title(default))
 
     # ------------------------------------------------------------------
     # Theme engine
     # ------------------------------------------------------------------
-    def _apply_theme(self, t: dict):
+    def _apply_theme(self, t: dict) -> None:
         """Apply a theme dictionary to all ttk styles and tk widget defaults."""
         bg       = t["bg"]
         inp      = t["input"]
@@ -635,7 +635,7 @@ class App(tk.Tk):
             except tk.TclError:
                 pass
 
-    def _on_theme_change(self, event=None):
+    def _on_theme_change(self, event: Optional[Any] = None) -> None:
         """Handle theme selector change."""
         name = self.theme_var.get()
         if name == self._current_theme:
@@ -646,7 +646,7 @@ class App(tk.Tk):
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
-    def _build_ui(self):
+    def _build_ui(self) -> None:
         # Platform selector bar
         platform_frame = ttk.Frame(self)
         platform_frame.pack(fill=tk.X, padx=6, pady=(6, 0))
@@ -722,7 +722,7 @@ class App(tk.Tk):
             anchor=tk.W, padding=(6, 2),
         ).pack(side=tk.BOTTOM, fill=tk.X)
 
-    def _targets_for_source(self, source):
+    def _targets_for_source(self, source: str) -> List[str]:
         target_map = {
             "FortiGate": ["Cisco FTD", "Palo Alto PAN-OS"],
             "Cisco ASA": ["Palo Alto PAN-OS"],
@@ -732,13 +732,13 @@ class App(tk.Tk):
         candidates = target_map.get(source, PLATFORM_LIST)
         return [target for target in candidates if target in PLATFORM_LIST]
 
-    def _configure_target_selector(self, targets):
+    def _configure_target_selector(self, targets: List[str]) -> None:
         state = tk.DISABLED if len(targets) <= 1 else "readonly"
         self.platform_combo.configure(values=targets, state=state)
         if targets and self.platform_var.get() not in targets:
             self.platform_var.set(targets[0])
 
-    def _on_source_change(self, event=None):
+    def _on_source_change(self, event: Optional[Any] = None) -> None:
         """Handle source platform change - update target list and input label."""
         source = self.source_var.get()
         self._current_source = source
@@ -784,7 +784,7 @@ class App(tk.Tk):
             self.conv_input_label.configure(text="Input YAML:")
             self.conv_browse_btn.configure(state=tk.NORMAL)
 
-    def _on_ftd_mode_change(self):
+    def _on_ftd_mode_change(self) -> None:
         """Toggle between live FDM API and JSON file input for Cisco FTD source."""
         if self.conv_ftd_file_var.get():
             # File mode - enable browse, update labels, hide username field
@@ -804,7 +804,7 @@ class App(tk.Tk):
             self.conv_ha_var.set("admin")
             self.conv_ha_hint.configure(text="FTD username (leave blank for 'admin')")
 
-    def _on_platform_change(self, event=None):
+    def _on_platform_change(self, event: Optional[Any] = None) -> None:
         """Handle platform selector change - update model lists and labels."""
         platform = self.platform_var.get()
         self._current_platform = platform
@@ -963,7 +963,7 @@ class App(tk.Tk):
 
             self._set_window_title(f"FortiGate to Cisco FTD Converter v{APP_VERSION}")
 
-    def _retitle_import_cleanup_tabs(self, target):
+    def _retitle_import_cleanup_tabs(self, target: str) -> None:
         """Update Import/Cleanup tab titles, section frame labels, and enabled state
         for the target platform. When target is FortiGate, API-based import/cleanup
         is not supported and the tab forms are disabled.
@@ -1012,14 +1012,16 @@ class App(tk.Tk):
                 state=tk.NORMAL if has_custom_password() else tk.DISABLED,  # pyright: ignore[reportOptionalCall]
             )
 
-    def _set_tab_enabled(self, tab, skip=(), enabled=True):
+    def _set_tab_enabled(
+        self, tab: Any, skip: Tuple[Any, ...] = (), enabled: bool = True,
+    ) -> None:
         """Recursively enable/disable all interactive widgets in a tab.
         `skip` holds widgets (like the output Text area) whose state is managed elsewhere.
         Combobox widgets are restored to 'readonly' rather than 'normal' so the
         dropdown arrow stays visible without allowing free-text editing."""
         state = tk.NORMAL if enabled else tk.DISABLED
 
-        def walk(widget):
+        def walk(widget: Any) -> None:
             for child in widget.winfo_children():
                 if child in skip:
                     continue
@@ -1035,7 +1037,7 @@ class App(tk.Tk):
         walk(tab)
 
     # ==================== CONVERT TAB ====================
-    def _build_convert_tab(self, notebook):
+    def _build_convert_tab(self, notebook: ttk.Notebook) -> None:
         tab = ttk.Frame(notebook)
         notebook.add(tab, text="  Convert  ")
 
@@ -1150,7 +1152,7 @@ class App(tk.Tk):
         self.conv_output = self._make_output_area(tab)
 
     # ==================== IMPORT TAB ====================
-    def _build_import_tab(self, notebook):
+    def _build_import_tab(self, notebook: ttk.Notebook) -> None:
         tab = ttk.Frame(notebook)
         notebook.add(tab, text="  Import to FTD  ")
         self._imp_tab = tab
@@ -1270,7 +1272,7 @@ class App(tk.Tk):
         self.imp_output = self._make_output_area(tab)
 
     # ==================== CLEANUP TAB ====================
-    def _build_cleanup_tab(self, notebook):
+    def _build_cleanup_tab(self, notebook: ttk.Notebook) -> None:
         tab = ttk.Frame(notebook)
         notebook.add(tab, text="  Cleanup FTD  ")
         self._cln_tab = tab
@@ -1396,7 +1398,7 @@ class App(tk.Tk):
         self.cln_output = self._make_output_area(tab)
 
     # ==================== SNMP TAB ====================
-    def _build_snmp_tab(self, notebook):
+    def _build_snmp_tab(self, notebook: ttk.Notebook) -> None:
         """SNMPv3 configuration tab - FTD targets only (FDM has no SNMP GUI).
 
         The tab is hidden whenever the target platform is not Cisco FTD;
@@ -1644,12 +1646,12 @@ class App(tk.Tk):
 
         self.snmp_output = self._make_output_area(right)
 
-    def _toggle_snmp_trap_events(self):
+    def _toggle_snmp_trap_events(self) -> None:
         state = tk.NORMAL if self.snmp_trapevents_enable_var.get() else tk.DISABLED
         for check in self._snmp_trap_checks:
             check.configure(state=state)
 
-    def _run_snmp(self):
+    def _run_snmp(self) -> None:
         host = self.snmp_host_var.get().strip()
         password = self.snmp_pass_var.get()
         nms_ip = self.snmp_nms_var.get().strip()
@@ -1720,7 +1722,7 @@ class App(tk.Tk):
         self._run_in_thread(snmp_main, argv, self.snmp_output, "SNMP Config")
 
     # ==================== CONFIG VIEWER TAB ====================
-    def _build_viewer_tab(self, notebook):
+    def _build_viewer_tab(self, notebook: ttk.Notebook) -> None:
         tab = ttk.Frame(notebook)
         notebook.add(tab, text="  Config Viewer  ")
 
@@ -1811,12 +1813,12 @@ class App(tk.Tk):
         # Storage for discovered file paths
         self._viewer_files: list[str] = []
 
-    def _browse_viewer_dir(self):
+    def _browse_viewer_dir(self) -> None:
         d = filedialog.askdirectory(title="Select Config Files Directory")
         if d:
             self.viewer_dir_var.set(d)
 
-    def _load_viewer_files(self):
+    def _load_viewer_files(self) -> None:
         """Scan the config directory for JSON files matching the base name."""
         config_dir = self.viewer_dir_var.get().strip()
         base = self.viewer_base_var.get().strip() or "ftd_config"
@@ -1838,7 +1840,7 @@ class App(tk.Tk):
         for f in files:
             self.viewer_listbox.insert(tk.END, os.path.basename(f))
 
-    def _on_viewer_select(self, event):
+    def _on_viewer_select(self, event: Optional[Any]) -> None:
         """Display the selected JSON file in the viewer."""
         sel = self.viewer_listbox.curselection()
         if not sel:
@@ -1869,11 +1871,11 @@ class App(tk.Tk):
         self._viewer_clear_highlights()
         self._viewer_match_label.configure(text="")
 
-    def _viewer_clear_highlights(self):
+    def _viewer_clear_highlights(self) -> None:
         self.viewer_text.tag_remove("search_hit", "1.0", tk.END)
         self.viewer_text.tag_remove("search_current", "1.0", tk.END)
 
-    def _viewer_find(self, forwards: bool = True):
+    def _viewer_find(self, forwards: bool = True) -> None:
         query = self._viewer_search_var.get()
         if not query:
             self._viewer_clear_highlights()
@@ -1935,14 +1937,14 @@ class App(tk.Tk):
 
         self._viewer_match_label.configure(text=f"{match_num} of {total}")
 
-    def _viewer_find_next(self):
+    def _viewer_find_next(self) -> None:
         self._viewer_find(forwards=True)
 
-    def _viewer_find_prev(self):
+    def _viewer_find_prev(self) -> None:
         self._viewer_find(forwards=False)
 
     # ==================== HOW-TO GUIDE TAB ====================
-    def _build_help_tab(self, notebook):
+    def _build_help_tab(self, notebook: ttk.Notebook) -> None:
         tab = ttk.Frame(notebook)
         notebook.add(tab, text="  How-To Guide  ")
 
@@ -1983,7 +1985,7 @@ class App(tk.Tk):
         help_text.tag_configure("separator", font=("Segoe UI", 4), spacing1=6, spacing3=6)
 
         # Helper to insert styled text
-        def put(text, *tags):
+        def put(text: str, *tags: str) -> None:
             help_text.insert(tk.END, text, tags)
 
         help_text.configure(state=tk.NORMAL)
@@ -2520,7 +2522,7 @@ class App(tk.Tk):
     # ------------------------------------------------------------------
     # Shared widgets / helpers
     # ------------------------------------------------------------------
-    def _make_output_area(self, parent):
+    def _make_output_area(self, parent: Any) -> tk.Text:
         """Create a scrollable text widget for command output."""
         frame = ttk.Frame(parent)
         frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
@@ -2540,19 +2542,19 @@ class App(tk.Tk):
         self._tk_widgets.append(text)
         return text
 
-    def _append_output(self, text_widget, content):
+    def _append_output(self, text_widget: tk.Text, content: str) -> None:
         """Append text to a read-only text widget and auto-scroll."""
         text_widget.configure(state=tk.NORMAL)
         text_widget.insert(tk.END, content)
         text_widget.see(tk.END)
         text_widget.configure(state=tk.DISABLED)
 
-    def _clear_output(self, text_widget):
+    def _clear_output(self, text_widget: tk.Text) -> None:
         text_widget.configure(state=tk.NORMAL)
         text_widget.delete("1.0", tk.END)
         text_widget.configure(state=tk.DISABLED)
 
-    def _browse_yaml(self):
+    def _browse_yaml(self) -> None:
         if self._current_source == "Cisco ASA":
             path = filedialog.askopenfilename(
                 title="Select Cisco ASA Configuration File",
@@ -2593,17 +2595,17 @@ class App(tk.Tk):
             # Auto-set output directory to same folder as the input file
             self.conv_outdir_var.set(os.path.dirname(path))
 
-    def _browse_outdir(self):
+    def _browse_outdir(self) -> None:
         d = filedialog.askdirectory(title="Select Output Directory")
         if d:
             self.conv_outdir_var.set(d)
 
-    def _browse_impdir(self):
+    def _browse_impdir(self) -> None:
         d = filedialog.askdirectory(title="Select Config Files Directory")
         if d:
             self.imp_dir_var.set(d)
 
-    def _set_buttons_state(self, state):
+    def _set_buttons_state(self, state: str) -> None:
         """Enable or disable all run buttons (and toggle cancel buttons inversely).
         Import/Cleanup run buttons stay disabled when the current target locks them out."""
         cancel_state = tk.DISABLED if state == tk.NORMAL else tk.NORMAL
@@ -2630,7 +2632,13 @@ class App(tk.Tk):
     # ------------------------------------------------------------------
     # In-process execution engine
     # ------------------------------------------------------------------
-    def _run_in_thread(self, func, argv, text_widget, label="Operation"):
+    def _run_in_thread(
+        self,
+        func: Any,
+        argv: List[str],
+        text_widget: tk.Text,
+        label: str = "Operation",
+    ) -> None:
         """
         Run a module's main(argv) in a background thread while capturing
         all stdout/stderr output and streaming it to the given text widget.
@@ -2647,7 +2655,7 @@ class App(tk.Tk):
         self._running = True
         self.status_var.set(f"Running: {label}...")
 
-        def _worker():
+        def _worker() -> None:
             old_stdout, old_stderr = sys.stdout, sys.stderr
             writer = _QueueWriter(self._output_queue, text_widget)
             sys.stdout = writer
@@ -2706,7 +2714,7 @@ class App(tk.Tk):
                 text = text.replace(pw, "***REDACTED***")
         return text
 
-    def _poll_output(self):
+    def _poll_output(self) -> None:
         """Drain the output queue and schedule the next poll."""
         try:
             while True:
@@ -2722,7 +2730,7 @@ class App(tk.Tk):
             pass
         self.after(50, self._poll_output)
 
-    def _cancel_operation(self):
+    def _cancel_operation(self) -> None:
         """Cancel the currently running operation by raising SystemExit in the worker thread."""
         if not self._running or self._worker_thread is None:
             return
@@ -2740,7 +2748,7 @@ class App(tk.Tk):
     # ------------------------------------------------------------------
     # Run commands
     # ------------------------------------------------------------------
-    def _run_convert(self):
+    def _run_convert(self) -> None:
         is_asa = self._current_source == "Cisco ASA"
         is_pa_source = self._current_source == "Palo Alto"
         is_ftd_source = self._current_source == "Cisco FTD"
@@ -2878,7 +2886,7 @@ class App(tk.Tk):
 
         self._run_in_thread(main_fn, argv, self.conv_output, "Convert")
 
-    def _run_import(self):
+    def _run_import(self) -> None:
         # Import to FortiGate via API is not supported - config is applied manually
         if self._current_platform == "FortiGate" or self._current_source == "Cisco FTD":
             messagebox.showinfo(
@@ -2945,7 +2953,7 @@ class App(tk.Tk):
     # ------------------------------------------------------------------
     # Cleanup password management
     # ------------------------------------------------------------------
-    def _prompt_password(self, title, prompt):
+    def _prompt_password(self, title: str, prompt: str) -> Optional[str]:
         """Show a modal dialog that asks for a single masked password.
 
         Returns the entered string, or None if the user cancelled.
@@ -2968,11 +2976,11 @@ class App(tk.Tk):
         btn_frame = ttk.Frame(dlg)
         btn_frame.pack(pady=12)
 
-        def on_ok(_event=None):
+        def on_ok(_event: Optional[Any] = None) -> None:
             result[0] = pw_var.get()
             dlg.destroy()
 
-        def on_cancel(_event=None):
+        def on_cancel(_event: Optional[Any] = None) -> None:
             dlg.destroy()
 
         entry.bind("<Return>", on_ok)
@@ -2983,7 +2991,7 @@ class App(tk.Tk):
         dlg.wait_window()
         return result[0]
 
-    def _ask_yes_no(self, title, message):
+    def _ask_yes_no(self, title: str, message: str) -> bool:
         """Show a themed modal Yes/No confirmation dialog.
 
         Replacement for messagebox.askyesno, which always uses native OS
@@ -3004,11 +3012,11 @@ class App(tk.Tk):
         btn_frame = ttk.Frame(dlg)
         btn_frame.pack(pady=(4, 16))
 
-        def on_yes(_event=None):
+        def on_yes(_event: Optional[Any] = None) -> None:
             result[0] = True
             dlg.destroy()
 
-        def on_no(_event=None):
+        def on_no(_event: Optional[Any] = None) -> None:
             dlg.destroy()
 
         yes_btn = ttk.Button(btn_frame, text="Yes", command=on_yes, width=10)
@@ -3029,7 +3037,7 @@ class App(tk.Tk):
         dlg.wait_window()
         return result[0]
 
-    def _manage_cleanup_password(self):
+    def _manage_cleanup_password(self) -> None:
         """Change the cleanup password (requires current password first)."""
         # Verify current password
         current = self._prompt_password(
@@ -3068,7 +3076,7 @@ class App(tk.Tk):
         self.cln_reset_pw_btn.configure(state=tk.NORMAL)
         messagebox.showinfo("Success", "Cleanup password has been changed.")
 
-    def _reset_cleanup_password(self):
+    def _reset_cleanup_password(self) -> None:
         """Reset to the built-in default password (requires current password)."""
         current = self._prompt_password(
             "Verify Password",
@@ -3107,7 +3115,7 @@ class App(tk.Tk):
     # ------------------------------------------------------------------
     # Cleanup execution
     # ------------------------------------------------------------------
-    def _run_cleanup(self):
+    def _run_cleanup(self) -> None:
         if not self._cleanup_enabled:
             return
         # Cleanup for FortiGate via API is not supported
@@ -3221,7 +3229,7 @@ class App(tk.Tk):
             self._run_in_thread(cleanup_main, argv, self.cln_output, "Cleanup")
 
 
-def main():
+def main() -> None:
     app = App()
     app.mainloop()
 

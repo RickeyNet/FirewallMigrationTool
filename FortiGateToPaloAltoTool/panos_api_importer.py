@@ -25,7 +25,7 @@ import json
 import argparse
 import sys
 import getpass
-from typing import Any, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 
 from panos_api_base import PANOSBaseClient, XPATHS
 
@@ -41,7 +41,7 @@ class PANOSImporter(PANOSBaseClient):
         verify_ssl: bool = False,
         debug: bool = False,
         dry_run: bool = False,
-    ):
+    ) -> None:
         super().__init__(host, username, password, verify_ssl, debug)
         self.dry_run = dry_run
 
@@ -484,7 +484,7 @@ class PANOSImporter(PANOSBaseClient):
         self,
         objects: List[Dict],
         xpath: str,
-        xml_builder,
+        xml_builder: Callable[[Dict], str],
         stat_key: str,
         label: str,
     ) -> bool:
@@ -533,7 +533,7 @@ class PANOSImporter(PANOSBaseClient):
 
         return fail_count == 0
 
-    def _record_failure(self, name: str, category: str, reason: str):
+    def _record_failure(self, name: str, category: str, reason: str) -> None:
         """Record a failed import item."""
         self.failed_items.append({
             "name": name,
@@ -544,7 +544,7 @@ class PANOSImporter(PANOSBaseClient):
     # ------------------------------------------------------------------
     # Summary
     # ------------------------------------------------------------------
-    def print_summary(self):
+    def print_summary(self) -> None:
         """Print import summary."""
         print(f"\n{'=' * 60}")
         print("IMPORT SUMMARY")
@@ -568,7 +568,7 @@ class PANOSImporter(PANOSBaseClient):
                 print(f"  - [{item['category']}] {item['name']}: {item['reason']}")
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(
         description="Import converted FortiGate config to Palo Alto PAN-OS",
         formatter_class=argparse.RawDescriptionHelpFormatter,
