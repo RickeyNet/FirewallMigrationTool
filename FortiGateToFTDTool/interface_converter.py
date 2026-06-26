@@ -261,6 +261,21 @@ class InterfaceConverter:
 
         # Track items that failed/were skipped during conversion
         self.failed_items = []
+
+        # EtherChannel expansion config (set via set_etherchannel_expansion()).
+        # Lets a source port-channel be grown to MORE member links on the FTD
+        # side during migration (e.g. scale a 1-member WAN LAG up to 4x 10G).
+        # Maps a lowercased port-channel identifier -> int (target total member
+        # count) or list of FTD hardware names to add.
+        self.etherchannel_expansion = {}
+
+        # EtherChannel promotion config (set via set_etherchannel_promotion()).
+        # Lets a plain (non-aggregate) FortiGate physical interface be migrated
+        # as a NEW FTD EtherChannel so it can carry multiple 10G member links
+        # (e.g. turn a single physical WAN port into a 2x10G port-channel).
+        # Maps a lowercased physical-interface identifier -> int (total member
+        # count, incl. the original port) or list of extra FTD ports to add.
+        self.promote_to_etherchannel = {}
     
     def set_target_model(self, model: str):
         """
@@ -397,10 +412,245 @@ class InterfaceConverter:
         """
         self.skip_ftd_ports.update(ports)
         self.assigned_ftd_ports.update(ports)
-        
+
         # Remove from available list
         self.available_ftd_ports = [p for p in self.available_ftd_ports if p not in ports]
-    
+
+    def set_etherchannel_expansion(self, expansion: Dict[str, Any]):
+        """
+        Configure EtherChannel member expansion to scale up link aggregation
+        during migration.
+
+        This is for the case where the source FortiGate has a port-channel with
+        only a few (or a single) member interface, but the target Cisco firewall
+        should carry MORE 10G member links for added bandwidth/redundancy (e.g.
+        WAN and server port-channels). Without this, member count is copied 1:1.
+
+        Args:
+            expansion: Dict mapping a FortiGate port-channel identifier
+                (interface name, alias, or sanitized FTD name) to either:
+                  - an int: the desired TOTAL number of member interfaces. If the
+                    source already has fewer members, extra ports are
+                    auto-assigned from the available FTD port pool until the
+                    target count is reached.
+                  - a list of FTD hardware names (e.g.
+                    ['Ethernet1/5', 'Ethernet1/6']) to ADD as members on top of
+                    the source members.
+
+        Matching is case-insensitive. Identifiers that don't match any aggregate
+        interface are ignored (a note is printed during conversion).
+        """
+        normalized = {}
+        for key, spec in (expansion or {}).items():
+            if key is None:
+                continue
+            normalized[str(key).strip().lower()] = spec
+        self.etherchannel_expansion = normalized
+
+    def _get_expansion_spec(self, fg_name: str, alias: str, ftd_name: str):
+        """Look up the expansion spec for an aggregate interface by any of its
+        identifiers (FortiGate name, alias, or sanitized FTD name)."""
+        if not self.etherchannel_expansion:
+            return None
+        for key in (fg_name, alias, ftd_name):
+            if key and str(key).strip().lower() in self.etherchannel_expansion:
+                return self.etherchannel_expansion[str(key).strip().lower()]
+        return None
+
+    def set_etherchannel_promotion(self, promotion: Dict[str, Any]):
+        """
+        Configure promotion of plain physical interfaces to NEW EtherChannels.
+
+        This is for the case where the source FortiGate interface is a regular
+        physical port (not an aggregate), but on the target Cisco firewall it
+        should become a port-channel so it can carry multiple 10G member links
+        (e.g. turn a single physical WAN or server port into a 2x10G LAG).
+
+        The interface's name, MTU, and enabled state move onto the new
+        EtherChannel; the original FTD port becomes the first member, and
+        additional members are added per the spec. The port-channel itself gets
+        NO IP - L3 addresses belong on VLAN subinterfaces riding on the channel.
+
+        Args:
+            promotion: Dict mapping a FortiGate physical-interface identifier
+                (interface name or alias) to either:
+                  - an int: the desired TOTAL member count, INCLUDING the
+                    original port. Extra members are auto-assigned from the
+                    available FTD port pool.
+                  - a list of FTD hardware names (e.g.
+                    ['Ethernet1/6']) to ADD as members alongside the original
+                    port.
+
+        Matching is case-insensitive. Identifiers that don't match a standalone
+        physical interface are ignored (a note is printed during conversion).
+        Interfaces that carry VLAN subinterfaces are not eligible (a warning is
+        printed and they convert normally).
+        """
+        normalized = {}
+        for key, spec in (promotion or {}).items():
+            if key is None:
+                continue
+            normalized[str(key).strip().lower()] = spec
+        self.promote_to_etherchannel = normalized
+
+    def _get_promotion_spec(self, fg_name: str, alias: str):
+        """Look up the promotion spec for a physical interface by its FortiGate
+        name or alias (case-insensitive)."""
+        if not self.promote_to_etherchannel:
+            return None
+        for key in (fg_name, alias):
+            if key and str(key).strip().lower() in self.promote_to_etherchannel:
+                return self.promote_to_etherchannel[str(key).strip().lower()]
+        return None
+
+    def _build_ipv4_config(self, ip_config) -> Optional[Dict]:
+        """
+        Build an FTD interfaceipv4 block from a FortiGate 'ip' value
+        (a [address, netmask] list). Returns None if there is no usable static
+        IP (missing, malformed, or 0.0.0.0).
+        """
+        if not (ip_config and isinstance(ip_config, list) and len(ip_config) >= 2):
+            return None
+        ip_addr = str(ip_config[0])
+        netmask = str(ip_config[1])
+        if ip_addr == '0.0.0.0':
+            return None
+        return {
+            "ipType": "STATIC",
+            "defaultRouteUsingDHCP": False,
+            "ipAddress": {
+                "ipAddress": ip_addr,
+                "netmask": netmask,
+                "type": "haipv4address"
+            },
+            "dhcp": False,
+            "addressNull": False,
+            "type": "interfaceipv4"
+        }
+
+    def _add_etherchannel_member(self, fg_name: str, ftd_hardware: str,
+                                 ftd_members: List[Dict]) -> bool:
+        """
+        Append an FTD hardware port as an EtherChannel member and create its
+        routed-mode physical interface entry (so it is imported and set to
+        routed mode before the EtherChannel is created).
+
+        Idempotent: returns False if the port is already a member of this
+        EtherChannel.
+        """
+        # Avoid duplicate membership within the same EtherChannel
+        if any(m.get('hardwareName') == ftd_hardware for m in ftd_members):
+            return False
+
+        ftd_members.append({
+            "hardwareName": ftd_hardware,
+            "type": "physicalinterface"
+        })
+
+        # Create a physical interface entry for this member.
+        # EtherChannel members require: empty name, routed mode, full duplex,
+        # autoNegotiation enabled (speed/SFP type is auto-detected at import).
+        member_interface = {
+            "name": '',  # No name - required for EtherChannel membership
+            "hardwareName": ftd_hardware,
+            "description": f"EtherChannel {fg_name} member",
+            "enabled": True,
+            "mode": "ROUTED",
+            "duplexType": "FULL",
+            "autoNegotiation": True,
+            "type": "physicalinterface"
+        }
+        existing_hardware = [p.get('hardwareName') for p in self.physical_interfaces]
+        if ftd_hardware not in existing_hardware:
+            self.physical_interfaces.append(member_interface)
+        return True
+
+    def _reserve_explicit_port(self, fg_name: str, ftd_hardware: str) -> bool:
+        """
+        Validate and reserve a user-specified FTD port for EtherChannel
+        expansion. Returns False (with a warning) if the port is invalid,
+        out of range, reserved, or already assigned to another interface.
+        """
+        match = re.match(r'^Ethernet1/(\d+)$', ftd_hardware)
+        if not match:
+            print(f"      [WARNING] EtherChannel {fg_name}: invalid expansion port "
+                  f"'{ftd_hardware}' (expected 'Ethernet1/X') - skipped")
+            return False
+
+        port_num = int(match.group(1))
+        if port_num < 1 or port_num > self.total_ports:
+            print(f"      [WARNING] EtherChannel {fg_name}: expansion port "
+                  f"'{ftd_hardware}' out of range for {self.target_model} "
+                  f"(1-{self.total_ports}) - skipped")
+            return False
+
+        if ftd_hardware in self.skip_ftd_ports:
+            print(f"      [WARNING] EtherChannel {fg_name}: expansion port "
+                  f"'{ftd_hardware}' is reserved (HA/skip) - skipped")
+            return False
+
+        # Already assigned to something else (not just sitting in the free pool)
+        if (ftd_hardware in self.assigned_ftd_ports
+                and ftd_hardware not in self.available_ftd_ports):
+            print(f"      [WARNING] EtherChannel {fg_name}: expansion port "
+                  f"'{ftd_hardware}' already assigned elsewhere - skipped")
+            return False
+
+        # Reserve it
+        self.assigned_ftd_ports.add(ftd_hardware)
+        if ftd_hardware in self.available_ftd_ports:
+            self.available_ftd_ports.remove(ftd_hardware)
+        return True
+
+    def _apply_etherchannel_expansion(self, fg_name: str, spec,
+                                      ftd_members: List[Dict]) -> List[str]:
+        """
+        Add extra member links to an EtherChannel per the expansion spec.
+
+        Args:
+            fg_name: FortiGate interface name (for logging)
+            spec: int target total member count, OR list of FTD hardware names
+                  to add.
+            ftd_members: current member list (modified in place)
+
+        Returns:
+            List of FTD hardware names actually added.
+        """
+        added = []
+
+        if isinstance(spec, int):
+            # Target TOTAL member count - auto-assign extra ports from the pool
+            target = spec
+            if target <= len(ftd_members):
+                print(f"      [EXPAND] EtherChannel {fg_name}: source already has "
+                      f"{len(ftd_members)} member(s) (target {target}) - no change")
+                return added
+            while len(ftd_members) < target:
+                if not self.available_ftd_ports:
+                    print(f"      [WARNING] EtherChannel {fg_name}: not enough free "
+                          f"ports to reach {target} members "
+                          f"(stopped at {len(ftd_members)})")
+                    break
+                ftd_hardware = self.available_ftd_ports.pop(0)
+                self.assigned_ftd_ports.add(ftd_hardware)
+                if self._add_etherchannel_member(fg_name, ftd_hardware, ftd_members):
+                    added.append(ftd_hardware)
+        else:
+            # Explicit list of FTD hardware ports to add
+            for ftd_hardware in spec:
+                ftd_hardware = str(ftd_hardware).strip()
+                if not ftd_hardware:
+                    continue
+                if not self._reserve_explicit_port(fg_name, ftd_hardware):
+                    continue
+                if self._add_etherchannel_member(fg_name, ftd_hardware, ftd_members):
+                    added.append(ftd_hardware)
+
+        if added:
+            print(f"      [EXPAND] EtherChannel {fg_name}: added {len(added)} "
+                  f"extra member(s): {', '.join(added)}")
+        return added
+
     def _get_ftd_hardware_name(self, fg_port: str) -> Optional[str]:
         """
         Get the FTD hardware name for a FortiGate port.
@@ -560,14 +810,47 @@ class InterfaceConverter:
             else:
                 bridge_member_count += len(members)
         
-        total_needed = (etherch_member_count + bridge_member_count + 
-                       len(physical_with_subs) + len(physical_standalone))
+        # Account for EtherChannel expansion (extra 10G members added on top of
+        # the source members for capacity scale-up).
+        expansion_extra = 0
+        for fg_name, props in aggregate_ports:
+            alias = props.get('alias', fg_name)
+            spec = self._get_expansion_spec(fg_name, alias, sanitize_interface_name(alias))
+            if spec is None:
+                continue
+            base = props.get('member', [])
+            base_n = 1 if isinstance(base, str) else len(base)
+            if isinstance(spec, int):
+                expansion_extra += max(0, spec - base_n)
+            else:
+                expansion_extra += len(spec)
+
+        # Account for physical->EtherChannel promotion (extra members added
+        # alongside the original port when a plain interface becomes a LAG).
+        promotion_extra = 0
+        for fg_name, props in physical_standalone:
+            alias = props.get('alias', fg_name)
+            spec = self._get_promotion_spec(fg_name, alias)
+            if spec is None:
+                continue
+            if isinstance(spec, int):
+                promotion_extra += max(0, spec - 1)  # original port is member #1
+            else:
+                promotion_extra += len(spec)
+
+        total_needed = (etherch_member_count + bridge_member_count +
+                       len(physical_with_subs) + len(physical_standalone) +
+                       expansion_extra + promotion_extra)
         available = len(self.available_ftd_ports)
-        
+
         print(f"\n  Port Analysis for {self.model_info['name']}:") # pyright: ignore[reportOptionalSubscript]
         print(f"    Available FTD ports: {available}")
         print(f"    FortiGate interfaces to convert:")
         print(f"      - EtherChannel members: {etherch_member_count}")
+        if expansion_extra:
+            print(f"      - EtherChannel expansion (extra members): {expansion_extra}")
+        if promotion_extra:
+            print(f"      - Physical->EtherChannel promotion (extra members): {promotion_extra}")
         print(f"      - Bridge Group members: {bridge_member_count}")
         print(f"      - Physical with subinterfaces: {len(physical_with_subs)}")
         print(f"      - Standalone physical: {len(physical_standalone)}")
@@ -603,6 +886,11 @@ class InterfaceConverter:
         # These are valuable because one port can carry multiple VLANs
         print("\n  [Priority 3] Converting Physical Interfaces with Subinterfaces...")
         for fg_name, properties in physical_with_subs:
+            # Promotion of interfaces that carry VLAN subinterfaces is not
+            # supported (the subinterfaces would have to move onto the EC too).
+            if self._get_promotion_spec(fg_name, properties.get('alias', fg_name)) is not None:
+                print(f"    [WARNING] {fg_name}: cannot promote to EtherChannel "
+                      f"(it has VLAN subinterfaces) - converting as physical interface")
             self._convert_physical_interface(fg_name, properties)
         
         # PRIORITY 4: Convert standalone physical interfaces
@@ -622,7 +910,13 @@ class InterfaceConverter:
                     self.stats['skipped'] += 1
                     self.failed_items.append({"name": fg_name, "reason": "no ports available", "config": properties})
                 else:
-                    self._convert_physical_interface(fg_name, properties)
+                    # Promote to a new EtherChannel if requested, otherwise
+                    # convert as a standalone physical interface.
+                    promo_spec = self._get_promotion_spec(fg_name, properties.get('alias', fg_name))
+                    if promo_spec is not None:
+                        self._promote_physical_to_etherchannel(fg_name, properties, promo_spec)
+                    else:
+                        self._convert_physical_interface(fg_name, properties)
         
         # PHASE 5: Convert VLAN interfaces (Subinterfaces)
         # These don't need additional ports - they use parent interfaces
@@ -896,9 +1190,92 @@ class InterfaceConverter:
         
         self.physical_interfaces.append(ftd_interface)
         self.stats['physical_updated'] += 1
-        
+
         print(f"    Converted: {fg_name} -> {ftd_name} ({ftd_hardware})")
-    
+
+    def _promote_physical_to_etherchannel(self, fg_name: str, properties: Dict, spec):
+        """
+        Promote a plain FortiGate physical interface to a NEW FTD EtherChannel so
+        it can carry multiple 10G member links.
+
+        The interface's name, MTU, and enabled state move onto the new
+        port-channel; the original FTD port becomes the first member and extra
+        members are added per `spec` (an int total member count INCLUDING the
+        original port, or a list of FTD ports to add). The port-channel itself
+        gets NO IP - in this design L3 addresses belong on VLAN subinterfaces
+        riding on the channel, not on the channel.
+        """
+        alias = properties.get('alias', fg_name)
+        ftd_name = sanitize_interface_name(alias)
+
+        # Assign the original interface's FTD port - it becomes member #1
+        original_hardware = self._get_ftd_hardware_name(fg_name)
+        if not original_hardware:
+            print(f"    Skipped promotion: {fg_name} (no available FTD port)")
+            self.stats['skipped'] += 1
+            self.failed_items.append({"name": fg_name, "reason": "no available FTD port (promotion)", "config": properties})
+            return
+        if original_hardware in self.skip_ftd_ports:
+            print(f"    Skipped promotion: {fg_name} -> {original_hardware} (reserved port)")
+            self.stats['skipped'] += 1
+            self.failed_items.append({"name": fg_name, "reason": f"reserved port ({original_hardware})", "config": properties})
+            return
+
+        # Reserved names that conflict with FTD built-ins (same rule as physical)
+        reserved_names = {'management', 'diagnostic', 'inside', 'outside'}
+        if ftd_name.lower() in reserved_names:
+            original_reserved = ftd_name
+            port_num = original_hardware.split('/')[-1] if '/' in original_hardware else '1'
+            ftd_name = f"{ftd_name}_port{port_num}"
+            print(f"      Note: '{original_reserved}' is reserved, renamed to '{ftd_name}'")
+
+        # Build member list: original port first, then expansion members
+        ftd_members = []
+        if self._add_etherchannel_member(fg_name, original_hardware, ftd_members):
+            print(f"      Promoted base member: {fg_name} -> {original_hardware} (routed mode, EC-ready)")
+        self._apply_etherchannel_expansion(fg_name, spec, ftd_members)
+
+        # Store name mapping so routes/policies follow the interface to the EC
+        self.interface_name_mapping[fg_name] = ftd_name
+        self.interface_name_mapping[alias] = ftd_name
+
+        etherchannel_id = len(self.etherchannels) + 1
+
+        ftd_interface = {
+            "name": ftd_name,
+            "hardwareName": f"Port-channel{etherchannel_id}",
+            "description": properties.get('description', alias),
+            "enabled": properties.get('status', 'up') != 'down',
+            "mode": "ROUTED",
+            "etherChannelID": etherchannel_id,
+            "memberInterfaces": ftd_members,
+            "lacpMode": "ACTIVE",
+            "type": "etherchannelinterface"
+        }
+
+        # Port-channel interfaces carry NO IP. In this design the L3 addresses
+        # live on the VLAN subinterfaces created on top of the port-channel, not
+        # on the channel itself. If the source interface had a direct IP, note
+        # that it is not applied so it can be placed on a subinterface instead.
+        src_ipv4 = self._build_ipv4_config(properties.get('ip'))
+        if src_ipv4:
+            dropped_ip = src_ipv4['ipAddress']['ipAddress']
+            print(f"      Note: {fg_name} had IP {dropped_ip}; port-channel left "
+                  f"with no IP (configure it on a subinterface)")
+
+        # Add MTU if overridden (cap at 9000 - FTD maximum)
+        if properties.get('mtu-override') == 'enable':
+            mtu = properties.get('mtu', 1500)
+            if mtu > 9000:
+                mtu = 9000
+            ftd_interface["mtu"] = mtu
+
+        self.etherchannels.append(ftd_interface)
+        self.stats['etherchannels_created'] += 1
+
+        member_str = ', '.join([m['hardwareName'] for m in ftd_members])
+        print(f"    Promoted: {fg_name} -> {ftd_name} (Port-channel{etherchannel_id}) members: [{member_str}]")
+
     def _convert_aggregate_interface(self, fg_name: str, properties: Dict):
         """Convert a FortiGate aggregate interface to FTD EtherChannel."""
         
@@ -915,45 +1292,25 @@ class InterfaceConverter:
         if isinstance(members, str):
             members = [members]
         
-        # Map member names to FTD hardware names
-        # AND create physical interface entries for each member
-        # so they get set to routed mode before EtherChannel creation
+        # Map member names to FTD hardware names AND create physical interface
+        # entries for each member so they get set to routed mode before the
+        # EtherChannel is created. EtherChannel members require: empty name,
+        # routed mode, full duplex, autoNegotiation enabled (speed/SFP type is
+        # auto-detected at import).
         ftd_members = []
         for member in members:
             ftd_hardware = self._get_ftd_hardware_name(member)
             if ftd_hardware:
-                ftd_members.append({
-                    "hardwareName": ftd_hardware,
-                    "type": "physicalinterface"
-                })
-                
-                # Create a physical interface entry for this member
-                # This ensures it gets imported and set to routed mode
-                # BEFORE the EtherChannel is created
-                # 
-                # IMPORTANT: EtherChannel members require specific settings:
-                #   - speedType: DETECT_SFP (for SFP) or AUTO
-                #   - fecMode: AUTO
-                #   - autoNegotiation: True (enabled)
-                #   - duplexType: FULL
-                #   - name: '' (empty - no name allowed for EC members)
-                member_interface = {
-                    "name": '',  # No name - required for EtherChannel membership
-                    "hardwareName": ftd_hardware,
-                    "description": f"EtherChannel {fg_name} member",
-                    "enabled": True,
-                    "mode": "ROUTED",
-                    "duplexType": "FULL",
-                    "autoNegotiation": True,
-                    "type": "physicalinterface"
-                }
-                
-                # Only add if not already in the list
-                existing_hardware = [p.get('hardwareName') for p in self.physical_interfaces]
-                if ftd_hardware not in existing_hardware:
-                    self.physical_interfaces.append(member_interface)
+                if self._add_etherchannel_member(fg_name, ftd_hardware, ftd_members):
                     print(f"      Added member interface: {member} -> {ftd_hardware} (routed mode, EC-ready)")
-        
+
+        # Apply EtherChannel expansion: grow this port-channel to MORE member
+        # links on the FTD side when requested (e.g. scale a 1-member WAN/server
+        # LAG up to several 10G links). No-op unless an expansion spec matches.
+        spec = self._get_expansion_spec(fg_name, alias, ftd_name)
+        if spec is not None:
+            self._apply_etherchannel_expansion(fg_name, spec, ftd_members)
+
         if not ftd_members:
             print(f"    Skipped: {fg_name} (no valid member interfaces)")
             self.stats['skipped'] += 1

@@ -100,6 +100,92 @@ then calls `convert_main(argv)`.
 
 **Outputs kept in memory:** `interface_results`, `interface_name_mapping` (used by routes and policies).
 
+### Optional: EtherChannel (port-channel) expansion
+
+By default, an aggregate interface is migrated **1:1** - if the FortiGate
+port-channel has one 10G member, the FTD EtherChannel gets one member. When you
+are scaling up bandwidth/redundancy on the Cisco side (e.g. growing WAN and
+server port-channels to several 10G links), you can ask the converter to add
+extra members.
+
+| Concept | Detail |
+|---------|--------|
+| Where it is configured | `InterfaceConverter.set_etherchannel_expansion(mapping)` (called from `fortigate_converter.py` right after the converter is built, before `convert()`) |
+| Applied in | `_convert_aggregate_interface()` -> `_apply_etherchannel_expansion()` |
+| Matching | Port-channel identifier matches the FortiGate interface name, alias, or sanitized FTD name (case-insensitive) |
+
+Two spec forms:
+
+- **Target total count** - `WAN_LAG=4` grows the channel to 4 total members,
+  auto-assigning the extra ports from the model's free port pool (highest port
+  number down).
+- **Explicit ports** - `SRV_LAG=Ethernet1/5,Ethernet1/6` adds those specific FTD
+  ports as members on top of the source members.
+
+CLI (the `--expand-portchannel` flag is repeatable, parsed by
+`parse_expansion_specs()`):
+
+```
+python fortigate_converter.py config.yaml -m ftd-3130 \
+    --expand-portchannel "WAN_LAG=4" \
+    --expand-portchannel "SRV_LAG=Ethernet1/5,Ethernet1/6"
+```
+
+GUI: the **"Expand Port-Channels (optional)"** field on the Convert tab. Enter
+specs separated by `;` or newlines (e.g. `WAN_LAG=4; SRV_LAG=Ethernet1/5,Ethernet1/6`).
+Blank keeps the source member count. Only the FortiGate->FTD path consumes it.
+
+Guardrails (each emits a `[WARNING]` and skips the offending port, never aborts):
+out-of-range ports for the target model, malformed ports (not `Ethernet1/X`),
+ports already reserved (HA) or assigned to another interface, a count target at
+or below the existing member count (no-op), and running out of free ports before
+reaching the target. The Port Analysis summary prints an
+`EtherChannel expansion (extra members)` line so the total-ports check stays
+accurate.
+
+> Tip: with **explicit-port** mode, avoid ports that auto-assignment gives the
+> channel's original members (it fills from the highest-numbered port down).
+> **Count** mode sidesteps the collision entirely - prefer it for the common
+> "just give me 4x 10G" case.
+
+### Optional: promote a physical interface to an EtherChannel
+
+The expansion feature above only grows interfaces that are **already** aggregates
+in FortiGate. If a source interface is a plain physical port but you want it to
+become a port-channel on the FTD (e.g. give a single WAN or server port two 10G
+links), use **promotion**.
+
+| Concept | Detail |
+|---------|--------|
+| Where it is configured | `InterfaceConverter.set_etherchannel_promotion(mapping)` (called from `fortigate_converter.py` before `convert()`) |
+| Applied in | `_promote_physical_to_etherchannel()`, dispatched from the Priority 4 standalone-physical loop |
+| Matching | Physical-interface identifier matches the FortiGate interface name or alias (case-insensitive) |
+| L3 config | The interface's name and MTU move onto the new port-channel; the original FTD port becomes member #1. The port-channel gets **no IP** - addresses belong on VLAN subinterfaces riding on the channel. A source interface with a direct IP prints a note so the IP can be placed on a subinterface |
+
+Two spec forms (same grammar as expansion):
+
+- **Target total count** - `wan1=2` makes a port-channel with 2 total members
+  (the original port + 1 auto-assigned from the free pool).
+- **Explicit ports** - `srv1=Ethernet1/6` adds those specific FTD ports as members
+  alongside the original port.
+
+CLI (`--promote-portchannel` is repeatable):
+
+```
+python fortigate_converter.py config.yaml -m ftd-3130 \
+    --promote-portchannel "wan1=2" \
+    --promote-portchannel "srv1=Ethernet1/6"
+```
+
+GUI: the **"Promote to Port-Channel (optional)"** field on the Convert tab; specs
+separated by `;` or newlines. Blank keeps the interface as a plain physical port.
+
+Not eligible: an interface that carries VLAN subinterfaces (the subinterfaces
+would have to move onto the EtherChannel too). Such a request prints a `[WARNING]`
+and the interface converts normally as a physical interface. The same out-of-range
+/ malformed / already-assigned port guardrails as expansion apply, and the Port
+Analysis summary prints a `Physical->EtherChannel promotion (extra members)` line.
+
 ---
 
 ## Phase 1.5 - Convert address objects

@@ -155,6 +155,42 @@ def preprocess_yaml_file(input_file: str) -> str:
     print(f"  [OK] Pre-processing complete")
     return cleaned_yaml
 
+def parse_expansion_specs(specs) -> dict:
+    """
+    Parse --expand-portchannel CLI values into a dict for the InterfaceConverter.
+
+    Each spec is 'PC=VALUE' where VALUE is either an integer total member count
+    or a comma-separated list of FTD ports (e.g. 'Ethernet1/5,Ethernet1/6').
+
+    Args:
+        specs: List of raw 'PC=VALUE' strings (may be empty/None).
+
+    Returns:
+        Dict of port-channel identifier -> int (target count) or list of FTD ports.
+        Invalid entries are skipped with a warning.
+    """
+    expansion = {}
+    for raw in specs or []:
+        if '=' not in raw:
+            print(f"[WARNING] Ignoring --expand-portchannel '{raw}': expected PC=SPEC format")
+            continue
+        key, _, value = raw.partition('=')
+        key = key.strip()
+        value = value.strip()
+        if not key or not value:
+            print(f"[WARNING] Ignoring --expand-portchannel '{raw}': empty name or spec")
+            continue
+        if value.isdigit():
+            expansion[key] = int(value)
+        else:
+            ports = [p.strip() for p in value.split(',') if p.strip()]
+            if not ports:
+                print(f"[WARNING] Ignoring --expand-portchannel '{raw}': no valid ports")
+                continue
+            expansion[key] = ports
+    return expansion
+
+
 def build_conversion_metadata(args: argparse.Namespace) -> dict:
     """
     Build a metadata dictionary describing the conversion context.
@@ -282,6 +318,28 @@ Supported FTD Models:
                    help="Custom HA port (e.g., 'Ethernet1/5'). Overrides model default. "
                         "Use 'none' to disable HA port reservation entirely. "
                         "Format: 'Ethernet1/X' where X is a valid port number for your model.")
+
+    parser.add_argument('--expand-portchannel',
+                   action='append',
+                   default=[],
+                   metavar='PC=SPEC',
+                   help="Increase an EtherChannel's 10G member count during migration. "
+                        "PC is the FortiGate port-channel name/alias. SPEC is either a "
+                        "target TOTAL member count (e.g. 'WAN_LAG=4') or a comma-separated "
+                        "list of FTD ports to ADD (e.g. 'SRV_LAG=Ethernet1/5,Ethernet1/6'). "
+                        "Repeat the flag for multiple port-channels.")
+
+    parser.add_argument('--promote-portchannel',
+                   action='append',
+                   default=[],
+                   metavar='IFACE=SPEC',
+                   help="Promote a plain FortiGate physical interface into a NEW FTD "
+                        "EtherChannel so it can carry multiple 10G links. IFACE is the "
+                        "FortiGate interface name/alias. SPEC is either a target TOTAL "
+                        "member count incl. the original port (e.g. 'wan1=2') or a "
+                        "comma-separated list of extra FTD ports to add "
+                        "(e.g. 'wan1=Ethernet1/6'). The interface's IP/MTU move onto the "
+                        "port-channel. Repeat the flag for multiple interfaces.")
     
     # OPTIONAL: List supported models and exit
     parser.add_argument('--list-models',
@@ -407,6 +465,19 @@ Supported FTD Models:
         target_model=args.target_model,
         custom_ha_port=ha_port_arg,
     )
+
+    # Apply EtherChannel expansion (scale up 10G member links) if requested
+    expansion_specs = parse_expansion_specs(getattr(args, 'expand_portchannel', []))
+    if expansion_specs:
+        interface_converter.set_etherchannel_expansion(expansion_specs)
+        print(f"  EtherChannel expansion configured for: {', '.join(expansion_specs.keys())}")
+
+    # Apply physical->EtherChannel promotion (turn a plain interface into a LAG)
+    promotion_specs = parse_expansion_specs(getattr(args, 'promote_portchannel', []))
+    if promotion_specs:
+        interface_converter.set_etherchannel_promotion(promotion_specs)
+        print(f"  Physical->EtherChannel promotion configured for: {', '.join(promotion_specs.keys())}")
+
     interface_results = interface_converter.convert()
     
     # Get the interface name mapping for routes and policies

@@ -1070,7 +1070,31 @@ class App(tk.Tk):
         self.conv_ha_hint = ttk.Label(opts, text="e.g. Ethernet1/5  (leave blank = no HA port)")
         self.conv_ha_hint.grid(row=5, column=1, sticky=tk.W)
 
-        # Row 6: FTD file mode toggle (hidden unless source is Cisco FTD)
+        # Row 6: Expand port-channels (optional) - scale up 10G LAG members (FortiGate->FTD only)
+        self.conv_expand_label = ttk.Label(opts, text="Expand Port-Channels (optional):")
+        self.conv_expand_label.grid(row=6, column=0, sticky=tk.W, pady=3)
+        self.conv_expand_var = tk.StringVar()
+        self.conv_expand_entry = ttk.Entry(opts, textvariable=self.conv_expand_var, width=40)
+        self.conv_expand_entry.grid(row=6, column=1, sticky=tk.EW, padx=4)
+        self.conv_expand_hint = ttk.Label(
+            opts,
+            text="e.g. WAN_LAG=4; SRV_LAG=Ethernet1/5,Ethernet1/6   (blank = keep source member count)",
+        )
+        self.conv_expand_hint.grid(row=7, column=1, sticky=tk.W)
+
+        # Row 8: Promote physical interface -> EtherChannel (FortiGate->FTD only)
+        self.conv_promote_label = ttk.Label(opts, text="Promote to Port-Channel (optional):")
+        self.conv_promote_label.grid(row=8, column=0, sticky=tk.W, pady=3)
+        self.conv_promote_var = tk.StringVar()
+        self.conv_promote_entry = ttk.Entry(opts, textvariable=self.conv_promote_var, width=40)
+        self.conv_promote_entry.grid(row=8, column=1, sticky=tk.EW, padx=4)
+        self.conv_promote_hint = ttk.Label(
+            opts,
+            text="turn a plain interface into a LAG, e.g. wan1=2; srv1=Ethernet1/6   (blank = keep as physical)",
+        )
+        self.conv_promote_hint.grid(row=9, column=1, sticky=tk.W)
+
+        # Row 10: FTD file mode toggle (hidden unless source is Cisco FTD)
         self.conv_ftd_file_var = tk.BooleanVar(value=False)
         self.conv_ftd_file_check = ttk.Checkbutton(
             opts,
@@ -1078,14 +1102,14 @@ class App(tk.Tk):
             variable=self.conv_ftd_file_var,
             command=self._on_ftd_mode_change,
         )
-        self.conv_ftd_file_check.grid(row=6, column=1, sticky=tk.W, padx=4, pady=3)
+        self.conv_ftd_file_check.grid(row=10, column=1, sticky=tk.W, padx=4, pady=3)
         self.conv_ftd_file_check.grid_remove()  # hidden until FTD source is selected
 
-        # Row 7: Pretty-print
+        # Row 11: Pretty-print
         self.conv_pretty_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             opts, text="Pretty-print JSON output", variable=self.conv_pretty_var,
-        ).grid(row=7, column=1, sticky=tk.W, padx=4, pady=3)
+        ).grid(row=11, column=1, sticky=tk.W, padx=4, pady=3)
 
         opts.columnconfigure(1, weight=1)
 
@@ -2800,6 +2824,22 @@ class App(tk.Tk):
             if not is_pa:
                 ha_port = self.conv_ha_var.get().strip()
                 argv.extend(["--ha-port", ha_port if ha_port else "none"])
+
+            # EtherChannel expansion/promotion is only supported on FortiGate->FTD
+            if not is_pa and not is_asa:
+                expand_raw = self.conv_expand_var.get().strip()
+                if expand_raw:
+                    for spec in expand_raw.replace("\n", ";").split(";"):
+                        spec = spec.strip()
+                        if spec:
+                            argv.extend(["--expand-portchannel", spec])
+
+                promote_raw = self.conv_promote_var.get().strip()
+                if promote_raw:
+                    for spec in promote_raw.replace("\n", ";").split(";"):
+                        spec = spec.strip()
+                        if spec:
+                            argv.extend(["--promote-portchannel", spec])
 
             if self.conv_pretty_var.get():
                 argv.append("--pretty")
