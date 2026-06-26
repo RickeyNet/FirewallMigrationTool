@@ -339,9 +339,21 @@ Supported FTD Models:
                         "FortiGate interface name/alias. SPEC is either a target TOTAL "
                         "member count incl. the original port (e.g. 'wan1=2') or a "
                         "comma-separated list of extra FTD ports to add "
-                        "(e.g. 'wan1=Ethernet1/6'). The interface's IP/MTU move onto the "
-                        "port-channel. Repeat the flag for multiple interfaces.")
-    
+                        "(e.g. 'wan1=Ethernet1/6'). The interface's MTU moves onto the "
+                        "port-channel (no IP - put it on a subinterface). Repeat the flag "
+                        "for multiple interfaces.")
+
+    parser.add_argument('--expand-bridgegroup',
+                   action='append',
+                   default=[],
+                   metavar='SWITCH=SPEC',
+                   help="Increase a bridge group's member count during migration. "
+                        "SWITCH is the FortiGate virtual-switch (system_switch-interface) "
+                        "name. SPEC is either a target TOTAL member count "
+                        "(e.g. 'lan_switch=4') or a comma-separated list of FTD ports to "
+                        "ADD (e.g. 'srv_switch=Ethernet1/7,Ethernet1/8'). Repeat the flag "
+                        "for multiple switches.")
+
     # OPTIONAL: List supported models and exit
     parser.add_argument('--list-models',
                        action='store_true',
@@ -478,6 +490,12 @@ Supported FTD Models:
     if promotion_specs:
         interface_converter.set_etherchannel_promotion(promotion_specs)
         print(f"  Physical->EtherChannel promotion configured for: {', '.join(promotion_specs.keys())}")
+
+    # Apply bridge group expansion (add members to a virtual switch -> BVI)
+    bridgegroup_specs = parse_expansion_specs(getattr(args, 'expand_bridgegroup', []))
+    if bridgegroup_specs:
+        interface_converter.set_bridgegroup_expansion(bridgegroup_specs)
+        print(f"  Bridge group expansion configured for: {', '.join(bridgegroup_specs.keys())}")
 
     interface_results = interface_converter.convert()
     

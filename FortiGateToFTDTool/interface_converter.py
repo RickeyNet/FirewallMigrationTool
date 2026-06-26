@@ -276,6 +276,13 @@ class InterfaceConverter:
         # Maps a lowercased physical-interface identifier -> int (total member
         # count, incl. the original port) or list of extra FTD ports to add.
         self.promote_to_etherchannel = {}
+
+        # Bridge group expansion config (set via set_bridgegroup_expansion()).
+        # Lets a FortiGate virtual switch -> FTD bridge group (BVI) be grown to
+        # MORE member links during migration (e.g. add 10G ports to a server
+        # bridge group). Maps a lowercased switch-interface identifier -> int
+        # (target total member count) or list of FTD hardware names to add.
+        self.bridgegroup_expansion = {}
     
     def set_target_model(self, model: str) -> None:
         """
@@ -565,34 +572,36 @@ class InterfaceConverter:
             self.physical_interfaces.append(member_interface)
         return True
 
-    def _reserve_explicit_port(self, fg_name: str, ftd_hardware: str) -> bool:
+    def _reserve_explicit_port(self, fg_name: str, ftd_hardware: str,
+                               context: str = "EtherChannel") -> bool:
         """
-        Validate and reserve a user-specified FTD port for EtherChannel
-        expansion. Returns False (with a warning) if the port is invalid,
-        out of range, reserved, or already assigned to another interface.
+        Validate and reserve a user-specified FTD port for EtherChannel or
+        bridge group expansion. Returns False (with a warning) if the port is
+        invalid, out of range, reserved, or already assigned to another
+        interface. ``context`` only affects the wording of warning messages.
         """
         match = re.match(r'^Ethernet1/(\d+)$', ftd_hardware)
         if not match:
-            print(f"      [WARNING] EtherChannel {fg_name}: invalid expansion port "
+            print(f"      [WARNING] {context} {fg_name}: invalid expansion port "
                   f"'{ftd_hardware}' (expected 'Ethernet1/X') - skipped")
             return False
 
         port_num = int(match.group(1))
         if port_num < 1 or port_num > self.total_ports:
-            print(f"      [WARNING] EtherChannel {fg_name}: expansion port "
+            print(f"      [WARNING] {context} {fg_name}: expansion port "
                   f"'{ftd_hardware}' out of range for {self.target_model} "
                   f"(1-{self.total_ports}) - skipped")
             return False
 
         if ftd_hardware in self.skip_ftd_ports:
-            print(f"      [WARNING] EtherChannel {fg_name}: expansion port "
+            print(f"      [WARNING] {context} {fg_name}: expansion port "
                   f"'{ftd_hardware}' is reserved (HA/skip) - skipped")
             return False
 
         # Already assigned to something else (not just sitting in the free pool)
         if (ftd_hardware in self.assigned_ftd_ports
                 and ftd_hardware not in self.available_ftd_ports):
-            print(f"      [WARNING] EtherChannel {fg_name}: expansion port "
+            print(f"      [WARNING] {context} {fg_name}: expansion port "
                   f"'{ftd_hardware}' already assigned elsewhere - skipped")
             return False
 
@@ -648,6 +657,141 @@ class InterfaceConverter:
 
         if added:
             print(f"      [EXPAND] EtherChannel {fg_name}: added {len(added)} "
+                  f"extra member(s): {', '.join(added)}")
+        return added
+
+    def set_bridgegroup_expansion(self, expansion: Dict[str, Any]) -> None:
+        """
+        Configure bridge group (BVI) member expansion to scale up a FortiGate
+        virtual switch during migration.
+
+        This is the bridge-group analog of set_etherchannel_expansion(): when a
+        FortiGate virtual switch (system_switch-interface) is migrated to an FTD
+        bridge group, this lets you ADD more member links on the Cisco side
+        (e.g. extra 10G ports on a server bridge group). Without it, member
+        count is copied 1:1 from the source switch.
+
+        Args:
+            expansion: Dict mapping a FortiGate switch-interface identifier
+                (interface name or sanitized FTD name) to either:
+                  - an int: the desired TOTAL number of member interfaces. Extra
+                    members are auto-assigned from the available FTD port pool.
+                  - a list of FTD hardware names (e.g.
+                    ['Ethernet1/7', 'Ethernet1/8']) to ADD as members on top of
+                    the source members.
+
+        Matching is case-insensitive. Identifiers that don't match any switch
+        interface are ignored.
+        """
+        normalized: Dict[str, Any] = {}
+        for key, spec in (expansion or {}).items():
+            if key is None:
+                continue
+            normalized[str(key).strip().lower()] = spec
+        self.bridgegroup_expansion = normalized
+
+    def _get_bridgegroup_expansion_spec(self, fg_name: str, ftd_name: str) -> Any:
+        """Look up the expansion spec for a switch interface by its FortiGate
+        name or sanitized FTD name (case-insensitive)."""
+        if not self.bridgegroup_expansion:
+            return None
+        for key in (fg_name, ftd_name):
+            if key and str(key).strip().lower() in self.bridgegroup_expansion:
+                return self.bridgegroup_expansion[str(key).strip().lower()]
+        return None
+
+    def _bridgegroup_member_name(self, bridge_ftd_name: str, ftd_hardware: str) -> str:
+        """Synthesize a unique, valid FTD interface name for an ADDED bridge
+        group member that has no FortiGate source (e.g. 'srv_bridge_e1_7')."""
+        suffix = ftd_hardware.replace('Ethernet', 'e').replace('/', '_').lower()
+        return sanitize_interface_name(f"{bridge_ftd_name}_{suffix}")
+
+    def _add_bridgegroup_member(self, bridge_fg_name: str, bridge_ftd_name: str,
+                                ftd_hardware: str, ftd_members: List[Dict[str, Any]],
+                                member_name: str,
+                                description: Optional[str] = None) -> bool:
+        """
+        Append an FTD hardware port as a bridge group (BVI) member and create its
+        routed-mode physical interface entry. Tracks the port so its security
+        zone is named after the bridge group.
+
+        Idempotent: returns False if the port is already a member.
+        """
+        if any(m.get('hardwareName') == ftd_hardware for m in ftd_members):
+            return False
+
+        ftd_members.append({
+            "hardwareName": ftd_hardware,
+            "type": "physicalinterface"
+        })
+
+        member_interface: Dict[str, Any] = {
+            "name": member_name,
+            "hardwareName": ftd_hardware,
+            "description": description or f"Bridge Group {bridge_fg_name} member",
+            "enabled": True,
+            "mode": "ROUTED",
+            "type": "physicalinterface"
+        }
+        existing_hardware = [p.get('hardwareName') for p in self.physical_interfaces]
+        if ftd_hardware not in existing_hardware:
+            self.physical_interfaces.append(member_interface)
+
+        # Track as a bridge group member so its zone is named after the BVI
+        self.bridge_group_members[ftd_hardware] = bridge_ftd_name
+        return True
+
+    def _apply_bridgegroup_expansion(self, bridge_fg_name: str, bridge_ftd_name: str,
+                                     spec: Any,
+                                     ftd_members: List[Dict[str, Any]]) -> List[str]:
+        """
+        Add extra member links to a bridge group (BVI) per the expansion spec.
+
+        Args:
+            bridge_fg_name: FortiGate switch interface name (for logging)
+            bridge_ftd_name: sanitized FTD bridge group name (used to name members)
+            spec: int target total member count, OR list of FTD hardware names
+                  to add.
+            ftd_members: current member list (modified in place)
+
+        Returns:
+            List of FTD hardware names actually added.
+        """
+        added: List[str] = []
+
+        if isinstance(spec, int):
+            target = spec
+            if target <= len(ftd_members):
+                print(f"      [EXPAND] Bridge group {bridge_fg_name}: source already "
+                      f"has {len(ftd_members)} member(s) (target {target}) - no change")
+                return added
+            while len(ftd_members) < target:
+                if not self.available_ftd_ports:
+                    print(f"      [WARNING] Bridge group {bridge_fg_name}: not enough "
+                          f"free ports to reach {target} members "
+                          f"(stopped at {len(ftd_members)})")
+                    break
+                ftd_hardware = self.available_ftd_ports.pop(0)
+                self.assigned_ftd_ports.add(ftd_hardware)
+                name = self._bridgegroup_member_name(bridge_ftd_name, ftd_hardware)
+                if self._add_bridgegroup_member(bridge_fg_name, bridge_ftd_name,
+                                                ftd_hardware, ftd_members, name):
+                    added.append(ftd_hardware)
+        else:
+            for ftd_hardware in spec:
+                ftd_hardware = str(ftd_hardware).strip()
+                if not ftd_hardware:
+                    continue
+                if not self._reserve_explicit_port(bridge_fg_name, ftd_hardware,
+                                                   context="Bridge group"):
+                    continue
+                name = self._bridgegroup_member_name(bridge_ftd_name, ftd_hardware)
+                if self._add_bridgegroup_member(bridge_fg_name, bridge_ftd_name,
+                                                ftd_hardware, ftd_members, name):
+                    added.append(ftd_hardware)
+
+        if added:
+            print(f"      [EXPAND] Bridge group {bridge_fg_name}: added {len(added)} "
                   f"extra member(s): {', '.join(added)}")
         return added
 
@@ -779,9 +923,22 @@ class InterfaceConverter:
                 members = [members]
             for member in members:
                 etherchannel_members.add(member)
-        
+
+        # Bridge group (virtual switch) members must also be excluded - otherwise
+        # they get emitted twice: once as a BVI member and again as a standalone
+        # physical interface (duplicate payload for the same hardware port).
+        bridge_members = set()
+        for _, props in switch_ports:
+            members = props.get('member', [])
+            if isinstance(members, str):
+                members = members.split()  # FortiGate may store "port5 port6"
+            elif not isinstance(members, list):
+                members = []
+            for member in members:
+                bridge_members.add(member)
+
         # Combined set of all member interfaces (should not be processed standalone)
-        member_interfaces = etherchannel_members
+        member_interfaces = etherchannel_members | bridge_members
         
         # Separate physical ports into those with and without subinterfaces
         # Also exclude interfaces that are members of EtherChannels
@@ -838,9 +995,28 @@ class InterfaceConverter:
             else:
                 promotion_extra += len(spec)
 
+        # Account for bridge group expansion (extra members added to a virtual
+        # switch -> BVI for capacity scale-up).
+        bridge_expansion_extra = 0
+        for fg_name, props in switch_ports:
+            spec = self._get_bridgegroup_expansion_spec(fg_name, sanitize_interface_name(fg_name))
+            if spec is None:
+                continue
+            base = props.get('member', [])
+            if isinstance(base, str):
+                base_n = len(base.split())
+            elif isinstance(base, list):
+                base_n = len(base)
+            else:
+                base_n = 0
+            if isinstance(spec, int):
+                bridge_expansion_extra += max(0, spec - base_n)
+            else:
+                bridge_expansion_extra += len(spec)
+
         total_needed = (etherch_member_count + bridge_member_count +
                        len(physical_with_subs) + len(physical_standalone) +
-                       expansion_extra + promotion_extra)
+                       expansion_extra + promotion_extra + bridge_expansion_extra)
         available = len(self.available_ftd_ports)
 
         print(f"\n  Port Analysis for {self.model_info['name']}:") # pyright: ignore[reportOptionalSubscript]
@@ -852,6 +1028,8 @@ class InterfaceConverter:
         if promotion_extra:
             print(f"      - Physical->EtherChannel promotion (extra members): {promotion_extra}")
         print(f"      - Bridge Group members: {bridge_member_count}")
+        if bridge_expansion_extra:
+            print(f"      - Bridge Group expansion (extra members): {bridge_expansion_extra}")
         print(f"      - Physical with subinterfaces: {len(physical_with_subs)}")
         print(f"      - Standalone physical: {len(physical_standalone)}")
         if member_interfaces:
@@ -1367,43 +1545,30 @@ class InterfaceConverter:
         else:
             members = []
         
-        # Map member names to FTD hardware names
-        # AND create physical interface entries for each member
-        ftd_members = []
+        # Map member names to FTD hardware names AND create physical interface
+        # entries for each member (named, routed-mode, tracked as BVI members).
+        ftd_members: List[Dict[str, Any]] = []
         for member in members:
             ftd_hardware = self._get_ftd_hardware_name(member)
             if ftd_hardware:
-                ftd_members.append({
-                    "hardwareName": ftd_hardware,
-                    "type": "physicalinterface"
-                })
-                
-                # Create a physical interface entry for this member
-                # This ensures it gets imported and prepped for bridge group
-                # Get the name from the physical port's alias in system_interface
+                # Get the name/description from the physical port's entry in
+                # system_interface (fall back to the raw member name).
                 member_props = self._get_interface_properties(member)
                 member_alias = member_props.get('alias', member) if member_props else member
                 member_name = sanitize_interface_name(member_alias)
-
-                member_interface = {
-                    "name": member_name,
-                    "hardwareName": ftd_hardware,
-                    "description": member_props.get('description', f"Bridge Group {fg_name} member") if member_props else f"Bridge Group {fg_name} member",
-                    "enabled": True,
-                    "mode": "ROUTED",
-                    "type": "physicalinterface"
-                }
-                
-                # Only add if not already in the list
-                existing_hardware = [p.get('hardwareName') for p in self.physical_interfaces]
-                if ftd_hardware not in existing_hardware:
-                    self.physical_interfaces.append(member_interface)
+                member_desc = (member_props.get('description', f"Bridge Group {fg_name} member")
+                               if member_props else f"Bridge Group {fg_name} member")
+                if self._add_bridgegroup_member(fg_name, ftd_name, ftd_hardware,
+                                                ftd_members, member_name, member_desc):
                     print(f"      Added member interface: {member} -> {ftd_hardware}")
-                
-                # Track this physical interface as a bridge group member
-                # so its security zone is named after the bridge group
-                self.bridge_group_members[ftd_hardware] = ftd_name
-        
+
+        # Apply bridge group expansion: add MORE member links on the FTD side
+        # when requested (e.g. scale a server switch up with extra 10G ports).
+        # No-op unless an expansion spec matches this switch interface.
+        spec = self._get_bridgegroup_expansion_spec(fg_name, ftd_name)
+        if spec is not None:
+            self._apply_bridgegroup_expansion(fg_name, ftd_name, spec, ftd_members)
+
         if not ftd_members:
             print(f"    Skipped: {fg_name} (no valid member interfaces)")
             self.stats['skipped'] += 1
