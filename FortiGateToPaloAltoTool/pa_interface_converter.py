@@ -170,6 +170,9 @@ class PAInterfaceConverter:
         # Track port assignment
         self._next_port: int = 1
         self._used_ports: Set[int] = set()
+        # Ports held for explicitly-requested expansion/promotion specs, kept
+        # out of auto-assignment until their owning spec claims them.
+        self._held_ports: Set[int] = set()
 
         # Track aggregate-ethernet IDs
         self._next_ae_id: int = 1
@@ -308,6 +311,11 @@ class PAInterfaceConverter:
             parent = str(props.get("interface", "")).strip()
             if parent:
                 parent_interface_set.add(parent)
+
+        # Hold user-specified expansion/promotion ports out of the pool before
+        # any port is assigned, so greedy standalone assignment can't consume a
+        # port the user explicitly requested for an aggregate/Layer-2 segment.
+        self._prereserve_explicit_ports()
 
         # --- Phase 3: Convert aggregate interfaces first (need member ports) ---
         for fg_name, props in aggregate_ports:
@@ -466,6 +474,7 @@ class PAInterfaceConverter:
                   f"assigned elsewhere - skipped")
             return ""
         self._used_ports.add(port_num)
+        self._held_ports.discard(port_num)
         return f"{self.model_info['port_prefix']}{port_num}"
 
     # ------------------------------------------------------------------
@@ -781,37 +790,45 @@ class PAInterfaceConverter:
     ) -> None:
         """Promote a plain physical interface to a NEW aggregate-ethernet.
 
-        The original assigned port becomes member #1; extra members are added
-        per ``spec``. The interface's IP/MTU stay on the aggregate-ethernet
-        (in PAN-OS the ae is the Layer-3 interface).
+        For an int spec the interface's own auto-assigned port becomes member #1
+        and the channel grows to that TOTAL count. For an explicit port list the
+        listed ports ARE the members (exactly those). The interface's IP/MTU stay
+        on the aggregate-ethernet (in PAN-OS the ae is the Layer-3 interface).
         """
-        orig_port = self._assign_pa_port(fg_name)
-        if not orig_port:
-            print(f"    Skipped: {fg_name} (no available port to promote)")
-            self._stats["skipped"] += 1
-            return
-
         ae_id = self._next_ae_id
         self._next_ae_id += 1
         ae_name = f"ae{ae_id}"
 
-        member_pa_names = [orig_port]
-        member_configs = [{
-            "name": orig_port,
-            "type": "aggregate-member",
-            "aggregate_group": ae_name,
-            "enabled": True,
-            "comment": f"Member of {ae_name} (promoted from {fg_name})",
-        }]
-
-        # spec: int = TOTAL count incl. the original port; list = extra ports.
+        member_pa_names: List[str] = []
+        member_configs: List[Dict] = []
         if isinstance(spec, int):
-            extra_spec: Any = spec
+            orig_port = self._assign_pa_port(fg_name)
+            if not orig_port:
+                print(f"    Skipped: {fg_name} (no available port to promote)")
+                self._stats["skipped"] += 1
+                self._next_ae_id -= 1  # reclaim the unused ae id
+                return
+            member_pa_names.append(orig_port)
+            member_configs.append({
+                "name": orig_port,
+                "type": "aggregate-member",
+                "aggregate_group": ae_name,
+                "enabled": True,
+                "comment": f"Member of {ae_name} (promoted from {fg_name})",
+            })
+            self._apply_aggregate_expansion(
+                fg_name, ae_name, spec, member_pa_names, member_configs,
+            )
         else:
-            extra_spec = list(spec)
-        self._apply_aggregate_expansion(
-            fg_name, ae_name, extra_spec, member_pa_names, member_configs,
-        )
+            # Explicit ports become the members (held out of the pool earlier).
+            self._apply_aggregate_expansion(
+                fg_name, ae_name, list(spec), member_pa_names, member_configs,
+            )
+            if not member_pa_names:
+                print(f"    Skipped: {fg_name} (none of the requested ports were available)")
+                self._stats["skipped"] += 1
+                self._next_ae_id -= 1  # reclaim the unused ae id
+                return
 
         zone_name = self._determine_zone(fg_name, properties, zone_lookup)
         self.interface_name_mapping[fg_name] = ae_name
@@ -1034,15 +1051,10 @@ class PAInterfaceConverter:
     ) -> None:
         """Promote a plain physical interface to a NEW PAN-OS Layer-2 segment.
 
-        The original assigned port becomes the first layer2 member; extra
-        members are added per ``spec``. The interface's IP/MTU move onto the
-        vlan.N SVI."""
-        orig_port = self._assign_pa_port(fg_name)
-        if not orig_port:
-            print(f"    Skipped: {fg_name} (no available port to promote)")
-            self._stats["skipped"] += 1
-            return
-
+        For an int spec the interface's own auto-assigned port becomes the first
+        layer2 member and the segment grows to that TOTAL count. For an explicit
+        port list the listed ports ARE the members (exactly those). The
+        interface's IP/MTU move onto the vlan.N SVI."""
         vlan_obj = sanitize_name(f"{fg_name}_vlan")
         l3_zone = self._determine_zone(fg_name, properties, zone_lookup)
         l2_zone = sanitize_name(f"{l3_zone}_l2")
@@ -1052,18 +1064,29 @@ class PAInterfaceConverter:
 
         member_configs: List[Dict] = []
         member_pa_names: List[str] = []
-        self._add_layer2_member(
-            fg_name, orig_port, vlan_obj, l2_zone, member_configs,
-            member_pa_names, f"Layer-2 member of {vlan_obj} (promoted from {fg_name})",
-        )
-
         if isinstance(spec, int):
-            extra_spec: Any = spec
+            orig_port = self._assign_pa_port(fg_name)
+            if not orig_port:
+                print(f"    Skipped: {fg_name} (no available port to promote)")
+                self._stats["skipped"] += 1
+                return
+            self._add_layer2_member(
+                fg_name, orig_port, vlan_obj, l2_zone, member_configs,
+                member_pa_names,
+                f"Layer-2 member of {vlan_obj} (promoted from {fg_name})",
+            )
+            self._apply_bridgegroup_expansion(
+                fg_name, vlan_obj, l2_zone, spec, member_configs, member_pa_names,
+            )
         else:
-            extra_spec = list(spec)
-        self._apply_bridgegroup_expansion(
-            fg_name, vlan_obj, l2_zone, extra_spec, member_configs, member_pa_names,
-        )
+            # Explicit ports become the members (held out of the pool earlier).
+            self._apply_bridgegroup_expansion(
+                fg_name, vlan_obj, l2_zone, list(spec), member_configs, member_pa_names,
+            )
+            if not member_pa_names:
+                print(f"    Skipped: {fg_name} (none of the requested ports were available)")
+                self._stats["skipped"] += 1
+                return
 
         self._emit_layer2_segment(
             fg_name, properties, member_configs, member_pa_names,
@@ -1108,14 +1131,51 @@ class PAInterfaceConverter:
         return ""
 
     def _get_next_port(self) -> int:
-        """Get the next available port number on the target model."""
+        """Get the next available port number on the target model.
+
+        Skips ports held for explicit expansion/promotion specs so they aren't
+        auto-assigned to a standalone interface before their owning aggregate /
+        bridge group claims them.
+        """
         while self._next_port <= self.total_ports:
             port = self._next_port
             self._next_port += 1
-            if port not in self._used_ports:
+            if port not in self._used_ports and port not in self._held_ports:
                 self._used_ports.add(port)
                 return port
         return 0
+
+    def _prereserve_explicit_ports(self) -> None:
+        """Hold every explicitly-named expansion/promotion port out of the
+        auto-assignment pool before any interface is assigned a port.
+
+        Mirrors the FortiGate -> FTD tool: without this, a standalone physical
+        interface (converted in the same phase, in config order) can grab a port
+        the user explicitly requested for an aggregate or Layer-2 segment, and
+        the owning spec then skips it as 'already assigned elsewhere'.
+        """
+        self._held_ports = set()
+        spec_dicts = (
+            self.aggregate_expansion, self.promote_to_aggregate,
+            self.bridgegroup_expansion, self.promote_to_bridgegroup,
+        )
+        for spec_dict in spec_dicts:
+            for spec in (spec_dict or {}).values():
+                if not isinstance(spec, (list, tuple)):
+                    continue
+                for raw in spec:
+                    match = re.match(r"^ethernet1/(\d+)$", str(raw).strip().lower())
+                    if not match:
+                        continue
+                    num = int(match.group(1))
+                    if 1 <= num <= self.total_ports and num not in self._used_ports:
+                        self._held_ports.add(num)
+        if self._held_ports:
+            ports = ", ".join(
+                f"{self.model_info['port_prefix']}{n}" for n in sorted(self._held_ports)
+            )
+            print(f"  Reserved {len(self._held_ports)} port(s) for explicit "
+                  f"expansion/promotion: {ports}")
 
     def _build_zone_lookup(self, fg_zones: List) -> Dict[str, str]:
         """Build interface -> zone name mapping from FortiGate system_zone."""

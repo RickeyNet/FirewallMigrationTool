@@ -170,10 +170,27 @@ def test_promote_physical_to_bridgegroup() -> None:
     conv.set_bridgegroup_promotion({"port5": ["ethernet1/6"]})
     conv.convert()
 
+    # An explicit port list defines the EXACT member ports - so the segment
+    # uses ethernet1/6 only, not an extra auto-assigned port.
     l2 = _by_type(conv.get_interfaces(), "layer2-member")
-    assert len(l2) == 2  # original port5 + ethernet1/6
+    assert len(l2) == 1
+    assert l2[0]["name"] == "ethernet1/6"
     svi = _by_type(conv.get_interfaces(), "vlan-interface")
     assert svi and svi[0]["ip_address"] == "10.9.9.1/24"
+
+
+def test_promote_physical_to_bridgegroup_int_uses_own_port() -> None:
+    """An int spec keeps the original behavior: own port + grow to total."""
+    cfg = {
+        "system_interface": [
+            _iface("port5", type="physical", ip=["10.9.9.1", "255.255.255.0"]),
+        ]
+    }
+    conv = PAInterfaceConverter(cfg, target_model="pa-3250")
+    conv.set_bridgegroup_promotion({"port5": 2})
+    conv.convert()
+    l2 = _by_type(conv.get_interfaces(), "layer2-member")
+    assert len(l2) == 2  # auto-assigned own port + 1 grown member
 
 
 def test_zones_carry_mode() -> None:
@@ -205,3 +222,24 @@ def test_default_behavior_unchanged_without_specs() -> None:
     assert _by_type(conv.get_interfaces(), "physical")
     assert not _by_type(conv.get_interfaces(), "aggregate-ethernet")
     assert not _by_type(conv.get_interfaces(), "vlan-interface")
+
+
+# ---------------------------------------------------------------------------
+# Explicit ports are reserved and honored (regression for the FTD/PA bug where
+# standalone interfaces stole user-requested promotion/expansion ports)
+# ---------------------------------------------------------------------------
+def test_pa_promotion_explicit_ports_not_stolen() -> None:
+    # 11 standalone interfaces would otherwise consume ethernet1/1..1/11 first.
+    ifaces = [
+        _iface(f"p{i}", type="physical", ip=[f"10.0.{i}.1", "255.255.255.0"])
+        for i in range(1, 12)
+    ]
+    ifaces.append(_iface("srv", type="physical", ip=["10.9.9.1", "255.255.255.0"]))
+    conv = PAInterfaceConverter({"system_interface": ifaces}, target_model="pa-3250")
+    conv.set_bridgegroup_promotion({"srv": ["ethernet1/10", "ethernet1/11"]})
+    conv.convert()
+
+    vobj = _by_type(conv.get_interfaces(), "vlan-object")[0]
+    assert sorted(vobj["members"]) == ["ethernet1/10", "ethernet1/11"]
+    phys = {i["name"] for i in _by_type(conv.get_interfaces(), "physical")}
+    assert "ethernet1/10" not in phys and "ethernet1/11" not in phys
