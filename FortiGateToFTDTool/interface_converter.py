@@ -297,6 +297,7 @@ class InterfaceConverter:
         self.skip_ftd_ports = set()
         self._port_speed = {}    # full port name -> link-speed label (or None)
         self._all_ports = []     # every valid port name (fixed + module)
+        self._held_ports = set() # ports reserved up-front for explicit specs
 
         # Port mapping - will be built dynamically
         self.port_mapping = {}
@@ -787,9 +788,44 @@ class InterfaceConverter:
 
         # Reserve it
         self.assigned_ftd_ports.add(ftd_hardware)
+        self._held_ports.discard(ftd_hardware)
         if ftd_hardware in self.available_ftd_ports:
             self.available_ftd_ports.remove(ftd_hardware)
         return True
+
+    def _prereserve_explicit_ports(self) -> None:
+        """Hold every explicitly-named expansion/promotion port out of the
+        auto-assignment pool BEFORE any interface is assigned a port.
+
+        Port assignment is greedy (highest-numbered free port first), and
+        promotions/expansions run after standalone interfaces in the priority
+        order. Without this pre-pass a standalone interface would grab a port
+        the user explicitly requested for a port-channel/bridge group, and the
+        owning spec would then skip it as 'already assigned elsewhere'. Holding
+        the ports here keeps them out of _get_ftd_hardware_name()'s pool until
+        their owning spec claims them via _reserve_explicit_port().
+        """
+        self._held_ports = set()
+        spec_dicts = (
+            self.etherchannel_expansion, self.promote_to_etherchannel,
+            self.bridgegroup_expansion, self.promote_to_bridgegroup,
+        )
+        for spec_dict in spec_dicts:
+            for spec in (spec_dict or {}).values():
+                if not isinstance(spec, (list, tuple)):
+                    continue  # int = target count, no specific ports to hold
+                for raw in spec:
+                    port = str(raw).strip()
+                    if not re.match(r'^Ethernet\d+/\d+$', port):
+                        continue
+                    if port not in self._all_ports or port in self.skip_ftd_ports:
+                        continue  # invalid/HA - the owning spec will warn later
+                    if port in self.available_ftd_ports:
+                        self.available_ftd_ports.remove(port)
+                        self._held_ports.add(port)
+        if self._held_ports:
+            print(f"  Reserved {len(self._held_ports)} port(s) for explicit "
+                  f"expansion/promotion: {', '.join(sorted(self._held_ports))}")
 
     def _speed_group_of_port(self, ftd_hardware: str) -> Optional[str]:
         """Return the link-speed group label (e.g. '1G', '10G') for an FTD
@@ -1322,7 +1358,12 @@ class InterfaceConverter:
         # ====================================================================
         # PHASE 4: Convert in PRIORITY ORDER
         # ====================================================================
-        
+
+        # Hold user-specified expansion/promotion ports out of the pool first,
+        # so greedy per-interface assignment below cannot consume a port the
+        # user explicitly requested for a port-channel or bridge group.
+        self._prereserve_explicit_ports()
+
         # PRIORITY 1: Convert aggregate interfaces (EtherChannels)
         # These need member ports, so do first
         print("\n  [Priority 1] Converting Aggregate Interfaces (EtherChannels)...")
@@ -1669,32 +1710,53 @@ class InterfaceConverter:
         alias = properties.get('alias', fg_name)
         ftd_name = sanitize_interface_name(alias)
 
-        # Assign the original interface's FTD port - it becomes member #1
-        original_hardware = self._get_ftd_hardware_name(fg_name)
-        if not original_hardware:
-            print(f"    Skipped promotion: {fg_name} (no available FTD port)")
-            self.stats['skipped'] += 1
-            self.failed_items.append({"name": fg_name, "reason": "no available FTD port (promotion)", "config": properties})
-            return
-        if original_hardware in self.skip_ftd_ports:
-            print(f"    Skipped promotion: {fg_name} -> {original_hardware} (reserved port)")
-            self.stats['skipped'] += 1
-            self.failed_items.append({"name": fg_name, "reason": f"reserved port ({original_hardware})", "config": properties})
-            return
+        # Build the member list. Two spec forms:
+        #   int  -> auto-assign the interface's own port as member #1, then grow
+        #           to the requested TOTAL count from the free pool.
+        #   list -> the listed ports ARE the members (exactly those), so "use
+        #           ports 9-10" yields a 2-member channel, not 3.
+        ftd_members: List[Dict[str, Any]] = []
+        if isinstance(spec, int):
+            original_hardware = self._get_ftd_hardware_name(fg_name)
+            if not original_hardware:
+                print(f"    Skipped promotion: {fg_name} (no available FTD port)")
+                self.stats['skipped'] += 1
+                self.failed_items.append({"name": fg_name, "reason": "no available FTD port (promotion)", "config": properties})
+                return
+            if original_hardware in self.skip_ftd_ports:
+                print(f"    Skipped promotion: {fg_name} -> {original_hardware} (reserved port)")
+                self.stats['skipped'] += 1
+                self.failed_items.append({"name": fg_name, "reason": f"reserved port ({original_hardware})", "config": properties})
+                return
+            name_port = original_hardware
+        else:
+            # Representative port for the reserved-name rename below.
+            name_port = next(
+                (str(p).strip() for p in spec
+                 if re.match(r'^Ethernet\d+/\d+$', str(p).strip())),
+                'Ethernet1/1',
+            )
 
         # Reserved names that conflict with FTD built-ins (same rule as physical)
         reserved_names = {'management', 'diagnostic', 'inside', 'outside'}
         if ftd_name.lower() in reserved_names:
             original_reserved = ftd_name
-            port_num = original_hardware.split('/')[-1] if '/' in original_hardware else '1'
+            port_num = name_port.split('/')[-1] if '/' in name_port else '1'
             ftd_name = f"{ftd_name}_port{port_num}"
             print(f"      Note: '{original_reserved}' is reserved, renamed to '{ftd_name}'")
 
-        # Build member list: original port first, then expansion members
-        ftd_members = []
-        if self._add_etherchannel_member(fg_name, original_hardware, ftd_members):
-            print(f"      Promoted base member: {fg_name} -> {original_hardware} (routed mode, EC-ready)")
-        self._apply_etherchannel_expansion(fg_name, spec, ftd_members)
+        if isinstance(spec, int):
+            if self._add_etherchannel_member(fg_name, name_port, ftd_members):
+                print(f"      Promoted base member: {fg_name} -> {name_port} (routed mode, EC-ready)")
+            self._apply_etherchannel_expansion(fg_name, spec, ftd_members)
+        else:
+            # Explicit ports become the members (held out of the pool earlier).
+            self._apply_etherchannel_expansion(fg_name, list(spec), ftd_members)
+            if not ftd_members:
+                print(f"    Skipped promotion: {fg_name} (none of the requested ports were available)")
+                self.stats['skipped'] += 1
+                self.failed_items.append({"name": fg_name, "reason": "no requested ports available (promotion)", "config": properties})
+                return
 
         # Store name mapping so routes/policies follow the interface to the EC
         self.interface_name_mapping[fg_name] = ftd_name
@@ -1751,35 +1813,56 @@ class InterfaceConverter:
         alias = properties.get('alias', fg_name)
         ftd_name = sanitize_interface_name(alias)
 
-        # Assign the original interface's FTD port - it becomes member #1
-        original_hardware = self._get_ftd_hardware_name(fg_name)
-        if not original_hardware:
-            print(f"    Skipped promotion: {fg_name} (no available FTD port)")
-            self.stats['skipped'] += 1
-            self.failed_items.append({"name": fg_name, "reason": "no available FTD port (bridge promotion)", "config": properties})
-            return
-        if original_hardware in self.skip_ftd_ports:
-            print(f"    Skipped promotion: {fg_name} -> {original_hardware} (reserved port)")
-            self.stats['skipped'] += 1
-            self.failed_items.append({"name": fg_name, "reason": f"reserved port ({original_hardware})", "config": properties})
-            return
+        # Decide the representative port used for the reserved-name rename, and
+        # (for an int spec) auto-assign the interface's own port as member #1.
+        #   int  -> auto port + grow to the requested TOTAL count.
+        #   list -> the listed ports ARE the members (exactly those), so "use
+        #           ports 9-10" yields a 2-member bridge group, not 3.
+        if isinstance(spec, int):
+            original_hardware = self._get_ftd_hardware_name(fg_name)
+            if not original_hardware:
+                print(f"    Skipped promotion: {fg_name} (no available FTD port)")
+                self.stats['skipped'] += 1
+                self.failed_items.append({"name": fg_name, "reason": "no available FTD port (bridge promotion)", "config": properties})
+                return
+            if original_hardware in self.skip_ftd_ports:
+                print(f"    Skipped promotion: {fg_name} -> {original_hardware} (reserved port)")
+                self.stats['skipped'] += 1
+                self.failed_items.append({"name": fg_name, "reason": f"reserved port ({original_hardware})", "config": properties})
+                return
+            name_port = original_hardware
+        else:
+            name_port = next(
+                (str(p).strip() for p in spec
+                 if re.match(r'^Ethernet\d+/\d+$', str(p).strip())),
+                'Ethernet1/1',
+            )
 
         # Reserved names that conflict with FTD built-ins (same rule as physical)
         reserved_names = {'management', 'diagnostic', 'inside', 'outside'}
         if ftd_name.lower() in reserved_names:
             original_reserved = ftd_name
-            port_num = original_hardware.split('/')[-1] if '/' in original_hardware else '1'
+            port_num = name_port.split('/')[-1] if '/' in name_port else '1'
             ftd_name = f"{ftd_name}_port{port_num}"
             print(f"      Note: '{original_reserved}' is reserved, renamed to '{ftd_name}'")
 
-        # Build member list: original port first (synthesized member name so it
-        # does not collide with the BVI name), then expansion members.
+        # Build the member list (synthesized member names so they don't collide
+        # with the BVI name).
         ftd_members: List[Dict[str, Any]] = []
-        base_member_name = self._bridgegroup_member_name(ftd_name, original_hardware)
-        if self._add_bridgegroup_member(fg_name, ftd_name, original_hardware,
-                                        ftd_members, base_member_name):
-            print(f"      Promoted base member: {fg_name} -> {original_hardware} (routed mode, BVI member)")
-        self._apply_bridgegroup_expansion(fg_name, ftd_name, spec, ftd_members)
+        if isinstance(spec, int):
+            base_member_name = self._bridgegroup_member_name(ftd_name, name_port)
+            if self._add_bridgegroup_member(fg_name, ftd_name, name_port,
+                                            ftd_members, base_member_name):
+                print(f"      Promoted base member: {fg_name} -> {name_port} (routed mode, BVI member)")
+            self._apply_bridgegroup_expansion(fg_name, ftd_name, spec, ftd_members)
+        else:
+            # Explicit ports become the members (held out of the pool earlier).
+            self._apply_bridgegroup_expansion(fg_name, ftd_name, list(spec), ftd_members)
+            if not ftd_members:
+                print(f"    Skipped promotion: {fg_name} (none of the requested ports were available)")
+                self.stats['skipped'] += 1
+                self.failed_items.append({"name": fg_name, "reason": "no requested ports available (bridge promotion)", "config": properties})
+                return
 
         # Store name mapping so routes/policies follow the interface to the BVI
         self.interface_name_mapping[fg_name] = ftd_name
