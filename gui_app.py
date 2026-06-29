@@ -836,6 +836,7 @@ class App(tk.Tk):
             self.conv_ha_entry.configure(state=tk.NORMAL)
             self.conv_ha_var.set("admin")
             self.conv_ha_hint.configure(text="FTD username (leave blank for 'admin')")
+            self._update_ha_pick_visible()
         else:
             # FortiGate - restore FTD and PA targets (not FortiGate-as-target)
             self.conv_ftd_file_var.set(False)
@@ -864,6 +865,7 @@ class App(tk.Tk):
             self.conv_ha_label.configure(text="FTD Username:", foreground=_FG)
             self.conv_ha_var.set("admin")
             self.conv_ha_hint.configure(text="FTD username (leave blank for 'admin')")
+        self._update_ha_pick_visible()
 
     def _on_platform_change(self, event: Optional[Any] = None) -> None:
         """Handle platform selector change - update model lists and labels."""
@@ -1005,7 +1007,7 @@ class App(tk.Tk):
                 self.conv_output_var.set("ftd_config")
             self.conv_ha_entry.configure(state=tk.NORMAL)
             self.conv_ha_label.configure(text="HA Port (optional):", foreground=_FG)
-            self.conv_ha_hint.configure(text="e.g. Ethernet1/5 or Ethernet1/2,Ethernet1/3  (blank = no HA port)")
+            self.conv_ha_hint.configure(text="click Pick… to choose HA port(s), or type e.g. Ethernet1/2,Ethernet1/3  (blank = none)")
 
             self.imp_host_label.configure(text="FTD Host / IP:")
             if self.imp_base_var.get().strip() in DEFAULT_OUTPUT_BASES:
@@ -1028,6 +1030,8 @@ class App(tk.Tk):
         self._update_aggregation_visibility()
         # Show/hide the FTD network-module selector for the new target.
         self._update_module_selector()
+        # Show the HA port picker only in FTD HA-port mode (not username mode).
+        self._update_ha_pick_visible()
 
     def _retitle_import_cleanup_tabs(self, target: str) -> None:
         """Update Import/Cleanup tab titles, section frame labels, and enabled state
@@ -1150,13 +1154,24 @@ class App(tk.Tk):
             "<<ComboboxSelected>>", lambda _e: self._update_module_selector(),
         )
 
-        # Row 4: HA port (optional)
+        # Row 4: HA port (optional). The entry + "Pick..." button share a cell;
+        # the button opens a checkbox port picker (FTD HA-port mode only). The
+        # same field is reused as a free-text FTD Username field for FTD->FG, so
+        # the entry stays and the picker button is hidden in that mode.
         self.conv_ha_label = ttk.Label(opts, text="HA Port (optional):")
         self.conv_ha_label.grid(row=4, column=0, sticky=tk.W, pady=3)
         self.conv_ha_var = tk.StringVar()
-        self.conv_ha_entry = ttk.Entry(opts, textvariable=self.conv_ha_var, width=28)
-        self.conv_ha_entry.grid(row=4, column=1, sticky=tk.W, padx=4)
-        self.conv_ha_hint = ttk.Label(opts, text="e.g. Ethernet1/5 or Ethernet1/2,Ethernet1/3  (blank = no HA port)")
+        self._conv_ha_cell = ttk.Frame(opts)
+        self._conv_ha_cell.grid(row=4, column=1, sticky=tk.W, padx=4)
+        self.conv_ha_entry = ttk.Entry(
+            self._conv_ha_cell, textvariable=self.conv_ha_var, width=28,
+        )
+        self.conv_ha_entry.pack(side=tk.LEFT)
+        self.conv_ha_pick_btn = ttk.Button(
+            self._conv_ha_cell, text="Pick…", width=6, command=self._ha_pick_ports,
+        )
+        self.conv_ha_pick_btn.pack(side=tk.LEFT, padx=(3, 0))
+        self.conv_ha_hint = ttk.Label(opts, text="click Pick… to choose HA port(s), or type e.g. Ethernet1/2,Ethernet1/3  (blank = none)")
         self.conv_ha_hint.grid(row=5, column=1, sticky=tk.W)
 
         # Row 6: Network module (FTD only; enabled for models with an NM slot)
@@ -1391,13 +1406,16 @@ class App(tk.Tk):
         elif category == "physical":
             row["action_var"].set(AGG_ACTION_PROMOTE)
 
-    def _agg_model_ports(self) -> List[Dict[str, Any]]:
+    def _agg_model_ports(self, mark_ha_reserved: bool = True) -> List[Dict[str, Any]]:
         """Return the data ports of the currently selected target model.
 
         Each entry is {'name', 'label', 'reserved'}: 'name' is the hardware
         port (e.g. 'Ethernet1/9'), 'label' adds a speed/HA hint for the picker,
         and 'reserved' is True for HA ports (shown disabled - they can't be
         members). Returns [] if the model/port count can't be determined.
+
+        Set mark_ha_reserved=False for the HA picker itself, where the HA ports
+        are exactly what's being chosen (so none should be disabled).
         """
         model = self.conv_model_var.get().strip()
         if not model or model == "(not applicable)":
@@ -1416,7 +1434,7 @@ class App(tk.Tk):
                     speed_groups = info.get("port_speed_groups")
                 # Mark the HA port(s) entered on the Convert tab as reserved.
                 ha_raw = self.conv_ha_var.get().strip()
-                if ha_raw and ha_raw.lower() != "none":
+                if mark_ha_reserved and ha_raw and ha_raw.lower() != "none":
                     for tok in re.split(r"[,;\s]+", ha_raw):
                         tok = tok.strip()
                         if tok:
@@ -1706,6 +1724,79 @@ class App(tk.Tk):
             combo = row["frame"].grid_slaves(row=0, column=0)
             if combo:
                 combo[0].configure(values=self._agg_iface_names)
+
+    def _update_ha_pick_visible(self) -> None:
+        """Show the HA 'Pick…' button only when the field is in FTD HA-port mode
+        and editable. It's hidden when the field is repurposed as the FTD
+        Username field, or disabled (PAN-OS / FortiGate targets)."""
+        btn = getattr(self, "conv_ha_pick_btn", None)
+        if btn is None:
+            return
+        label = str(self.conv_ha_label.cget("text"))
+        editable = str(self.conv_ha_entry.cget("state")) == "normal"
+        show = label.startswith("HA Port") and editable
+        if show:
+            if not btn.winfo_ismapped():
+                btn.pack(side=tk.LEFT, padx=(3, 0))
+        else:
+            btn.pack_forget()
+
+    def _ha_pick_ports(self) -> None:
+        """Open a checkbox picker of the target model's ports and write the
+        chosen HA port(s) back into the HA field as a comma list."""
+        ports = self._agg_model_ports(mark_ha_reserved=False)
+        if not ports:
+            self._show_message(
+                "Pick HA Port(s)",
+                "Choose an FTD target model on the Convert tab first so the "
+                "available ports are known.",
+                kind="warning",
+            )
+            return
+
+        current = {
+            p.strip() for p in self.conv_ha_var.get().split(",")
+            if p.strip() and p.strip().lower() != "none"
+        }
+
+        win = tk.Toplevel(self)
+        win.title("Select HA port(s)")
+        win.transient(self)
+        win.configure(bg=_BG)
+
+        ttk.Label(
+            win,
+            text=("Tick the port(s) reserved for the HA link. They are excluded "
+                  "from the data-interface conversion. Most setups use one; pick "
+                  "two for separate control/data HA links."),
+            wraplength=340, justify=tk.LEFT,
+        ).pack(anchor=tk.W, padx=10, pady=(10, 4))
+
+        container, inner = self._make_scrollable(win)
+        container.pack(fill=tk.BOTH, expand=True, padx=10, pady=4)
+
+        vars_by_port: Dict[str, tk.BooleanVar] = {}
+        for port in ports:
+            var = tk.BooleanVar(value=(port["name"] in current))
+            ttk.Checkbutton(inner, text=port["label"], variable=var).pack(
+                anchor=tk.W, pady=1,
+            )
+            vars_by_port[port["name"]] = var
+
+        def apply_selection() -> None:
+            chosen = [p["name"] for p in ports if vars_by_port[p["name"]].get()]
+            self.conv_ha_var.set(",".join(chosen))
+            win.destroy()
+
+        btns = ttk.Frame(win)
+        btns.pack(fill=tk.X, padx=10, pady=(4, 10))
+        ttk.Button(btns, text="OK", command=apply_selection).pack(side=tk.RIGHT)
+        ttk.Button(btns, text="Cancel", command=win.destroy).pack(
+            side=tk.RIGHT, padx=(0, 6),
+        )
+
+        win.geometry("360x440")
+        win.grab_set()
 
     def _update_module_selector(self) -> None:
         """Show the Network Module dropdown only for an FTD target, and enable
