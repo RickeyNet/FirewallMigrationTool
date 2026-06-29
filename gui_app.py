@@ -846,6 +846,9 @@ class App(tk.Tk):
             self.conv_input_label.configure(text="Input YAML:")
             self.conv_browse_btn.configure(state=tk.NORMAL)
 
+        # The FortiGate YAML export how-to only applies to a FortiGate source.
+        self._set_fortinet_help_visible(source == "FortiGate")
+
     def _on_ftd_mode_change(self) -> None:
         """Toggle between live FDM API and JSON file input for Cisco FTD source."""
         if self.conv_ftd_file_var.get():
@@ -1111,7 +1114,20 @@ class App(tk.Tk):
         tab = ttk.Frame(notebook)
         notebook.add(tab, text="  Convert  ")
 
+        # How-to banner for exporting the FortiGate config (FortiGate source only;
+        # toggled in _on_source_change via _set_fortinet_help_visible()).
+        self.conv_fortinet_help = ttk.Label(
+            tab,
+            text=("ℹ  How to get the FortiGate config file:  on your FortiGate, "
+                  "click the user menu (top-right) → Configuration → Backup → "
+                  "select YAML → OK to download.  Then click Browse… below to "
+                  "select the downloaded file."),
+            foreground=_ACCENT, wraplength=760, justify=tk.LEFT,
+        )
+        self.conv_fortinet_help.pack(fill=tk.X, padx=10, pady=(8, 0), anchor=tk.W)
+
         opts = ttk.LabelFrame(tab, text="Conversion Options", padding=10)
+        self._conv_opts_frame = opts
         opts.pack(fill=tk.X, padx=8, pady=(8, 4))
 
         # Row 0: Input file
@@ -1724,6 +1740,19 @@ class App(tk.Tk):
             combo = row["frame"].grid_slaves(row=0, column=0)
             if combo:
                 combo[0].configure(values=self._agg_iface_names)
+
+    def _set_fortinet_help_visible(self, visible: bool) -> None:
+        """Show the FortiGate export how-to banner only for a FortiGate source."""
+        lbl = getattr(self, "conv_fortinet_help", None)
+        opts = getattr(self, "_conv_opts_frame", None)
+        if lbl is None or opts is None:
+            return
+        if visible:
+            if not lbl.winfo_ismapped():
+                # Keep it above the options frame after a hide/show cycle.
+                lbl.pack(fill=tk.X, padx=10, pady=(8, 0), anchor=tk.W, before=opts)
+        else:
+            lbl.pack_forget()
 
     def _update_ha_pick_visible(self) -> None:
         """Show the HA 'Pick…' button only when the field is in FTD HA-port mode
