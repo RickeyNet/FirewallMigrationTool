@@ -413,7 +413,7 @@ _TAB_BG   = _t["tab_bg"]
 _OUT_BG   = _t["out_bg"]
 _OUT_FG   = _t["out_fg"]
 
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.7.0"
 
 
 class App(tk.Tk):
@@ -1190,7 +1190,7 @@ class App(tk.Tk):
         )
         self._agg_frame = frame
 
-        ttk.Label(
+        self._agg_hint_label = ttk.Label(
             frame,
             text=(
                 "Optional: scale up link aggregation on the FTD side. Add a row "
@@ -1199,7 +1199,8 @@ class App(tk.Tk):
                 "(e.g. Ethernet1/5,Ethernet1/6). Leave empty to migrate 1:1."
             ),
             justify=tk.LEFT,
-        ).grid(row=0, column=0, columnspan=5, sticky=tk.W, pady=(0, 8))
+        )
+        self._agg_hint_label.grid(row=0, column=0, columnspan=5, sticky=tk.W, pady=(0, 8))
 
         # Column header
         header = ttk.Frame(frame)
@@ -1505,15 +1506,36 @@ class App(tk.Tk):
                 combo[0].configure(values=self._agg_iface_names)
 
     def _update_aggregation_visibility(self) -> None:
-        """Show the builder only for FortiGate -> FTD; hide it otherwise."""
+        """Show the builder for FortiGate -> FTD and FortiGate -> Palo Alto;
+        hide it for every other direction."""
         frame = getattr(self, "_agg_frame", None)
         if frame is None:
             return
-        is_fg_to_ftd = (
-            self._current_source == "FortiGate"
-            and self._current_platform == "Cisco FTD"
+        is_supported = self._current_source == "FortiGate" and (
+            self._current_platform in ("Cisco FTD", "Palo Alto PAN-OS")
         )
-        if is_fg_to_ftd:
+        if is_supported:
+            # Retarget the section label/port hint to the active platform.
+            target_short = (
+                "FTD" if self._current_platform == "Cisco FTD" else "Palo Alto"
+            )
+            self._agg_frame.configure(
+                text=f"Interface Aggregation  (FortiGate → {target_short})",
+            )
+            port_example = (
+                "Ethernet1/5,Ethernet1/6"
+                if self._current_platform == "Cisco FTD"
+                else "ethernet1/5,ethernet1/6"
+            )
+            self._agg_hint_label.configure(
+                text=(
+                    "Optional: scale up link aggregation on the "
+                    f"{target_short} side. Add a row per interface to grow into "
+                    "a Port-Channel or Bridge Group.\n"
+                    "Members = a target count (e.g. 4) or an explicit port list "
+                    f"(e.g. {port_example}). Leave empty to migrate 1:1."
+                ),
+            )
             if not self._agg_visible:
                 frame.pack(
                     fill=tk.X, padx=8, pady=4, before=self._conv_btn_frame,
@@ -2563,13 +2585,24 @@ class App(tk.Tk):
         put("[remapped from VLAN N]", "code")
         put("), and counted in the conversion summary.\n\n", "bullet")
 
-        put("Interface Aggregation Scale-Up (FortiGate \u2192 FTD)\n", "h2")
-        put("Optional. Lets you add bandwidth and redundancy on the Cisco side "
+        put("Interface Aggregation Scale-Up (FortiGate \u2192 FTD / Palo Alto)\n", "h2")
+        put("Optional. Lets you add bandwidth and redundancy on the target side "
             "during conversion - grow an existing aggregate, or turn a plain "
             "physical interface into one. The ", "")
         put("Interface Aggregation", "bold")
-        put(" panel appears on the Convert tab only for FortiGate \u2192 FTD "
-            "migrations. Leave it empty to migrate interfaces 1:1 (default).\n\n", "")
+        put(" panel appears on the Convert tab for FortiGate \u2192 FTD and "
+            "FortiGate \u2192 Palo Alto migrations. Leave it empty to migrate "
+            "interfaces 1:1 (default).\n\n", "")
+        put("On Palo Alto the same controls map to PAN-OS equivalents: a "
+            "Port-Channel becomes an ", "")
+        put("aggregate-ethernet", "italic")
+        put(" (LACP) interface, and a Bridge Group becomes a Layer-2 ", "")
+        put("VLAN", "italic")
+        put(" whose member ports are bridged and whose IP lives on a ", "")
+        put("vlan.N", "code")
+        put(" interface (the SVI). Port names use the PAN-OS form (", "")
+        put("ethernet1/5", "code")
+        put(").\n\n", "")
         put("To use it, click ", "")
         put("+ Add Interface", "bold")
         put(" to add a row, then for each row:\n\n", "")
@@ -3387,10 +3420,13 @@ class App(tk.Tk):
                 ha_port = self.conv_ha_var.get().strip()
                 argv.extend(["--ha-port", ha_port if ha_port else "none"])
 
-            # Interface link-aggregation scale-up is only supported on
-            # FortiGate->FTD. Each builder row -> one converter flag, derived
-            # from its (action, target) pair via AGG_FLAG_MAP.
-            if not is_pa and not is_asa:
+            # Interface link-aggregation scale-up: FortiGate -> FTD and
+            # FortiGate -> Palo Alto both accept the same flags (port-channel
+            # maps to aggregate-ethernet, bridge group to a Layer-2 VLAN on PA).
+            # Each builder row -> one converter flag via AGG_FLAG_MAP.
+            if self._current_source == "FortiGate" and (
+                is_pa or self._current_platform == "Cisco FTD"
+            ):
                 for row in self._agg_rows:
                     name = row["iface_var"].get().strip()
                     members = row["members_var"].get().strip()

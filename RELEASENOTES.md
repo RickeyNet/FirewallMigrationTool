@@ -1,5 +1,23 @@
 # Release Notes
 
+## v1.7.0 - Interface Scale-Up for FortiGate -> Palo Alto
+
+### Overview
+
+Brings the FortiGate -> FTD interface scale-up to the FortiGate -> Palo Alto path. The same four options (expand/promote a port channel, expand/promote a bridge group) now work when the target is PAN-OS, mapped to the closest PAN-OS constructs, and the GUI Interface Aggregation builder is now shown for FortiGate -> Palo Alto as well.
+
+### New Features
+
+**Scale up interfaces during FortiGate -> Palo Alto migration**
+
+The four converter flags now also work in `pa_converter.py`, mapped to PAN-OS equivalents:
+
+- **Port channel -> aggregate-ethernet (`--expand-portchannel`, `--promote-portchannel`)** - Grow an existing FortiGate aggregate to more `aggregate-ethernet` (LACP) members, or promote a plain physical interface into a NEW `ae`. SPEC is a target total member count or a comma-separated list of PAN-OS ports to add (e.g. `ethernet1/5,ethernet1/6`). Unlike FTD (where the port channel is left IP-less), the IP/MTU stay on the `ae` - in PAN-OS the aggregate-ethernet is itself the Layer-3 interface.
+- **Bridge group -> Layer-2 VLAN segment (`--expand-bridgegroup`, `--promote-bridgegroup`)** - PAN-OS has no BVI, so a FortiGate virtual switch (`system_switch-interface`) is now converted to a Layer-2 segment instead of being skipped: member ports become `layer2` interfaces grouped in a VLAN object, and the switch's IP moves onto a `vlan.N` interface (the SVI, the Layer-3 analog of an FTD bridge group). Expansion adds more Layer-2 members; promotion turns a plain physical interface into a new Layer-2 segment with its IP on the SVI. Members land in a dedicated Layer-2 security zone; the SVI lands in a Layer-3 zone, so routes and policies that reference the switch resolve to `vlan.N`.
+- **Importer support** - The PAN-OS XML importer gained builders and XPaths for the new interface types (`layer2-member`, `vlan-object`, `vlan-interface`) and now emits `layer2` zones in addition to `layer3` zones.
+- **GUI** - The Interface Aggregation builder on the Convert tab is now shown for FortiGate -> Palo Alto as well as FortiGate -> FTD. The section label and port-format hints retarget to the active platform (`ethernet1/5` for PAN-OS). The same Expand/Promote x Port-Channel/Bridge-Group rows drive both targets.
+- **Default behavior is unchanged** when none of the flags are used, except that FortiGate switch interfaces, previously dropped on the PAN-OS path, now convert to Layer-2 VLAN segments.
+
 ## v1.6.0 - Link Aggregation Scale-Up, SNMPv3, VLAN Conflict Resolution
 
 ### Overview

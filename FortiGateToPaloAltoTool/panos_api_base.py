@@ -47,6 +47,8 @@ XPATHS = {
     ),
     "ethernet":           f"{_DEVICE_BASE}/network/interface/ethernet",
     "aggregate_ethernet": f"{_DEVICE_BASE}/network/interface/aggregate-ethernet",
+    "vlan":               f"{_DEVICE_BASE}/network/vlan",
+    "vlan_interface":     f"{_DEVICE_BASE}/network/interface/vlan/units",
 }
 
 

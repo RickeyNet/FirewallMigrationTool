@@ -101,6 +101,35 @@ def preprocess_yaml_file(input_file: str) -> str:
     return "".join(cleaned_lines)
 
 
+def parse_expansion_specs(specs: Optional[List[str]]) -> dict:
+    """Parse repeatable ``NAME=SPEC`` scale-up values into a dict.
+
+    SPEC is either an integer total member count or a comma-separated list of
+    PAN-OS ports (e.g. 'ethernet1/5,ethernet1/6'). Invalid entries are skipped
+    with a warning. Shared by all four interface scale-up flags.
+    """
+    expansion: dict = {}
+    for raw in specs or []:
+        if "=" not in raw:
+            print(f"[WARNING] Ignoring scale-up '{raw}': expected NAME=SPEC format")
+            continue
+        key, _, value = raw.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if not key or not value:
+            print(f"[WARNING] Ignoring scale-up '{raw}': empty name or spec")
+            continue
+        if value.isdigit():
+            expansion[key] = int(value)
+        else:
+            ports = [p.strip() for p in value.split(",") if p.strip()]
+            if not ports:
+                print(f"[WARNING] Ignoring scale-up '{raw}': no valid ports")
+                continue
+            expansion[key] = ports
+    return expansion
+
+
 def build_conversion_metadata(args: argparse.Namespace) -> dict:
     """Build metadata dictionary for downstream tools."""
     return {
@@ -162,6 +191,40 @@ Examples:
         "--list-models",
         action="store_true",
         help="List supported Palo Alto models and exit",
+    )
+
+    # ------------------------------------------------------------------
+    # Interface scale-up flags (mirror FortiGateToFTDTool). Port-channel maps
+    # to PAN-OS aggregate-ethernet; bridge-group maps to a Layer-2 VLAN + SVI.
+    # ------------------------------------------------------------------
+    parser.add_argument(
+        "--expand-portchannel", action="append", default=[], metavar="AGG=SPEC",
+        help="Grow a FortiGate aggregate to MORE aggregate-ethernet members. "
+             "AGG is the aggregate name/alias. SPEC is a target TOTAL member "
+             "count (e.g. 'WAN_LAG=4') or a comma-separated list of PAN-OS "
+             "ports to ADD (e.g. 'SRV_LAG=ethernet1/5,ethernet1/6'). Repeatable.",
+    )
+    parser.add_argument(
+        "--promote-portchannel", action="append", default=[], metavar="IFACE=SPEC",
+        help="Promote a plain FortiGate physical interface into a NEW PAN-OS "
+             "aggregate-ethernet. SPEC is a target TOTAL member count incl. the "
+             "original port (e.g. 'wan1=2') or a comma-separated list of extra "
+             "PAN-OS ports (e.g. 'wan1=ethernet1/6'). The IP stays on the ae. "
+             "Repeatable.",
+    )
+    parser.add_argument(
+        "--expand-bridgegroup", action="append", default=[], metavar="SWITCH=SPEC",
+        help="Grow a converted FortiGate switch's Layer-2 segment with MORE "
+             "member ports. SWITCH is the system_switch-interface name. SPEC is "
+             "a target TOTAL member count or a comma-separated list of PAN-OS "
+             "ports to ADD. Repeatable.",
+    )
+    parser.add_argument(
+        "--promote-bridgegroup", action="append", default=[], metavar="IFACE=SPEC",
+        help="Promote a plain FortiGate physical interface into a NEW PAN-OS "
+             "Layer-2 segment (VLAN + vlan.N SVI). SPEC is a target TOTAL member "
+             "count incl. the original port or a comma-separated list of extra "
+             "PAN-OS ports. The IP moves onto the SVI. Repeatable.",
     )
 
     args = parser.parse_args(argv)
@@ -238,6 +301,22 @@ Examples:
     print("=" * 70)
 
     interface_converter = PAInterfaceConverter(fg_config, target_model=args.target_model)
+
+    # Interface scale-up (optional): grow aggregates / Layer-2 segments or
+    # promote plain physical ports into them. No-op unless a flag was given.
+    agg_expansion = parse_expansion_specs(getattr(args, "expand_portchannel", []))
+    if agg_expansion:
+        interface_converter.set_aggregate_expansion(agg_expansion)
+    agg_promotion = parse_expansion_specs(getattr(args, "promote_portchannel", []))
+    if agg_promotion:
+        interface_converter.set_aggregate_promotion(agg_promotion)
+    bg_expansion = parse_expansion_specs(getattr(args, "expand_bridgegroup", []))
+    if bg_expansion:
+        interface_converter.set_bridgegroup_expansion(bg_expansion)
+    bg_promotion = parse_expansion_specs(getattr(args, "promote_bridgegroup", []))
+    if bg_promotion:
+        interface_converter.set_bridgegroup_promotion(bg_promotion)
+
     zones = interface_converter.convert()
     pa_interfaces = interface_converter.get_interfaces()
     interface_name_mapping = interface_converter.get_interface_mapping()

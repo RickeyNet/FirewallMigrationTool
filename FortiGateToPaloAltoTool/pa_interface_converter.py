@@ -17,8 +17,18 @@ FORTIGATE INTERFACE TYPES:
     - type: physical   → PAN-OS ethernet (layer3 with IP)
     - type: aggregate  → PAN-OS aggregate-ethernet (LACP)
     - VLAN (interface + vlanid) → PAN-OS subinterface (ethernet1/X.tag)
-    - type: switch     → Skipped (no PAN-OS equivalent; use virtual-wire manually)
+    - type: switch (system_switch-interface) → PAN-OS Layer-2 segment:
+          member ports become layer2 interfaces grouped in a VLAN object, and
+          the switch's IP moves onto a vlan.N interface (SVI) - the L3 analog of
+          an FTD bridge group (BVI).
     - type: loopback/tunnel → Skipped
+
+INTERFACE SCALE-UP (mirrors the FortiGate -> FTD tool):
+    - Aggregate expansion  : grow an existing aggregate to MORE ethernet members
+    - Aggregate promotion  : turn a plain physical port into a NEW aggregate-ethernet
+    - Bridge-group expansion: grow a switch's Layer-2 segment with MORE members
+    - Bridge-group promotion: turn a plain physical port into a NEW Layer-2 segment
+  Port-channel <-> aggregate-ethernet; bridge-group <-> Layer-2 VLAN + vlan.N SVI.
 
 OUTPUT JSON (interfaces):
     {
@@ -42,7 +52,8 @@ PA-440 hardware reference:
     - 1x mgmt port (separate, not in data plane)
 """
 
-from typing import Any, Dict, List, Set
+import re
+from typing import Any, Dict, List, Optional, Set
 
 from pa_common import sanitize_name, netmask_to_cidr
 
@@ -152,6 +163,10 @@ class PAInterfaceConverter:
         # Zone name -> list of PAN-OS interface names
         self._zone_members: Dict[str, List[str]] = {}
 
+        # Zone name -> mode ("layer3" or "layer2"). Layer-2 zones hold the member
+        # ports of a converted FortiGate switch; the SVI lives in an L3 zone.
+        self._zone_modes: Dict[str, str] = {}
+
         # Track port assignment
         self._next_port: int = 1
         self._used_ports: Set[int] = set()
@@ -159,12 +174,30 @@ class PAInterfaceConverter:
         # Track aggregate-ethernet IDs
         self._next_ae_id: int = 1
 
+        # Track VLAN IDs used for converted FortiGate switches -> vlan.N SVIs
+        self._next_vlan_id: int = 1
+
+        # ------------------------------------------------------------------
+        # Interface scale-up config (mirrors FortiGateToFTDTool). All matched
+        # case-insensitively by FortiGate name/alias. Empty = 1:1 migration.
+        # ------------------------------------------------------------------
+        # Grow an existing aggregate to MORE aggregate-ethernet members.
+        self.aggregate_expansion: Dict[str, Any] = {}
+        # Promote a plain physical port to a NEW aggregate-ethernet.
+        self.promote_to_aggregate: Dict[str, Any] = {}
+        # Grow a converted switch's Layer-2 segment with MORE members.
+        self.bridgegroup_expansion: Dict[str, Any] = {}
+        # Promote a plain physical port to a NEW Layer-2 segment (VLAN + SVI).
+        self.promote_to_bridgegroup: Dict[str, Any] = {}
+
         # Statistics
         self._stats = {
             "total_interfaces": 0,
             "physical_interfaces": 0,
             "subinterfaces": 0,
             "aggregate_interfaces": 0,
+            "bridge_groups": 0,
+            "layer2_members": 0,
             "zones_created": 0,
             "mapped_interfaces": 0,
             "skipped": 0,
@@ -186,6 +219,21 @@ class PAInterfaceConverter:
         # Build FortiGate zone lookup from system_zone
         fg_zones = self.fg_config.get("system_zone", [])
         zone_lookup = self._build_zone_lookup(fg_zones)
+
+        # FortiGate switches: the member list lives in system_switch-interface;
+        # the switch's IP lives on the same-named system_interface entry (the
+        # SVI source). Collect both so switches convert to a PAN-OS Layer-2
+        # segment instead of being dropped.
+        switch_interfaces = []  # (switch_name, switch_props) from system_switch-interface
+        for sw_dict in self.fg_config.get("system_switch-interface", []) or []:
+            if not isinstance(sw_dict, dict) or not sw_dict:
+                continue
+            sw_name = str(list(sw_dict.keys())[0])
+            sw_props = sw_dict[sw_name]
+            if isinstance(sw_props, dict):
+                switch_interfaces.append((sw_name, sw_props))
+        switch_names = {name for name, _ in switch_interfaces}
+        switch_svi_props: Dict[str, Dict] = {}  # switch_name -> system_interface props
 
         # Categorize interfaces by type
         physical_ports = []
@@ -222,6 +270,12 @@ class PAInterfaceConverter:
                 self._stats["skipped"] += 1
                 continue
 
+            # The SVI (IP-bearing) entry of a switch: stash its props for the
+            # switch converter; it is not a standalone interface.
+            if intf_name in switch_names or intf_type == "switch":
+                switch_svi_props[intf_name] = properties
+                continue
+
             # Categorize
             if "interface" in properties and "vlanid" in properties:
                 vlan_interfaces.append((intf_name, properties))
@@ -229,15 +283,6 @@ class PAInterfaceConverter:
                 aggregate_ports.append((intf_name, properties))
             elif intf_type in ("physical", "hard-switch", "") or not intf_type:
                 physical_ports.append((intf_name, properties))
-            elif intf_type == "switch":
-                # PAN-OS doesn't have bridge groups
-                print(f"    Skipped: {intf_name} (switch/bridge group - not supported on PAN-OS)")
-                self.failed_items.append({
-                    "name": intf_name,
-                    "reason": "switch/bridge group not supported on PAN-OS",
-                    "config": properties,
-                })
-                self._stats["skipped"] += 1
             else:
                 print(f"    Skipped: {intf_name} (type: {intf_type})")
                 self._stats["skipped"] += 1
@@ -251,6 +296,12 @@ class PAInterfaceConverter:
             for m in members:
                 aggregate_member_set.add(str(m).strip())
 
+        # Switch (bridge-group) members must also be excluded from standalone
+        # physical conversion - they become Layer-2 members of the VLAN segment.
+        switch_member_set: Set[str] = set()
+        for _, props in switch_interfaces:
+            switch_member_set.update(self._member_list(props.get("member", [])))
+
         # --- Phase 2: Identify which physical ports have subinterfaces ---
         parent_interface_set: Set[str] = set()
         for _, props in vlan_interfaces:
@@ -262,28 +313,51 @@ class PAInterfaceConverter:
         for fg_name, props in aggregate_ports:
             self._convert_aggregate(fg_name, props, zone_lookup)
 
-        # --- Phase 4: Convert physical interfaces ---
-        for fg_name, props in physical_ports:
-            if fg_name in aggregate_member_set:
-                # Already assigned as aggregate member - skip standalone conversion
-                # but still need the port mapped for reference
-                continue
-            self._convert_physical(fg_name, props, zone_lookup)
+        # --- Phase 4: Convert switch interfaces -> PAN-OS Layer-2 segments ---
+        for sw_name, sw_props in switch_interfaces:
+            self._convert_switch(
+                sw_name, sw_props, switch_svi_props.get(sw_name, {}), zone_lookup,
+            )
 
-        # --- Phase 5: Convert VLAN subinterfaces ---
+        # --- Phase 5: Convert physical interfaces (with optional promotion) ---
+        for fg_name, props in physical_ports:
+            if fg_name in aggregate_member_set or fg_name in switch_member_set:
+                # Already consumed as an aggregate / Layer-2 member.
+                continue
+            alias = str(props.get("alias", "")).strip()
+            ae_spec = self._lookup_spec(self.promote_to_aggregate, fg_name, alias)
+            bvi_spec = self._lookup_spec(self.promote_to_bridgegroup, fg_name, alias)
+            # Interfaces that carry VLAN subinterfaces are not eligible for
+            # promotion (the subinterfaces would have to move onto the new
+            # parent). Warn and convert normally, mirroring the FTD tool.
+            if (ae_spec is not None or bvi_spec is not None) and fg_name in parent_interface_set:
+                kind = "aggregate-ethernet" if ae_spec is not None else "Layer-2 segment"
+                print(f"    [WARNING] {fg_name}: cannot promote to {kind} "
+                      f"(it has VLAN subinterfaces) - converting as physical")
+                ae_spec = bvi_spec = None
+            if ae_spec is not None:
+                self._promote_physical_to_aggregate(fg_name, props, ae_spec, zone_lookup)
+            elif bvi_spec is not None:
+                self._promote_physical_to_bridgegroup(fg_name, props, bvi_spec, zone_lookup)
+            else:
+                self._convert_physical(fg_name, props, zone_lookup)
+
+        # --- Phase 6: Convert VLAN subinterfaces ---
         for fg_name, props in vlan_interfaces:
             self._convert_subinterface(fg_name, props, zone_lookup)
 
-        # --- Phase 6: Build zone output ---
+        # --- Phase 7: Build zone output ---
         results: List[Dict] = []
         for zone_name, members in sorted(self._zone_members.items()):
+            mode = self._zone_modes.get(zone_name, "layer3")
             zone = {
                 "name": zone_name,
+                "mode": mode,
                 "interfaces": members,
             }
             results.append(zone)
             self._stats["zones_created"] += 1
-            print(f"  Zone: {zone_name} ({', '.join(members)})")
+            print(f"  Zone: {zone_name} [{mode}] ({', '.join(members)})")
 
         self.pa_zones = results
         return results
@@ -308,6 +382,91 @@ class PAInterfaceConverter:
 
     def get_statistics(self) -> Dict[str, int]:
         return dict(self._stats)
+
+    # ------------------------------------------------------------------
+    # Scale-up configuration (mirrors FortiGateToFTDTool/interface_converter)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _normalize_specs(specs: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Lower-case and strip the keys of a scale-up spec dict."""
+        normalized: Dict[str, Any] = {}
+        for key, spec in (specs or {}).items():
+            if key is None:
+                continue
+            normalized[str(key).strip().lower()] = spec
+        return normalized
+
+    def set_aggregate_expansion(self, expansion: Dict[str, Any]) -> None:
+        """Grow an existing FortiGate aggregate to MORE aggregate-ethernet
+        members on the PAN-OS side (the port-channel expansion analog).
+
+        Maps a FortiGate aggregate name/alias to either an int (target TOTAL
+        member count) or a list of PAN-OS ports (e.g. ['ethernet1/5']) to ADD.
+        """
+        self.aggregate_expansion = self._normalize_specs(expansion)
+
+    def set_aggregate_promotion(self, promotion: Dict[str, Any]) -> None:
+        """Promote a plain FortiGate physical interface into a NEW PAN-OS
+        aggregate-ethernet (the port-channel promotion analog).
+
+        Unlike FTD (where the port-channel is left IP-less), the interface's IP
+        and MTU stay on the aggregate-ethernet - in PAN-OS the ae IS the L3
+        interface. Maps a FortiGate name/alias to an int (TOTAL member count
+        incl. the original port) or a list of extra PAN-OS ports to add.
+        """
+        self.promote_to_aggregate = self._normalize_specs(promotion)
+
+    def set_bridgegroup_expansion(self, expansion: Dict[str, Any]) -> None:
+        """Grow a converted FortiGate switch's Layer-2 segment with MORE member
+        ports (the bridge-group expansion analog).
+
+        Maps a FortiGate switch name to an int (target TOTAL member count) or a
+        list of PAN-OS ports to ADD as layer2 members.
+        """
+        self.bridgegroup_expansion = self._normalize_specs(expansion)
+
+    def set_bridgegroup_promotion(self, promotion: Dict[str, Any]) -> None:
+        """Promote a plain FortiGate physical interface into a NEW PAN-OS
+        Layer-2 segment (VLAN object + vlan.N SVI) - the bridge-group promotion
+        analog. The interface's IP/MTU move onto the SVI.
+
+        Maps a FortiGate name/alias to an int (TOTAL member count incl. the
+        original port) or a list of extra PAN-OS ports to add.
+        """
+        self.promote_to_bridgegroup = self._normalize_specs(promotion)
+
+    @staticmethod
+    def _lookup_spec(specs: Dict[str, Any], *identifiers: str) -> Any:
+        """Return the first matching spec for any of the given identifiers."""
+        if not specs:
+            return None
+        for ident in identifiers:
+            if ident and str(ident).strip().lower() in specs:
+                return specs[str(ident).strip().lower()]
+        return None
+
+    def _reserve_pa_port(self, fg_name: str, pa_port: str, context: str) -> str:
+        """Validate and reserve a user-specified PAN-OS port for expansion.
+
+        Returns the normalized port name, or "" (with a warning) if the port is
+        malformed, out of range, or already assigned.
+        """
+        match = re.match(r"^ethernet1/(\d+)$", str(pa_port).strip().lower())
+        if not match:
+            print(f"      [WARNING] {context} {fg_name}: invalid port "
+                  f"'{pa_port}' (expected 'ethernet1/X') - skipped")
+            return ""
+        port_num = int(match.group(1))
+        if port_num < 1 or port_num > self.total_ports:
+            print(f"      [WARNING] {context} {fg_name}: port '{pa_port}' out of "
+                  f"range for {self.target_model} (1-{self.total_ports}) - skipped")
+            return ""
+        if port_num in self._used_ports:
+            print(f"      [WARNING] {context} {fg_name}: port '{pa_port}' already "
+                  f"assigned elsewhere - skipped")
+            return ""
+        self._used_ports.add(port_num)
+        return f"{self.model_info['port_prefix']}{port_num}"
 
     # ------------------------------------------------------------------
     # Conversion methods
@@ -502,6 +661,16 @@ class PAInterfaceConverter:
                     "config": {},
                 })
 
+        # Aggregate expansion: add MORE aggregate-ethernet members on the PAN-OS
+        # side when requested (scale up link aggregation). No-op unless a spec
+        # matches this aggregate by FortiGate name, alias, or ae name.
+        agg_alias = str(properties.get("alias", "")).strip()
+        exp_spec = self._lookup_spec(self.aggregate_expansion, fg_name, agg_alias, ae_name)
+        if exp_spec is not None:
+            self._apply_aggregate_expansion(
+                fg_name, ae_name, exp_spec, member_pa_names, member_configs,
+            )
+
         if not member_pa_names:
             print(f"    Skipped: {fg_name} (no ports available for members)")
             self._stats["skipped"] += 1
@@ -557,9 +726,373 @@ class PAInterfaceConverter:
         print(f"    Converted: {fg_name} -> {ae_name} (LACP, members: [{members_display}], "
               f"{ip_display}, zone: {zone_name})")
 
+    def _apply_aggregate_expansion(
+        self, fg_name: str, ae_name: str, spec: Any,
+        member_pa_names: List[str], member_configs: List[Dict],
+    ) -> List[str]:
+        """Add extra aggregate-ethernet members per the expansion spec.
+
+        ``spec`` is an int (target TOTAL member count) or a list of PAN-OS
+        ports to add. ``member_pa_names`` and ``member_configs`` are extended
+        in place. Returns the list of ports actually added.
+        """
+        def add_member(pa_port: str) -> bool:
+            if pa_port in member_pa_names:
+                return False
+            member_pa_names.append(pa_port)
+            member_configs.append({
+                "name": pa_port,
+                "type": "aggregate-member",
+                "aggregate_group": ae_name,
+                "enabled": True,
+                "comment": f"Member of {ae_name} (scale-up of {fg_name})",
+            })
+            return True
+
+        added: List[str] = []
+        if isinstance(spec, int):
+            if spec <= len(member_pa_names):
+                print(f"      [EXPAND] aggregate {fg_name}: source already has "
+                      f"{len(member_pa_names)} member(s) (target {spec}) - no change")
+                return added
+            while len(member_pa_names) < spec:
+                port = self._get_next_port()
+                if not port:
+                    print(f"      [WARNING] aggregate {fg_name}: not enough free "
+                          f"ports to reach {spec} members "
+                          f"(stopped at {len(member_pa_names)})")
+                    break
+                pa_port = f"{self.model_info['port_prefix']}{port}"
+                if add_member(pa_port):
+                    added.append(pa_port)
+        else:
+            for raw in spec:
+                pa_port = self._reserve_pa_port(fg_name, str(raw), "aggregate")
+                if pa_port and add_member(pa_port):
+                    added.append(pa_port)
+
+        if added:
+            print(f"      [EXPAND] aggregate {fg_name}: added {len(added)} "
+                  f"extra member(s): {', '.join(added)}")
+        return added
+
+    def _promote_physical_to_aggregate(
+        self, fg_name: str, properties: Dict, spec: Any, zone_lookup: Dict[str, str],
+    ) -> None:
+        """Promote a plain physical interface to a NEW aggregate-ethernet.
+
+        The original assigned port becomes member #1; extra members are added
+        per ``spec``. The interface's IP/MTU stay on the aggregate-ethernet
+        (in PAN-OS the ae is the Layer-3 interface).
+        """
+        orig_port = self._assign_pa_port(fg_name)
+        if not orig_port:
+            print(f"    Skipped: {fg_name} (no available port to promote)")
+            self._stats["skipped"] += 1
+            return
+
+        ae_id = self._next_ae_id
+        self._next_ae_id += 1
+        ae_name = f"ae{ae_id}"
+
+        member_pa_names = [orig_port]
+        member_configs = [{
+            "name": orig_port,
+            "type": "aggregate-member",
+            "aggregate_group": ae_name,
+            "enabled": True,
+            "comment": f"Member of {ae_name} (promoted from {fg_name})",
+        }]
+
+        # spec: int = TOTAL count incl. the original port; list = extra ports.
+        if isinstance(spec, int):
+            extra_spec: Any = spec
+        else:
+            extra_spec = list(spec)
+        self._apply_aggregate_expansion(
+            fg_name, ae_name, extra_spec, member_pa_names, member_configs,
+        )
+
+        zone_name = self._determine_zone(fg_name, properties, zone_lookup)
+        self.interface_name_mapping[fg_name] = ae_name
+        self.zone_mapping[fg_name] = zone_name
+        alias = str(properties.get("alias", "")).strip()
+        if alias and alias != fg_name:
+            self.interface_name_mapping[alias] = ae_name
+            self.zone_mapping[alias] = zone_name
+
+        self._add_to_zone(zone_name, ae_name)
+        self._stats["aggregate_interfaces"] += 1
+        self._stats["mapped_interfaces"] += 1
+
+        intf_config: Dict[str, Any] = {
+            "name": ae_name,
+            "type": "aggregate-ethernet",
+            "mode": "layer3",
+            "members": member_pa_names,
+            "lacp_mode": "active",
+            "enabled": properties.get("status", "up") != "down",
+        }
+        ip_cidr = self._extract_ip_cidr(properties)
+        if ip_cidr:
+            intf_config["ip_address"] = ip_cidr
+        fg_mode = str(properties.get("mode", "")).strip().lower()
+        if fg_mode == "dhcp":
+            intf_config["dhcp"] = True
+        desc = properties.get("description") or properties.get("alias") or fg_name
+        intf_config["comment"] = str(desc)
+        if properties.get("mtu-override") == "enable":
+            mtu = self._parse_int(properties.get("mtu"), 1500)
+            intf_config["mtu"] = min(mtu, 9216)
+
+        self.pa_interfaces.extend(member_configs)
+        self.pa_interfaces.append(intf_config)
+
+        ip_display = ip_cidr if ip_cidr else ("DHCP" if fg_mode == "dhcp" else "no IP")
+        print(f"    Promoted: {fg_name} -> {ae_name} (NEW LACP, members: "
+              f"[{', '.join(member_pa_names)}], {ip_display}, zone: {zone_name})")
+
+    # ------------------------------------------------------------------
+    # Switch (bridge group) -> PAN-OS Layer-2 segment
+    # ------------------------------------------------------------------
+    def _add_layer2_member(
+        self, member_fg: str, pa_port: str, vlan_obj: str, l2_zone: str,
+        member_configs: List[Dict], member_pa_names: List[str],
+        description: str,
+    ) -> bool:
+        """Append a layer2 member port to the VLAN segment (idempotent)."""
+        if pa_port in member_pa_names:
+            return False
+        member_pa_names.append(pa_port)
+        member_configs.append({
+            "name": pa_port,
+            "type": "layer2-member",
+            "vlan_object": vlan_obj,
+            "enabled": True,
+            "comment": description,
+        })
+        if member_fg:
+            self.interface_name_mapping[member_fg] = pa_port
+        self._add_to_zone(l2_zone, pa_port, mode="layer2")
+        self._stats["layer2_members"] += 1
+        return True
+
+    def _apply_bridgegroup_expansion(
+        self, fg_name: str, vlan_obj: str, l2_zone: str, spec: Any,
+        member_configs: List[Dict], member_pa_names: List[str],
+    ) -> List[str]:
+        """Add extra layer2 members to a VLAN segment per the expansion spec."""
+        added: List[str] = []
+        if isinstance(spec, int):
+            if spec <= len(member_pa_names):
+                print(f"      [EXPAND] switch {fg_name}: source already has "
+                      f"{len(member_pa_names)} member(s) (target {spec}) - no change")
+                return added
+            while len(member_pa_names) < spec:
+                port = self._get_next_port()
+                if not port:
+                    print(f"      [WARNING] switch {fg_name}: not enough free "
+                          f"ports to reach {spec} members "
+                          f"(stopped at {len(member_pa_names)})")
+                    break
+                pa_port = f"{self.model_info['port_prefix']}{port}"
+                if self._add_layer2_member(
+                    "", pa_port, vlan_obj, l2_zone, member_configs,
+                    member_pa_names, f"Layer-2 member of {vlan_obj} (scale-up)",
+                ):
+                    added.append(pa_port)
+        else:
+            for raw in spec:
+                pa_port = self._reserve_pa_port(fg_name, str(raw), "switch")
+                if pa_port and self._add_layer2_member(
+                    "", pa_port, vlan_obj, l2_zone, member_configs,
+                    member_pa_names, f"Layer-2 member of {vlan_obj} (scale-up)",
+                ):
+                    added.append(pa_port)
+        if added:
+            print(f"      [EXPAND] switch {fg_name}: added {len(added)} "
+                  f"extra member(s): {', '.join(added)}")
+        return added
+
+    def _emit_layer2_segment(
+        self, fg_name: str, svi_props: Dict, member_configs: List[Dict],
+        member_pa_names: List[str], l3_zone: str, vlan_obj: str,
+        description: str, action: str,
+    ) -> None:
+        """Emit the VLAN object + vlan.N SVI for a Layer-2 segment and wire the
+        FortiGate name -> SVI mappings. Shared by switch conversion and
+        physical->bridge-group promotion."""
+        vlan_unit = self._next_vlan_id
+        self._next_vlan_id += 1
+        svi_name = f"vlan.{vlan_unit}"
+
+        # VLAN object groups the layer2 members and references the SVI.
+        self.pa_interfaces.extend(member_configs)
+        self.pa_interfaces.append({
+            "name": vlan_obj,
+            "type": "vlan-object",
+            "members": list(member_pa_names),
+            "vlan_interface": svi_name,
+            "comment": description,
+        })
+
+        # SVI (vlan.N) carries the Layer-3 IP/MTU - the BVI analog.
+        svi_config: Dict[str, Any] = {
+            "name": svi_name,
+            "type": "vlan-interface",
+            "vlan_object": vlan_obj,
+            "enabled": True,
+            "comment": description,
+        }
+        ip_cidr = self._extract_ip_cidr(svi_props)
+        if ip_cidr:
+            svi_config["ip_address"] = ip_cidr
+        svi_mode = str(svi_props.get("mode", "")).strip().lower()
+        if svi_mode == "dhcp":
+            svi_config["dhcp"] = True
+        if svi_props.get("mtu-override") == "enable":
+            mtu = self._parse_int(svi_props.get("mtu"), 1500)
+            svi_config["mtu"] = min(mtu, 9216)
+        self.pa_interfaces.append(svi_config)
+
+        # The FortiGate switch interface (carrying the IP) maps to the SVI so
+        # routes/policies that reference it resolve to the L3 vlan.N interface.
+        self.interface_name_mapping[fg_name] = svi_name
+        self.zone_mapping[fg_name] = l3_zone
+        self._add_to_zone(l3_zone, svi_name, mode="layer3")
+        self._stats["bridge_groups"] += 1
+        self._stats["mapped_interfaces"] += 1
+
+        ip_display = ip_cidr if ip_cidr else ("DHCP" if svi_mode == "dhcp" else "no IP")
+        print(f"    {action}: {fg_name} -> {svi_name} (VLAN segment '{vlan_obj}', "
+              f"members: [{', '.join(member_pa_names)}], {ip_display}, "
+              f"L3 zone: {l3_zone})")
+
+    def _convert_switch(
+        self, fg_name: str, properties: Dict, svi_props: Dict,
+        zone_lookup: Dict[str, str],
+    ) -> None:
+        """Convert a FortiGate switch (system_switch-interface) to a PAN-OS
+        Layer-2 segment: member ports become layer2 interfaces in a VLAN object,
+        and the switch's IP moves onto a vlan.N SVI."""
+        members = self._member_list(properties.get("member", []))
+        vlan_obj = sanitize_name(f"{fg_name}_vlan")
+        l3_zone = self._determine_zone(fg_name, svi_props or properties, zone_lookup)
+        l2_zone = sanitize_name(f"{l3_zone}_l2")
+        description = str(
+            (svi_props.get("description") if svi_props else None)
+            or properties.get("description")
+            or (svi_props.get("alias") if svi_props else None)
+            or fg_name
+        )
+
+        member_configs: List[Dict] = []
+        member_pa_names: List[str] = []
+        for member_fg in members:
+            pa_port = self._assign_pa_port(member_fg)
+            if not pa_port:
+                self.failed_items.append({
+                    "name": member_fg,
+                    "reason": f"no port available for switch member of {fg_name}",
+                    "config": {},
+                })
+                continue
+            m_props = self._get_interface_properties(member_fg)
+            m_desc = str(
+                m_props.get("description") or m_props.get("alias")
+                or f"Layer-2 member of {vlan_obj}"
+            )
+            self._add_layer2_member(
+                member_fg, pa_port, vlan_obj, l2_zone, member_configs,
+                member_pa_names, m_desc,
+            )
+
+        # Bridge-group expansion: add MORE layer2 members when requested.
+        spec = self._lookup_spec(self.bridgegroup_expansion, fg_name, vlan_obj)
+        if spec is not None:
+            self._apply_bridgegroup_expansion(
+                fg_name, vlan_obj, l2_zone, spec, member_configs, member_pa_names,
+            )
+
+        if not member_pa_names:
+            print(f"    Skipped: {fg_name} (switch with no available member ports)")
+            self._stats["skipped"] += 1
+            self.failed_items.append({
+                "name": fg_name,
+                "reason": "switch with no available member ports",
+                "config": properties,
+            })
+            return
+
+        self._emit_layer2_segment(
+            fg_name, svi_props or {}, member_configs, member_pa_names,
+            l3_zone, vlan_obj, description, "Converted (switch)",
+        )
+
+    def _promote_physical_to_bridgegroup(
+        self, fg_name: str, properties: Dict, spec: Any, zone_lookup: Dict[str, str],
+    ) -> None:
+        """Promote a plain physical interface to a NEW PAN-OS Layer-2 segment.
+
+        The original assigned port becomes the first layer2 member; extra
+        members are added per ``spec``. The interface's IP/MTU move onto the
+        vlan.N SVI."""
+        orig_port = self._assign_pa_port(fg_name)
+        if not orig_port:
+            print(f"    Skipped: {fg_name} (no available port to promote)")
+            self._stats["skipped"] += 1
+            return
+
+        vlan_obj = sanitize_name(f"{fg_name}_vlan")
+        l3_zone = self._determine_zone(fg_name, properties, zone_lookup)
+        l2_zone = sanitize_name(f"{l3_zone}_l2")
+        description = str(
+            properties.get("description") or properties.get("alias") or fg_name
+        )
+
+        member_configs: List[Dict] = []
+        member_pa_names: List[str] = []
+        self._add_layer2_member(
+            fg_name, orig_port, vlan_obj, l2_zone, member_configs,
+            member_pa_names, f"Layer-2 member of {vlan_obj} (promoted from {fg_name})",
+        )
+
+        if isinstance(spec, int):
+            extra_spec: Any = spec
+        else:
+            extra_spec = list(spec)
+        self._apply_bridgegroup_expansion(
+            fg_name, vlan_obj, l2_zone, extra_spec, member_configs, member_pa_names,
+        )
+
+        self._emit_layer2_segment(
+            fg_name, properties, member_configs, member_pa_names,
+            l3_zone, vlan_obj, description, "Promoted",
+        )
+
+        # The promoted interface's own alias should also resolve to the SVI.
+        alias = str(properties.get("alias", "")).strip()
+        if alias and alias != fg_name:
+            self.interface_name_mapping[alias] = self.interface_name_mapping[fg_name]
+            self.zone_mapping[alias] = l3_zone
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _get_interface_properties(self, intf_name: str) -> Dict:
+        """Look up a port's properties from the system_interface section.
+
+        Returns an empty dict if the interface is not found.
+        """
+        for intf_dict in self.fg_config.get("system_interface", []) or []:
+            if not isinstance(intf_dict, dict) or not intf_dict:
+                continue
+            name = list(intf_dict.keys())[0]
+            if str(name) == str(intf_name):
+                props = intf_dict[name]
+                return props if isinstance(props, dict) else {}
+        return {}
 
     def _assign_pa_port(self, fg_name: str) -> str:
         """Assign the next available PAN-OS port to a FortiGate interface."""
@@ -622,12 +1155,27 @@ class PAInterfaceConverter:
         # 4. Fallback: use sanitized interface name
         return sanitize_name(intf_name)
 
-    def _add_to_zone(self, zone_name: str, pa_interface: str) -> None:
-        """Add a PAN-OS interface to a zone."""
+    def _add_to_zone(self, zone_name: str, pa_interface: str,
+                     mode: str = "layer3") -> None:
+        """Add a PAN-OS interface to a zone (tracking the zone's L2/L3 mode)."""
         if zone_name not in self._zone_members:
             self._zone_members[zone_name] = []
+            self._zone_modes[zone_name] = mode
         if pa_interface not in self._zone_members[zone_name]:
             self._zone_members[zone_name].append(pa_interface)
+
+    @staticmethod
+    def _member_list(value: Any) -> List[str]:
+        """Normalize a FortiGate member value to a list of port names.
+
+        FortiGate stores it as a list, a single string, or a space-separated
+        string (e.g. 'port5 port6').
+        """
+        if isinstance(value, str):
+            return [v for v in value.split() if v]
+        if isinstance(value, list):
+            return [str(v).strip() for v in value if str(v).strip()]
+        return []
 
     def _extract_ip_cidr(self, properties: Dict) -> str:
         """Extract IP address in CIDR notation from FortiGate interface properties.

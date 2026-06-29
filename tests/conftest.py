@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # Tool source directories that tests import modules from.
 _TOOL_DIRS = (
     "FortiGateToFTDTool",
+    "FortiGateToPaloAltoTool",
 )
 
 for _sub in _TOOL_DIRS:

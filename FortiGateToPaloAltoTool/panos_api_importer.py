@@ -200,14 +200,20 @@ class PANOSImporter(PANOSBaseClient):
 
     @staticmethod
     def _build_zone_xml(obj: Dict) -> str:
-        """Build XML element for a PAN-OS zone."""
+        """Build XML element for a PAN-OS zone.
+
+        Honors the zone's mode: 'layer2' zones hold the member ports of a
+        converted FortiGate switch; everything else is a layer3 zone.
+        """
         name = obj["name"]
         interfaces = obj.get("interfaces", [])
+        mode = obj.get("mode", "layer3")
+        section = "layer2" if mode == "layer2" else "layer3"
 
-        xml = f'<entry name="{name}"><network><layer3>'
+        xml = f'<entry name="{name}"><network><{section}>'
         for intf in interfaces:
             xml += f"<member>{intf}</member>"
-        xml += "</layer3></network></entry>"
+        xml += f"</{section}></network></entry>"
         return xml
 
     # ------------------------------------------------------------------
@@ -328,6 +334,67 @@ class PANOSImporter(PANOSBaseClient):
         xml += "</entry>"
         return xml
 
+    @staticmethod
+    def _build_layer2_member_xml(obj: Dict) -> str:
+        """Build XML to set an ethernet interface to Layer-2 mode.
+
+        The VLAN membership itself is configured on the vlan object (see
+        ``_build_vlan_object_xml``); the ethernet entry just declares layer2.
+        """
+        name = obj["name"]
+        xml = f'<entry name="{name}"><layer2/>'
+        comment = obj.get("comment", "")
+        if comment:
+            xml += f"<comment>{comment}</comment>"
+        xml += "</entry>"
+        return xml
+
+    @staticmethod
+    def _build_vlan_object_xml(obj: Dict) -> str:
+        """Build XML for a PAN-OS VLAN object grouping Layer-2 members.
+
+        References the vlan.N SVI as the VLAN's virtual interface so the bridged
+        segment has a Layer-3 presence (the FortiGate switch IP).
+        """
+        name = obj["name"]
+        members = obj.get("members", [])
+        svi = obj.get("vlan_interface")
+
+        xml = f'<entry name="{name}">'
+        if svi:
+            xml += f"<virtual-interface><interface>{svi}</interface></virtual-interface>"
+        if members:
+            xml += "<interface>"
+            for m in members:
+                xml += f"<member>{m}</member>"
+            xml += "</interface>"
+        xml += "</entry>"
+        return xml
+
+    @staticmethod
+    def _build_vlan_interface_xml(obj: Dict) -> str:
+        """Build XML for a PAN-OS vlan.N interface (the Layer-3 SVI)."""
+        name = obj["name"]
+        xml = f'<entry name="{name}">'
+
+        ip_addr = obj.get("ip_address")
+        if ip_addr:
+            xml += f'<ip><entry name="{ip_addr}"/></ip>'
+
+        if obj.get("dhcp"):
+            xml += "<dhcp-client><enable>yes</enable></dhcp-client>"
+
+        mtu = obj.get("mtu")
+        if mtu:
+            xml += f"<mtu>{mtu}</mtu>"
+
+        comment = obj.get("comment", "")
+        if comment:
+            xml += f"<comment>{comment}</comment>"
+
+        xml += "</entry>"
+        return xml
+
     # ------------------------------------------------------------------
     # Import methods
     # ------------------------------------------------------------------
@@ -338,6 +405,9 @@ class PANOSImporter(PANOSBaseClient):
         - physical: ethernet entries (layer3 config)
         - aggregate-member: physical interfaces assigned to aggregate groups
         - aggregate-ethernet: aggregate-ethernet entries
+        - layer2-member: ethernet entries set to Layer-2 mode (switch members)
+        - vlan-object: VLAN objects grouping Layer-2 members
+        - vlan-interface: vlan.N SVIs (the Layer-3 interface of a switch)
         - subinterface: units under parent ethernet interface
         """
         total = len(interfaces)
@@ -355,6 +425,15 @@ class PANOSImporter(PANOSBaseClient):
                 elif intf_type == "aggregate-ethernet":
                     xpath = XPATHS["aggregate_ethernet"]
                     xml_element = self._build_aggregate_ethernet_xml(obj)
+                elif intf_type == "layer2-member":
+                    xpath = XPATHS["ethernet"]
+                    xml_element = self._build_layer2_member_xml(obj)
+                elif intf_type == "vlan-object":
+                    xpath = XPATHS["vlan"]
+                    xml_element = self._build_vlan_object_xml(obj)
+                elif intf_type == "vlan-interface":
+                    xpath = XPATHS["vlan_interface"]
+                    xml_element = self._build_vlan_interface_xml(obj)
                 elif intf_type == "subinterface":
                     parent = obj["parent"]
                     xpath = (
