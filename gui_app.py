@@ -1975,6 +1975,16 @@ class App(tk.Tk):
             command=self._toggle_snmp_trap_events,
         ).grid(row=0, column=0, columnspan=4, sticky=tk.W, pady=(0, 4))
 
+        # Select-all toggle: checks/unchecks every trap event at once.
+        self.snmp_trap_all_var = tk.BooleanVar()
+        self._snmp_trap_all_check = ttk.Checkbutton(
+            trap_frame, text="Select all", variable=self.snmp_trap_all_var,
+            command=self._toggle_snmp_trap_all, state=tk.DISABLED,
+        )
+        self._snmp_trap_all_check.grid(
+            row=1, column=0, columnspan=4, sticky=tk.W, padx=(6, 2), pady=(0, 4),
+        )
+
         # (label, FDM enum value, on by default - mirrors the ASA defaults, note)
         trap_event_defs = [
             ("SNMP authentication", "SNMP_AUTHENTICATION", True,
@@ -2016,13 +2026,17 @@ class App(tk.Tk):
             var = tk.BooleanVar(value=default_on)
             self.snmp_trap_vars[key] = var
             row, col = divmod(i, 2)
-            check = ttk.Checkbutton(trap_frame, text=label, variable=var, state=tk.DISABLED)
-            check.grid(row=row + 1, column=col * 2, sticky=tk.W, padx=(6, 2), pady=1)
+            check = ttk.Checkbutton(
+                trap_frame, text=label, variable=var, state=tk.DISABLED,
+                command=self._sync_snmp_trap_all,
+            )
+            check.grid(row=row + 2, column=col * 2, sticky=tk.W, padx=(6, 2), pady=1)
             ttk.Label(trap_frame, text=f"- {note}", foreground=_FG_DIM,
                       font=("Segoe UI", 8)).grid(
-                row=row + 1, column=col * 2 + 1, sticky=tk.W, padx=(0, 12), pady=1,
+                row=row + 2, column=col * 2 + 1, sticky=tk.W, padx=(0, 12), pady=1,
             )
             self._snmp_trap_checks.append(check)
+        self._sync_snmp_trap_all()
 
         # Buttons
         btn_frame = ttk.Frame(left)
@@ -2045,8 +2059,21 @@ class App(tk.Tk):
 
     def _toggle_snmp_trap_events(self) -> None:
         state = tk.NORMAL if self.snmp_trapevents_enable_var.get() else tk.DISABLED
+        self._snmp_trap_all_check.configure(state=state)
         for check in self._snmp_trap_checks:
             check.configure(state=state)
+
+    def _toggle_snmp_trap_all(self) -> None:
+        """Set every trap event to match the 'Select all' checkbox."""
+        value = self.snmp_trap_all_var.get()
+        for var in self.snmp_trap_vars.values():
+            var.set(value)
+
+    def _sync_snmp_trap_all(self) -> None:
+        """Reflect the combined state of the individual events in 'Select all'."""
+        self.snmp_trap_all_var.set(
+            all(var.get() for var in self.snmp_trap_vars.values())
+        )
 
     def _run_snmp(self) -> None:
         host = self.snmp_host_var.get().strip()
