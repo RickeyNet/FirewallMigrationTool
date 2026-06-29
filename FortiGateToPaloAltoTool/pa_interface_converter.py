@@ -694,36 +694,42 @@ class PAInterfaceConverter:
         self._next_ae_id += 1
         ae_name = f"ae{ae_id}"
 
-        # Assign PAN-OS ports to each member
-        member_pa_names = []
-        member_configs = []
-        for member_fg in members_raw:
-            member_fg = str(member_fg).strip()
-            pa_port = self._assign_pa_port(member_fg)
-            if pa_port:
-                member_pa_names.append(pa_port)
-                self.interface_name_mapping[member_fg] = pa_port
-
-                # Build member physical interface config (set aggregate-group)
-                member_configs.append({
-                    "name": pa_port,
-                    "type": "aggregate-member",
-                    "aggregate_group": ae_name,
-                    "enabled": True,
-                    "comment": f"Member of {ae_name} (FortiGate: {fg_name})",
-                })
-            else:
-                self.failed_items.append({
-                    "name": member_fg,
-                    "reason": f"no port available for aggregate member of {fg_name}",
-                    "config": {},
-                })
-
-        # Aggregate expansion: add MORE aggregate-ethernet members on the PAN-OS
-        # side when requested (scale up link aggregation). No-op unless a spec
-        # matches this aggregate by FortiGate name, alias, or ae name.
+        # Expansion spec, if any. An explicit port LIST means "use exactly these
+        # ports as the members" - so the source members are NOT auto-assigned to
+        # arbitrary ports first. An int means "grow to this total".
         agg_alias = str(properties.get("alias", "")).strip()
         exp_spec = self._lookup_spec(self.aggregate_expansion, fg_name, agg_alias, ae_name)
+        explicit_ports = isinstance(exp_spec, (list, tuple))
+
+        # Assign PAN-OS ports to each source member (skipped for explicit ports).
+        member_pa_names = []
+        member_configs = []
+        if not explicit_ports:
+            for member_fg in members_raw:
+                member_fg = str(member_fg).strip()
+                pa_port = self._assign_pa_port(member_fg)
+                if pa_port:
+                    member_pa_names.append(pa_port)
+                    self.interface_name_mapping[member_fg] = pa_port
+
+                    # Build member physical interface config (set aggregate-group)
+                    member_configs.append({
+                        "name": pa_port,
+                        "type": "aggregate-member",
+                        "aggregate_group": ae_name,
+                        "enabled": True,
+                        "comment": f"Member of {ae_name} (FortiGate: {fg_name})",
+                    })
+                else:
+                    self.failed_items.append({
+                        "name": member_fg,
+                        "reason": f"no port available for aggregate member of {fg_name}",
+                        "config": {},
+                    })
+
+        # Aggregate expansion: an explicit list defines the exact members; an int
+        # adds MORE aggregate-ethernet members. No-op unless a spec matches this
+        # aggregate by FortiGate name, alias, or ae name.
         if exp_spec is not None:
             self._apply_aggregate_expansion(
                 fg_name, ae_name, exp_spec, member_pa_names, member_configs,
@@ -1080,29 +1086,36 @@ class PAInterfaceConverter:
             or fg_name
         )
 
+        # Expansion spec, if any. An explicit port LIST means "use exactly these
+        # ports as the members" - the source switch members are NOT auto-assigned
+        # to arbitrary ports. An int means "grow to this total".
+        spec = self._lookup_spec(self.bridgegroup_expansion, fg_name, vlan_obj)
+        explicit_ports = isinstance(spec, (list, tuple))
+
         member_configs: List[Dict] = []
         member_pa_names: List[str] = []
-        for member_fg in members:
-            pa_port = self._assign_pa_port(member_fg)
-            if not pa_port:
-                self.failed_items.append({
-                    "name": member_fg,
-                    "reason": f"no port available for switch member of {fg_name}",
-                    "config": {},
-                })
-                continue
-            m_props = self._get_interface_properties(member_fg)
-            m_desc = str(
-                m_props.get("description") or m_props.get("alias")
-                or f"Layer-2 member of {vlan_obj}"
-            )
-            self._add_layer2_member(
-                member_fg, pa_port, vlan_obj, l2_zone, member_configs,
-                member_pa_names, m_desc,
-            )
+        if not explicit_ports:
+            for member_fg in members:
+                pa_port = self._assign_pa_port(member_fg)
+                if not pa_port:
+                    self.failed_items.append({
+                        "name": member_fg,
+                        "reason": f"no port available for switch member of {fg_name}",
+                        "config": {},
+                    })
+                    continue
+                m_props = self._get_interface_properties(member_fg)
+                m_desc = str(
+                    m_props.get("description") or m_props.get("alias")
+                    or f"Layer-2 member of {vlan_obj}"
+                )
+                self._add_layer2_member(
+                    member_fg, pa_port, vlan_obj, l2_zone, member_configs,
+                    member_pa_names, m_desc,
+                )
 
-        # Bridge-group expansion: add MORE layer2 members when requested.
-        spec = self._lookup_spec(self.bridgegroup_expansion, fg_name, vlan_obj)
+        # Bridge-group expansion: an explicit list defines the exact members; an
+        # int adds MORE layer2 members on the PAN-OS side.
         if spec is not None:
             self._apply_bridgegroup_expansion(
                 fg_name, vlan_obj, l2_zone, spec, member_configs, member_pa_names,

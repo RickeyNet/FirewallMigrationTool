@@ -62,10 +62,11 @@ def test_aggregate_expansion_explicit_ports() -> None:
     conv.set_aggregate_expansion({"agg1": ["ethernet1/10", "ethernet1/11"]})
     conv.convert()
 
+    # An explicit port list defines the EXACT members - the source member is
+    # placed on the listed ports, not auto-assigned to a separate port. So the
+    # aggregate uses exactly ethernet1/10 and ethernet1/11.
     ae = _find(conv.get_interfaces(), "ae1")
-    assert "ethernet1/10" in ae["members"]
-    assert "ethernet1/11" in ae["members"]
-    assert len(ae["members"]) == 3
+    assert sorted(ae["members"]) == ["ethernet1/10", "ethernet1/11"]
 
 
 # ---------------------------------------------------------------------------

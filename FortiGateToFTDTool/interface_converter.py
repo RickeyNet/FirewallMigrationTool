@@ -2045,22 +2045,29 @@ class InterfaceConverter:
         if isinstance(members, str):
             members = [members]
         
+        # Expansion spec, if any. An explicit port LIST means "use exactly these
+        # ports as the members" (same as promotion) - so the source members are
+        # NOT auto-assigned to arbitrary ports first. An int means "grow to this
+        # total", which keeps the source members and adds more.
+        spec = self._get_expansion_spec(fg_name, alias, ftd_name)
+        explicit_ports = isinstance(spec, (list, tuple))
+
         # Map member names to FTD hardware names AND create physical interface
         # entries for each member so they get set to routed mode before the
         # EtherChannel is created. EtherChannel members require: empty name,
         # routed mode, full duplex, autoNegotiation enabled (speed/SFP type is
-        # auto-detected at import).
+        # auto-detected at import). Skipped when explicit ports were given.
         ftd_members = []
-        for member in members:
-            ftd_hardware = self._get_ftd_hardware_name(member)
-            if ftd_hardware:
-                if self._add_etherchannel_member(fg_name, ftd_hardware, ftd_members):
-                    print(f"      Added member interface: {member} -> {ftd_hardware} (routed mode, EC-ready)")
+        if not explicit_ports:
+            for member in members:
+                ftd_hardware = self._get_ftd_hardware_name(member)
+                if ftd_hardware:
+                    if self._add_etherchannel_member(fg_name, ftd_hardware, ftd_members):
+                        print(f"      Added member interface: {member} -> {ftd_hardware} (routed mode, EC-ready)")
 
-        # Apply EtherChannel expansion: grow this port-channel to MORE member
-        # links on the FTD side when requested (e.g. scale a 1-member WAN/server
-        # LAG up to several 10G links). No-op unless an expansion spec matches.
-        spec = self._get_expansion_spec(fg_name, alias, ftd_name)
+        # Apply EtherChannel expansion: an explicit list defines the exact
+        # members; an int grows this port-channel to MORE member links on the
+        # FTD side. No-op unless an expansion spec matches.
         if spec is not None:
             self._apply_etherchannel_expansion(fg_name, spec, ftd_members)
 
@@ -2120,27 +2127,35 @@ class InterfaceConverter:
         else:
             members = []
         
+        # Expansion spec, if any. An explicit port LIST means "use exactly these
+        # ports as the members" - the source switch members are NOT auto-assigned
+        # to arbitrary ports. An int means "grow to this total" (keep source
+        # members and add more).
+        spec = self._get_bridgegroup_expansion_spec(fg_name, ftd_name)
+        explicit_ports = isinstance(spec, (list, tuple))
+
         # Map member names to FTD hardware names AND create physical interface
         # entries for each member (named, routed-mode, tracked as BVI members).
+        # Skipped when explicit ports were given.
         ftd_members: List[Dict[str, Any]] = []
-        for member in members:
-            ftd_hardware = self._get_ftd_hardware_name(member)
-            if ftd_hardware:
-                # Get the name/description from the physical port's entry in
-                # system_interface (fall back to the raw member name).
-                member_props = self._get_interface_properties(member)
-                member_alias = member_props.get('alias', member) if member_props else member
-                member_name = sanitize_interface_name(member_alias)
-                member_desc = (member_props.get('description', f"Bridge Group {fg_name} member")
-                               if member_props else f"Bridge Group {fg_name} member")
-                if self._add_bridgegroup_member(fg_name, ftd_name, ftd_hardware,
-                                                ftd_members, member_name, member_desc):
-                    print(f"      Added member interface: {member} -> {ftd_hardware}")
+        if not explicit_ports:
+            for member in members:
+                ftd_hardware = self._get_ftd_hardware_name(member)
+                if ftd_hardware:
+                    # Get the name/description from the physical port's entry in
+                    # system_interface (fall back to the raw member name).
+                    member_props = self._get_interface_properties(member)
+                    member_alias = member_props.get('alias', member) if member_props else member
+                    member_name = sanitize_interface_name(member_alias)
+                    member_desc = (member_props.get('description', f"Bridge Group {fg_name} member")
+                                   if member_props else f"Bridge Group {fg_name} member")
+                    if self._add_bridgegroup_member(fg_name, ftd_name, ftd_hardware,
+                                                    ftd_members, member_name, member_desc):
+                        print(f"      Added member interface: {member} -> {ftd_hardware}")
 
-        # Apply bridge group expansion: add MORE member links on the FTD side
-        # when requested (e.g. scale a server switch up with extra 10G ports).
-        # No-op unless an expansion spec matches this switch interface.
-        spec = self._get_bridgegroup_expansion_spec(fg_name, ftd_name)
+        # Apply bridge group expansion: an explicit list defines the exact
+        # members; an int adds MORE member links on the FTD side. No-op unless
+        # an expansion spec matches this switch interface.
         if spec is not None:
             self._apply_bridgegroup_expansion(fg_name, ftd_name, spec, ftd_members)
 

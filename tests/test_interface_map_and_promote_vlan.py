@@ -107,6 +107,74 @@ def test_pa_promote_ae_ip_moves_to_subinterface():
 
 
 # ---------------------------------------------------------------------------
+# Expand with an explicit port list defines the EXACT member ports
+# (regression: with the 10G ports held, source members fell onto 1G ports and
+# the LACP same-speed check then dropped the requested 10G expansion ports, so
+# port-channels ended up on the wrong auto-assigned ports).
+# ---------------------------------------------------------------------------
+def test_ftd_expand_explicit_ports_are_exact_members_across_speeds():
+    cfg = {
+        "system_interface": [
+            {"utb": {"type": "aggregate", "member": ["m1", "m2"],
+                     "ip": ["10.1.1.1", "255.255.255.0"]}},
+            {"at": {"type": "aggregate", "member": ["m3", "m4"],
+                    "ip": ["10.2.2.1", "255.255.255.0"]}},
+            {"taclanes": {"type": "switch", "ip": ["15.15.255.1", "255.255.255.0"]}},
+            {"m1": {"type": "physical"}}, {"m2": {"type": "physical"}},
+            {"m3": {"type": "physical"}}, {"m4": {"type": "physical"}},
+            {"m5": {"type": "physical"}},
+        ],
+        "system_switch-interface": [{"taclanes": {"member": ["m5"]}}],
+    }
+    conv = InterfaceConverter(cfg, target_model="ftd-3120", custom_ha_port="none")
+    # Reserve every 10G port (9-16) across the three rows, like the report.
+    conv.set_etherchannel_expansion({
+        "utb": ["Ethernet1/14", "Ethernet1/15", "Ethernet1/16"],
+        "at": ["Ethernet1/9", "Ethernet1/10"],
+    })
+    conv.set_bridgegroup_expansion({"taclanes": ["Ethernet1/11", "Ethernet1/12", "Ethernet1/13"]})
+    res = conv.convert()
+
+    def ec(name):
+        e = next(x for x in res["etherchannels"] if x["name"] == name)
+        return sorted(m["hardwareName"] for m in e["memberInterfaces"])
+
+    def bg(name):
+        b = next(x for x in res["bridge_groups"] if x["name"] == name)
+        return sorted(m["hardwareName"] for m in b["selectedInterfaces"])
+
+    assert ec("utb") == ["Ethernet1/14", "Ethernet1/15", "Ethernet1/16"]
+    assert ec("at") == ["Ethernet1/10", "Ethernet1/9"]
+    assert bg("taclanes") == ["Ethernet1/11", "Ethernet1/12", "Ethernet1/13"]
+
+
+def test_pa_expand_explicit_ports_are_exact_members():
+    cfg = {"system_interface": [
+        {"agg1": {"type": "aggregate", "member": ["m1", "m2"],
+                  "ip": ["10.1.1.1", "255.255.255.0"]}},
+        {"m1": {"type": "physical"}}, {"m2": {"type": "physical"}},
+    ]}
+    conv = PAInterfaceConverter(cfg, target_model="pa-3250")
+    conv.set_aggregate_expansion({"agg1": ["ethernet1/14", "ethernet1/15", "ethernet1/16"]})
+    conv.convert()
+    ae = next(i for i in conv.get_interfaces() if i["name"] == "ae1")
+    assert sorted(ae["members"]) == ["ethernet1/14", "ethernet1/15", "ethernet1/16"]
+
+
+def test_ftd_expand_int_still_keeps_source_members_and_grows():
+    """An int spec keeps the original behavior: source members + grow to total."""
+    cfg = {"system_interface": [
+        {"lag": {"type": "aggregate", "member": ["m1", "m2"]}},
+        {"m1": {"type": "physical"}}, {"m2": {"type": "physical"}},
+    ]}
+    conv = InterfaceConverter(cfg, target_model="ftd-3120", custom_ha_port="none")
+    conv.set_etherchannel_expansion({"lag": 4})
+    res = conv.convert()
+    members = next(x for x in res["etherchannels"] if x["name"] == "lag")["memberInterfaces"]
+    assert len(members) == 4  # 2 source + 2 grown
+
+
+# ---------------------------------------------------------------------------
 # GUI builder: aggregate/switch always resolves to Expand (misroute fix)
 # ---------------------------------------------------------------------------
 class _Var:
