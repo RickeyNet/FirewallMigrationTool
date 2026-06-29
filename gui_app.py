@@ -1290,20 +1290,29 @@ class App(tk.Tk):
         )
         self._agg_hint_label.grid(row=0, column=0, columnspan=6, sticky=tk.W, pady=(0, 8))
 
-        # Column header
-        header = ttk.Frame(frame)
-        header.grid(row=1, column=0, columnspan=6, sticky=tk.EW)
-        for col, (text, width) in enumerate((
-            ("Interface", 22), ("Action", 12), ("Target", 16),
-            ("Members (count or ports)", 28), ("L3 VLAN", 8), ("", 4),
-        )):
-            ttk.Label(header, text=text, width=width, anchor=tk.W).grid(
-                row=0, column=col, sticky=tk.W, padx=2,
-            )
+        # Header + dynamic rows share ONE grid so every column title sits
+        # directly above its field (separate frames can't align columns).
+        grid = ttk.Frame(frame)
+        grid.grid(row=1, column=0, columnspan=6, sticky=tk.EW)
+        self._agg_grid = grid
+        # Column minsizes set the field widths; Interface and Members stretch.
+        col_minsize = (150, 110, 130, 240, 80, 36)
+        for col, msize in enumerate(col_minsize):
+            grid.columnconfigure(col, minsize=msize)
+        grid.columnconfigure(0, weight=1)  # Interface
+        grid.columnconfigure(3, weight=2)  # Members
 
-        # Container that holds the dynamic rows
-        self._agg_rows_container = ttk.Frame(frame)
-        self._agg_rows_container.grid(row=2, column=0, columnspan=6, sticky=tk.EW)
+        # Column titles - hidden until the first row is added (no point showing
+        # headers above an empty table).
+        self._agg_header_labels = []
+        for col, text in enumerate((
+            "Interface", "Action", "Target",
+            "Members (count or ports)", "L3 VLAN", "",
+        )):
+            lbl = ttk.Label(grid, text=text, anchor=tk.W)
+            lbl.grid(row=0, column=col, sticky=tk.W, padx=2, pady=(0, 2))
+            lbl.grid_remove()
+            self._agg_header_labels.append(lbl)
 
         # Empty-state hint, shown only when there are no rows
         self._agg_empty_label = ttk.Label(
@@ -1331,48 +1340,50 @@ class App(tk.Tk):
         self, iface: str = "", action: str = "", target: str = "", members: str = "",
         vlan: str = "",
     ) -> None:
-        """Append one interface row to the builder."""
-        container = self._agg_rows_container
-        rf = ttk.Frame(container)
-        rf.grid(row=len(self._agg_rows), column=0, sticky=tk.EW, pady=2)
+        """Append one interface row to the builder.
+
+        Each widget is gridded directly into the shared self._agg_grid (one
+        column each) so it lines up under its header title. Fields use
+        sticky=EW so they fill - and widen with - their column.
+        """
+        grid = self._agg_grid
+        grid_row = len(self._agg_rows) + 1  # row 0 is the header
 
         iface_var = tk.StringVar(value=iface)
         iface_combo = ttk.Combobox(
-            rf, textvariable=iface_var, values=self._agg_iface_names, width=20,
+            grid, textvariable=iface_var, values=self._agg_iface_names,
         )
-        iface_combo.grid(row=0, column=0, sticky=tk.W, padx=2)
+        iface_combo.grid(row=grid_row, column=0, sticky=tk.EW, padx=2, pady=2)
 
         action_var = tk.StringVar(value=action or AGG_ACTION_PROMOTE)
         action_combo = ttk.Combobox(
-            rf, textvariable=action_var, values=AGG_ACTIONS,
-            state="readonly", width=10,
+            grid, textvariable=action_var, values=AGG_ACTIONS, state="readonly",
         )
-        action_combo.grid(row=0, column=1, sticky=tk.W, padx=2)
+        action_combo.grid(row=grid_row, column=1, sticky=tk.EW, padx=2, pady=2)
 
         target_var = tk.StringVar(value=target or AGG_TARGET_PORTCHANNEL)
         target_combo = ttk.Combobox(
-            rf, textvariable=target_var, values=AGG_TARGETS,
-            state="readonly", width=14,
+            grid, textvariable=target_var, values=AGG_TARGETS, state="readonly",
         )
-        target_combo.grid(row=0, column=2, sticky=tk.W, padx=2)
+        target_combo.grid(row=grid_row, column=2, sticky=tk.EW, padx=2, pady=2)
 
         members_var = tk.StringVar(value=members)
-        members_cell = ttk.Frame(rf)
-        members_cell.grid(row=0, column=3, sticky=tk.W, padx=2)
-        members_entry = ttk.Entry(members_cell, textvariable=members_var, width=20)
-        members_entry.pack(side=tk.LEFT)
+        members_cell = ttk.Frame(grid)
+        members_cell.grid(row=grid_row, column=3, sticky=tk.EW, padx=2, pady=2)
+        members_entry = ttk.Entry(members_cell, textvariable=members_var)
+        members_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         vlan_var = tk.StringVar(value=vlan)
-        vlan_entry = ttk.Entry(rf, textvariable=vlan_var, width=8)
-        vlan_entry.grid(row=0, column=4, sticky=tk.W, padx=2)
+        vlan_entry = ttk.Entry(grid, textvariable=vlan_var)
+        vlan_entry.grid(row=grid_row, column=4, sticky=tk.EW, padx=2, pady=2)
 
         row: Dict[str, Any] = {
-            "frame": rf,
             "iface_var": iface_var,
             "action_var": action_var,
             "target_var": target_var,
             "members_var": members_var,
             "vlan_var": vlan_var,
+            "iface_combo": iface_combo,
         }
 
         # "Pick..." opens a checkbox list of the target model's ports so the
@@ -1385,9 +1396,15 @@ class App(tk.Tk):
         ).pack(side=tk.LEFT, padx=(3, 0))
 
         remove_btn = ttk.Button(
-            rf, text="✕", width=3, command=lambda: self._agg_remove_row(row),
+            grid, text="✕", width=3, command=lambda: self._agg_remove_row(row),
         )
-        remove_btn.grid(row=0, column=5, sticky=tk.W, padx=2)
+        remove_btn.grid(row=grid_row, column=5, sticky=tk.W, padx=2, pady=2)
+
+        # All widgets in this row, for re-flowing/removal.
+        row["widgets"] = [
+            iface_combo, action_combo, target_combo, members_cell,
+            vlan_entry, remove_btn,
+        ]
 
         # Auto-detect action/target from the chosen interface's category.
         iface_combo.bind(
@@ -1397,25 +1414,41 @@ class App(tk.Tk):
 
         self._agg_rows.append(row)
         self._agg_empty_label.grid_remove()
+        self._agg_set_header_visible(True)
+
+    def _agg_set_header_visible(self, visible: bool) -> None:
+        """Show the column titles only when there is at least one row."""
+        for lbl in getattr(self, "_agg_header_labels", []):
+            if visible:
+                lbl.grid()
+            else:
+                lbl.grid_remove()
 
     def _agg_remove_row(self, row: Dict[str, Any]) -> None:
         """Remove one interface row and re-flow the remaining rows."""
         if row not in self._agg_rows:
             return
-        row["frame"].destroy()
+        for w in row.get("widgets", []):
+            w.destroy()
         self._agg_rows.remove(row)
+        # Re-grid the survivors so there are no gaps (header stays at row 0).
         for idx, r in enumerate(self._agg_rows):
-            r["frame"].grid_configure(row=idx)
+            for col, w in enumerate(r.get("widgets", [])):
+                sticky = tk.W if col == 5 else tk.EW
+                w.grid_configure(row=idx + 1, column=col, sticky=sticky)
         if not self._agg_rows:
             self._agg_empty_label.grid()
+            self._agg_set_header_visible(False)
 
     def _agg_clear_rows(self) -> None:
         """Destroy all interface rows (used when the section is hidden/reset)."""
         for row in self._agg_rows:
-            row["frame"].destroy()
+            for w in row.get("widgets", []):
+                w.destroy()
         self._agg_rows.clear()
         if getattr(self, "_agg_empty_label", None) is not None:
             self._agg_empty_label.grid()
+        self._agg_set_header_visible(False)
 
     def _agg_on_iface_selected(self, row: Dict[str, Any]) -> None:
         """Auto-set Action/Target from the selected interface's category.
@@ -1821,9 +1854,9 @@ class App(tk.Tk):
     def _agg_apply_iface_values(self) -> None:
         """Push the current interface-name list into every row's combobox."""
         for row in self._agg_rows:
-            combo = row["frame"].grid_slaves(row=0, column=0)
-            if combo:
-                combo[0].configure(values=self._agg_iface_names)
+            combo = row.get("iface_combo")
+            if combo is not None:
+                combo.configure(values=self._agg_iface_names)
 
     def _set_fortinet_help_visible(self, visible: bool) -> None:
         """Show the FortiGate export how-to banner only for a FortiGate source."""
