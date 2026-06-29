@@ -309,3 +309,125 @@ source→target pairs but several UI elements still carry FTD-centric defaults o
     Add a short hint line ("Exported via `curl` from FDM `/api/fdm/v6/object` …" or
     a pointer to docs).
   - Priority: Low.
+
+---
+
+## P5: Feature Coverage - Migration Completeness
+
+Config domains not yet handled by any converter. Today the tool covers interfaces,
+address/service objects + groups, security (allow) policies, static routes, zones, and
+SNMP (FTD). The items below are what a config needs to actually function after cutover.
+Each should follow the existing per-domain `*_converter.py` pattern and ship for every
+supported direction (FG->FTD, FG->PA, ASA->PA, FTD->FG, PA->FG) where applicable.
+
+### Tier 1 - Showstoppers (config will not work without these)
+
+- [ ] NAT conversion
+  - Scope: Source NAT/PAT, destination NAT, static (1:1) NAT. FortiGate `firewall vip`
+    and `firewall ippool` -> FTD auto/manual NAT rules, PAN-OS NAT rules. Reuse existing
+    address/service object infrastructure.
+  - Priority: Critical - most common reason a migrated firewall fails in production.
+
+- [ ] Policy NAT linkage
+  - Scope: FortiGate policies carry `nat: enable` (+ optional ippool/VIP); that intent is
+    currently dropped. Wire policy-embedded NAT into the NAT converter output.
+  - Priority: Critical - depends on NAT conversion.
+
+- [ ] VPN conversion
+  - Scope: Site-to-site IPsec (IKE/IPsec proposals, peers, PSKs/certs, tunnel interfaces,
+    crypto maps, traffic selectors) and remote-access / SSL VPN. High effort.
+  - Priority: Critical for edge firewalls.
+
+### Tier 2 - Control plane & policy depth
+
+- [ ] Dynamic routing (OSPF / BGP / RIP)
+  - Scope: Process/peer config, redistribution, route maps, prefix lists, distribute lists.
+    Only static routes are handled today.
+  - Priority: High.
+
+- [ ] Security profiles / UTM
+  - Scope: AV, IPS/intrusion, web/URL filtering, application control, DNS/file filtering ->
+    FTD intrusion + file policies, PAN-OS security profile groups, FortiGate UTM profiles.
+    Profile-to-policy attachment mapping.
+  - Priority: High.
+
+- [ ] Schedules / time-based policies
+  - Scope: FortiGate `firewall schedule` (recurring + one-time) -> PAN-OS schedules /
+    FTD time ranges; attach to the converted rules.
+  - Priority: Medium.
+
+- [ ] Application & URL mapping
+  - Scope: L7 app-id and URL categories. Not 1:1 - requires a maintained cross-vendor
+    mapping table and a fallback for unmatched entries.
+  - Priority: Medium.
+
+- [ ] Users / identity
+  - Scope: LDAP / RADIUS / SAML auth servers, FSSO / User-ID agents, identity-based rules
+    (user/group as a policy match criterion).
+  - Priority: Medium.
+
+### Tier 3 - Platform & scale
+
+- [ ] Multi-context (VDOM / vsys / security context)
+  - Scope: Per-VDOM / per-vsys scoping and object namespacing. Tool currently assumes a
+    single context.
+  - Priority: Medium.
+
+- [ ] IPv6 throughout
+  - Scope: IPv6 address objects, policies, and routes end to end. Currently IPv4-centric.
+  - Priority: Medium.
+
+- [ ] HA configuration
+  - Scope: HA pairing/cluster settings, failover links, priorities.
+  - Priority: Low-Medium.
+
+- [ ] DHCP server config
+  - Scope: Per-interface DHCP scopes, reservations, options.
+  - Priority: Low.
+
+- [ ] QoS / traffic shaping
+  - Scope: Shapers, shaping policies, bandwidth guarantees/limits -> QoS profiles/policies.
+  - Priority: Low.
+
+- [ ] Certificates & syslog/logging settings
+  - Scope: Cert objects/chains referenced by VPN/inspection; syslog servers, log forwarding.
+  - Priority: Low.
+
+- [ ] Object nuances
+  - Scope: FQDN (partially done for FTD), wildcard, geo/country, and dynamic address objects
+    across all directions.
+  - Priority: Low-Medium.
+
+### Tier 4 - Migration quality & safety (high leverage)
+
+- [ ] Pre-flight validation + diff
+  - Scope: Parse source and report exactly what will / will not convert BEFORE pushing;
+    per-object source->target diff. Builds on the existing `verify` skill at config level.
+  - Priority: High - de-risks every other migration.
+
+- [ ] Rollback / snapshot
+  - Scope: Capture target state before import; one-command revert.
+  - Priority: High.
+
+- [ ] Object dedup & merge
+  - Scope: Collapse duplicate address/service objects (same value, different names) across
+    the source config; rewrite references.
+  - Priority: Medium.
+
+- [ ] Rule optimization
+  - Scope: Detect shadowed / redundant / overly-broad rules during migration; report (and
+    optionally prune) them.
+  - Priority: Medium.
+
+- [ ] Naming-collision strategy
+  - Scope: Consistent, configurable collision handling shared across all object types
+    (suffix, source-prefix, interactive).
+  - Priority: Medium.
+
+- [ ] Round-trip verification
+  - Scope: Re-read the target after import and compare against source intent; report drift.
+  - Priority: Medium.
+
+- [ ] Coverage-matrix completeness
+  - Scope: Fill in missing direction pairs (e.g. ASA->FTD, PA->FTD) so the matrix is symmetric.
+  - Priority: Medium.
