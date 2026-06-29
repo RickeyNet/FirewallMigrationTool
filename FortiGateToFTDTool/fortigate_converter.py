@@ -77,7 +77,7 @@ try:
     from service_group_converter import ServiceGroupConverter
     from policy_converter import PolicyConverter
     from route_converter import RouteConverter
-    from interface_converter import InterfaceConverter, FTD_MODELS
+    from interface_converter import InterfaceConverter, FTD_MODELS, get_network_modules
 except ImportError as e:
     print("\n" + "="*60)
     print("ERROR: Missing converter module files!")
@@ -283,11 +283,11 @@ Supported FTD Models:
   ftd-2120   - Cisco Firepower 2120 (12 ports)
   ftd-2130   - Cisco Firepower 2130 (16 ports)
   ftd-2140   - Cisco Firepower 2140 (16 ports)
-  ftd-3105   - Cisco Secure Firewall 3105 (8 ports, HA on Eth1/2)
+  ftd-3105   - Cisco Secure Firewall 3105 (16 ports, HA on Eth1/2)
   ftd-3110   - Cisco Secure Firewall 3110 (16 ports, HA on Eth1/2)
   ftd-3120   - Cisco Secure Firewall 3120 (16 ports, HA on Eth1/2) [default]
-  ftd-3130   - Cisco Secure Firewall 3130 (24 ports, HA on Eth1/2)
-  ftd-3140   - Cisco Secure Firewall 3140 (24 ports, HA on Eth1/2)
+  ftd-3130   - Cisco Secure Firewall 3130 (16 ports, HA on Eth1/2)
+  ftd-3140   - Cisco Secure Firewall 3140 (16 ports, HA on Eth1/2)
   ftd-4215   - Cisco Secure Firewall 4215 (24 ports, HA on Eth1/2)
         """
     )
@@ -322,6 +322,17 @@ Supported FTD Models:
                         "All listed ports are reserved and excluded from conversion. "
                         "Use 'none' to disable HA port reservation entirely. "
                         "Format: 'Ethernet1/X' where X is a valid port number for your model.")
+
+    parser.add_argument('--network-module',
+                   type=str,
+                   default='none',
+                   choices=get_network_modules(),
+                   metavar='MODULE',
+                   help="Optional network module installed in the model's NM slot "
+                        "(models with a slot: 3110/3120/3130/3140, 4215). Adds the "
+                        "module's ports (Ethernet2/1..N) to the available pool. "
+                        "Choices: " + ", ".join(get_network_modules()) +
+                        ". Default: none (fixed ports only).")
 
     parser.add_argument('--expand-portchannel',
                    action='append',
@@ -492,6 +503,7 @@ Supported FTD Models:
         fg_config,
         target_model=args.target_model,
         custom_ha_port=ha_port_arg,
+        network_module=getattr(args, 'network_module', 'none'),
     )
 
     # Apply EtherChannel expansion (scale up 10G member links) if requested

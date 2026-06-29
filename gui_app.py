@@ -17,6 +17,7 @@ import threading
 import ctypes
 import sys
 import os
+import re
 import glob
 import io
 import json
@@ -172,6 +173,32 @@ PA_MODEL_LIST = [
     "pa-3220", "pa-3250",
     "pa-5220",
 ]
+
+# Optional FTD network modules - pulled from the converter so the GUI and the
+# CLI/converter stay in lock-step. Falls back to a minimal stub if the import
+# is unavailable (keeps the GUI importable in stripped builds).
+try:
+    from interface_converter import (  # noqa: E402
+        FTD_NETWORK_MODULES as _FTD_NM,
+        FTD_MODELS as _FTD_MODELS_INFO,
+    )
+except Exception:  # noqa: BLE001
+    _FTD_NM = {"none": {"label": "None (fixed ports only)", "ports": 0, "speed": None}}
+    _FTD_MODELS_INFO = {}
+
+FTD_MODULE_IDS = list(_FTD_NM.keys())
+FTD_MODULE_LABELS = [_FTD_NM[m].get("label", m) for m in FTD_MODULE_IDS]
+FTD_MODULE_LABEL_TO_ID = {
+    _FTD_NM[m].get("label", m): m for m in FTD_MODULE_IDS
+}
+FTD_MODULE_ID_TO_LABEL = {
+    m: _FTD_NM[m].get("label", m) for m in FTD_MODULE_IDS
+}
+
+
+def _ftd_model_module_capable(model: str) -> bool:
+    """True if the FTD model has at least one network-module slot."""
+    return bool(_FTD_MODELS_INFO.get(model, {}).get("module_slots"))
 
 def _profile_list(key: str, default: List[str]) -> List[str]:
     value = _RUNTIME_PROFILE.get(key)
@@ -999,6 +1026,8 @@ class App(tk.Tk):
 
         # Show/hide the interface-aggregation builder for the new direction.
         self._update_aggregation_visibility()
+        # Show/hide the FTD network-module selector for the new target.
+        self._update_module_selector()
 
     def _retitle_import_cleanup_tabs(self, target: str) -> None:
         """Update Import/Cleanup tab titles, section frame labels, and enabled state
@@ -1116,6 +1145,10 @@ class App(tk.Tk):
             values=FTD_MODEL_LIST, state="readonly", width=18,
         )
         self.conv_model_combo.grid(row=3, column=1, sticky=tk.W, padx=4)
+        # Selecting a model toggles whether the network-module dropdown applies.
+        self.conv_model_combo.bind(
+            "<<ComboboxSelected>>", lambda _e: self._update_module_selector(),
+        )
 
         # Row 4: HA port (optional)
         self.conv_ha_label = ttk.Label(opts, text="HA Port (optional):")
@@ -1125,6 +1158,21 @@ class App(tk.Tk):
         self.conv_ha_entry.grid(row=4, column=1, sticky=tk.W, padx=4)
         self.conv_ha_hint = ttk.Label(opts, text="e.g. Ethernet1/5 or Ethernet1/2,Ethernet1/3  (blank = no HA port)")
         self.conv_ha_hint.grid(row=5, column=1, sticky=tk.W)
+
+        # Row 6: Network module (FTD only; enabled for models with an NM slot)
+        self.conv_module_label = ttk.Label(opts, text="Network Module:")
+        self.conv_module_label.grid(row=6, column=0, sticky=tk.W, pady=3)
+        self.conv_module_var = tk.StringVar(value=FTD_MODULE_ID_TO_LABEL["none"])
+        self.conv_module_combo = ttk.Combobox(
+            opts, textvariable=self.conv_module_var,
+            values=FTD_MODULE_LABELS, state="readonly", width=22,
+        )
+        self.conv_module_combo.grid(row=6, column=1, sticky=tk.W, padx=4)
+        self.conv_module_hint = ttk.Label(
+            opts, text="Add-on module ports (Ethernet2/1…) join the available pool",
+            foreground=_FG_DIM,
+        )
+        self.conv_module_hint.grid(row=7, column=1, sticky=tk.W)
 
         # Interface link-aggregation scale-up (Expand/Promote Port-Channels and
         # Bridge Groups) lives in its own builder section below the opts grid -
@@ -1174,6 +1222,7 @@ class App(tk.Tk):
 
         # Sync builder visibility with the initial source/target selection.
         self._update_aggregation_visibility()
+        self._update_module_selector()
 
     # ==================== INTERFACE AGGREGATION BUILDER ====================
     def _build_aggregation_section(self, tab: ttk.Frame) -> None:
@@ -1196,7 +1245,8 @@ class App(tk.Tk):
                 "Optional: scale up link aggregation on the FTD side. Add a row "
                 "per interface to grow into a Port-Channel or Bridge Group.\n"
                 "Members = a target count (e.g. 4) or an explicit port list "
-                "(e.g. Ethernet1/5,Ethernet1/6). Leave empty to migrate 1:1."
+                "(e.g. Ethernet1/5,Ethernet1/6) - click \"Pick…\" to choose ports "
+                "instead of typing. Leave empty to migrate 1:1."
             ),
             justify=tk.LEFT,
         )
@@ -1268,8 +1318,10 @@ class App(tk.Tk):
         target_combo.grid(row=0, column=2, sticky=tk.W, padx=2)
 
         members_var = tk.StringVar(value=members)
-        members_entry = ttk.Entry(rf, textvariable=members_var, width=28)
-        members_entry.grid(row=0, column=3, sticky=tk.W, padx=2)
+        members_cell = ttk.Frame(rf)
+        members_cell.grid(row=0, column=3, sticky=tk.W, padx=2)
+        members_entry = ttk.Entry(members_cell, textvariable=members_var, width=20)
+        members_entry.pack(side=tk.LEFT)
 
         row: Dict[str, Any] = {
             "frame": rf,
@@ -1278,6 +1330,15 @@ class App(tk.Tk):
             "target_var": target_var,
             "members_var": members_var,
         }
+
+        # "Pick..." opens a checkbox list of the target model's ports so the
+        # user can choose explicit member ports without typing them. It just
+        # fills members_var with a comma-separated port list; typing a count
+        # still works.
+        ttk.Button(
+            members_cell, text="Pick…", width=6,
+            command=lambda: self._agg_pick_ports(row),
+        ).pack(side=tk.LEFT, padx=(3, 0))
 
         remove_btn = ttk.Button(
             rf, text="✕", width=3, command=lambda: self._agg_remove_row(row),
@@ -1329,6 +1390,147 @@ class App(tk.Tk):
             row["target_var"].set(AGG_TARGET_BRIDGEGROUP)
         elif category == "physical":
             row["action_var"].set(AGG_ACTION_PROMOTE)
+
+    def _agg_model_ports(self) -> List[Dict[str, Any]]:
+        """Return the data ports of the currently selected target model.
+
+        Each entry is {'name', 'label', 'reserved'}: 'name' is the hardware
+        port (e.g. 'Ethernet1/9'), 'label' adds a speed/HA hint for the picker,
+        and 'reserved' is True for HA ports (shown disabled - they can't be
+        members). Returns [] if the model/port count can't be determined.
+        """
+        model = self.conv_model_var.get().strip()
+        if not model or model == "(not applicable)":
+            return []
+
+        info = None
+        prefix = "Ethernet1/"
+        speed_groups = None
+        reserved_ports: set = set()
+        module = None  # (prefix, count, speed) for an installed network module
+        try:
+            if self._current_platform == "Cisco FTD":
+                from interface_converter import FTD_MODELS  # lazy import
+                info = FTD_MODELS.get(model)
+                if info:
+                    speed_groups = info.get("port_speed_groups")
+                # Mark the HA port(s) entered on the Convert tab as reserved.
+                ha_raw = self.conv_ha_var.get().strip()
+                if ha_raw and ha_raw.lower() != "none":
+                    for tok in re.split(r"[,;\s]+", ha_raw):
+                        tok = tok.strip()
+                        if tok:
+                            reserved_ports.add(tok)
+                # Include installed network-module ports, if any.
+                module_id = FTD_MODULE_LABEL_TO_ID.get(
+                    self.conv_module_var.get(), "none",
+                ) if getattr(self, "conv_module_var", None) else "none"
+                mod = _FTD_NM.get(module_id)
+                if (info and module_id != "none" and mod and mod.get("ports")
+                        and info.get("module_slots")):
+                    module = (
+                        info.get("module_port_prefix", "Ethernet2/"),
+                        int(mod["ports"]),
+                        mod.get("speed") or "",
+                    )
+            elif self._current_platform == "Palo Alto PAN-OS":
+                from pa_interface_converter import PA_MODELS  # lazy import
+                info = PA_MODELS.get(model)
+                prefix = "ethernet1/"
+        except Exception:  # noqa: BLE001 - best effort; fall back to no picker
+            info = None
+
+        if not info:
+            return []
+        total = int(info.get("total_ports", 0) or 0)
+
+        def speed_of(num: int) -> str:
+            if not speed_groups:
+                return ""
+            for label, nums in speed_groups.items():
+                if num in nums:
+                    return label
+            return ""
+
+        def make_entry(name: str, speed: str) -> Dict[str, Any]:
+            hints = []
+            if speed:
+                hints.append(speed)
+            is_reserved = name in reserved_ports
+            if is_reserved:
+                hints.append("HA - reserved")
+            label = name + (f"   ({', '.join(hints)})" if hints else "")
+            return {"name": name, "label": label, "reserved": is_reserved}
+
+        ports: List[Dict[str, Any]] = []
+        for num in range(1, total + 1):
+            ports.append(make_entry(f"{prefix}{num}", speed_of(num)))
+        # Network-module ports (Ethernet2/1..N) at the module's link speed.
+        if module:
+            m_prefix, m_count, m_speed = module
+            for num in range(1, m_count + 1):
+                ports.append(make_entry(f"{m_prefix}{num}", m_speed))
+        return ports
+
+    def _agg_pick_ports(self, row: Dict[str, Any]) -> None:
+        """Open a checkbox picker of the target model's ports and write the
+        chosen ones back into the row's Members field as a comma list."""
+        ports = self._agg_model_ports()
+        if not ports:
+            self._show_message(
+                "Pick Ports",
+                "Choose a target model on the Convert tab first so the "
+                "available ports are known.",
+                kind="warning",
+            )
+            return
+
+        current = {
+            p.strip() for p in row["members_var"].get().split(",") if p.strip()
+        }
+
+        win = tk.Toplevel(self)
+        win.title("Select member ports")
+        win.transient(self)
+        win.configure(bg=_BG)
+
+        ttk.Label(
+            win,
+            text=("Tick the ports to use as members. Port-Channel (LACP) "
+                  "members must all be the same speed."),
+            wraplength=320, justify=tk.LEFT,
+        ).pack(anchor=tk.W, padx=10, pady=(10, 4))
+
+        container, inner = self._make_scrollable(win)
+        container.pack(fill=tk.BOTH, expand=True, padx=10, pady=4)
+
+        vars_by_port: Dict[str, tk.BooleanVar] = {}
+        for port in ports:
+            var = tk.BooleanVar(value=(port["name"] in current))
+            ttk.Checkbutton(
+                inner, text=port["label"], variable=var,
+                state=(tk.DISABLED if port["reserved"] else tk.NORMAL),
+            ).pack(anchor=tk.W, pady=1)
+            if not port["reserved"]:
+                vars_by_port[port["name"]] = var
+
+        def apply_selection() -> None:
+            chosen = [
+                p["name"] for p in ports
+                if p["name"] in vars_by_port and vars_by_port[p["name"]].get()
+            ]
+            row["members_var"].set(",".join(chosen))
+            win.destroy()
+
+        btns = ttk.Frame(win)
+        btns.pack(fill=tk.X, padx=10, pady=(4, 10))
+        ttk.Button(btns, text="OK", command=apply_selection).pack(side=tk.RIGHT)
+        ttk.Button(btns, text="Cancel", command=win.destroy).pack(
+            side=tk.RIGHT, padx=(0, 6),
+        )
+
+        win.geometry("360x440")
+        win.grab_set()
 
     def _agg_refresh_interfaces(self, silent: bool = True) -> None:
         """Parse the selected FortiGate YAML and index its interfaces.
@@ -1505,6 +1707,40 @@ class App(tk.Tk):
             if combo:
                 combo[0].configure(values=self._agg_iface_names)
 
+    def _update_module_selector(self) -> None:
+        """Show the Network Module dropdown only for an FTD target, and enable
+        it only for models that actually have a network-module slot. Resets to
+        'None' whenever it is hidden or disabled."""
+        widgets = (
+            getattr(self, "conv_module_label", None),
+            getattr(self, "conv_module_combo", None),
+            getattr(self, "conv_module_hint", None),
+        )
+        if any(w is None for w in widgets):
+            return
+        label, combo, hint = widgets
+
+        if self._current_platform != "Cisco FTD":
+            self.conv_module_var.set(FTD_MODULE_ID_TO_LABEL["none"])
+            label.grid_remove()
+            combo.grid_remove()
+            hint.grid_remove()
+            return
+
+        label.grid()
+        combo.grid()
+        hint.grid()
+        if _ftd_model_module_capable(self.conv_model_var.get().strip()):
+            combo.configure(state="readonly")
+            label.configure(foreground=_FG)
+            hint.configure(text="Add-on module ports (Ethernet2/1…) join the available pool")
+        else:
+            # No slot on this model - force None and grey the control out.
+            self.conv_module_var.set(FTD_MODULE_ID_TO_LABEL["none"])
+            combo.configure(state=tk.DISABLED)
+            label.configure(foreground=_FG_DIM)
+            hint.configure(text="(this model has no network-module slot)")
+
     def _update_aggregation_visibility(self) -> None:
         """Show the builder for FortiGate -> FTD and FortiGate -> Palo Alto;
         hide it for every other direction."""
@@ -1533,7 +1769,8 @@ class App(tk.Tk):
                     f"{target_short} side. Add a row per interface to grow into "
                     "a Port-Channel or Bridge Group.\n"
                     "Members = a target count (e.g. 4) or an explicit port list "
-                    f"(e.g. {port_example}). Leave empty to migrate 1:1."
+                    f"(e.g. {port_example}) - click \"Pick…\" to choose ports "
+                    "instead of typing. Leave empty to migrate 1:1."
                 ),
             )
             if not self._agg_visible:
@@ -3499,6 +3736,14 @@ class App(tk.Tk):
             if not is_pa:
                 ha_port = self.conv_ha_var.get().strip()
                 argv.extend(["--ha-port", ha_port if ha_port else "none"])
+
+                # Optional FTD network module (only meaningful for an FTD target).
+                if self._current_platform == "Cisco FTD":
+                    module_id = FTD_MODULE_LABEL_TO_ID.get(
+                        self.conv_module_var.get(), "none",
+                    )
+                    if module_id and module_id != "none":
+                        argv.extend(["--network-module", module_id])
 
             # Interface link-aggregation scale-up: FortiGate -> FTD and
             # FortiGate -> Palo Alto both accept the same flags (port-channel

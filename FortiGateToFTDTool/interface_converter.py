@@ -105,7 +105,7 @@ FTD_MODELS = {
             '1G': [1, 2, 3, 4, 5, 6, 7, 8],
             '10G': [9, 10, 11, 12, 13, 14, 15, 16],
         },
-        'description': '16-port firewall (8 RJ45 + 8 SFP) with HA support'
+        'description': '16-port firewall (8 RJ45 + 8x 1/10G SFP+) with HA'
     },
     'ftd-3110': {
         'name': 'Cisco Secure Firewall 3110',
@@ -113,13 +113,15 @@ FTD_MODELS = {
         'port_prefix': 'Ethernet1/',
         'ha_port': 'Ethernet1/2',
         'management_port': 'Management1/1',
+        'module_slots': 1,                   # one optional network-module slot
+        'module_port_prefix': 'Ethernet2/',  # module ports = Ethernet2/1..N
         # 1/1-1/8 = 1G RJ45, 1/9-1/16 = 10G SFP+ (EtherChannel members must
         # share a speed - see _speed_group_of_port).
         'port_speed_groups': {
             '1G': [1, 2, 3, 4, 5, 6, 7, 8],
             '10G': [9, 10, 11, 12, 13, 14, 15, 16],
         },
-        'description': '16-port firewall (8 RJ45 + 8 SFP) with HA'
+        'description': '16-port firewall (8 RJ45 + 8x 1/10G SFP+) with HA'
     },
     'ftd-3120': {
         'name': 'Cisco Secure Firewall 3120',
@@ -127,29 +129,47 @@ FTD_MODELS = {
         'port_prefix': 'Ethernet1/',
         'ha_port': 'Ethernet1/2',
         'management_port': 'Management1/1',
+        'module_slots': 1,                   # one optional network-module slot
+        'module_port_prefix': 'Ethernet2/',  # module ports = Ethernet2/1..N
         # 1/1-1/8 = 1G RJ45, 1/9-1/16 = 10G SFP+ (EtherChannel members must
         # share a speed - see _speed_group_of_port).
         'port_speed_groups': {
             '1G': [1, 2, 3, 4, 5, 6, 7, 8],
             '10G': [9, 10, 11, 12, 13, 14, 15, 16],
         },
-        'description': '16-port firewall (8 RJ45 + 8 SFP) with HA'
+        'description': '16-port firewall (8 RJ45 + 8x 1/10G SFP+) with HA'
     },
     'ftd-3130': {
         'name': 'Cisco Secure Firewall 3130',
-        'total_ports': 24,
+        'total_ports': 16,  # 8x RJ45 + 8x SFP+ fixed (plus optional network module)
         'port_prefix': 'Ethernet1/',
         'ha_port': 'Ethernet1/2',
         'management_port': 'Management1/1',
-        'description': '24-port firewall with HA'
+        'module_slots': 1,                   # one optional network-module slot
+        'module_port_prefix': 'Ethernet2/',  # module ports = Ethernet2/1..N
+        # 1/1-1/8 = 1G RJ45, 1/9-1/16 = 1/10/25G SFP+ (labelled 25G - their max).
+        # EtherChannel members must share a speed - see _speed_group_of_port.
+        'port_speed_groups': {
+            '1G': [1, 2, 3, 4, 5, 6, 7, 8],
+            '25G': [9, 10, 11, 12, 13, 14, 15, 16],
+        },
+        'description': '16-port firewall (8 RJ45 + 8x 1/10/25G SFP+) with HA'
     },
     'ftd-3140': {
         'name': 'Cisco Secure Firewall 3140',
-        'total_ports': 24,
+        'total_ports': 16,  # 8x RJ45 + 8x SFP+ fixed (plus optional network module)
         'port_prefix': 'Ethernet1/',
         'ha_port': 'Ethernet1/2',
         'management_port': 'Management1/1',
-        'description': '24-port firewall with HA'
+        'module_slots': 1,                   # one optional network-module slot
+        'module_port_prefix': 'Ethernet2/',  # module ports = Ethernet2/1..N
+        # 1/1-1/8 = 1G RJ45, 1/9-1/16 = 1/10/25G SFP+ (labelled 25G - their max).
+        # EtherChannel members must share a speed - see _speed_group_of_port.
+        'port_speed_groups': {
+            '1G': [1, 2, 3, 4, 5, 6, 7, 8],
+            '25G': [9, 10, 11, 12, 13, 14, 15, 16],
+        },
+        'description': '16-port firewall (8 RJ45 + 8x 1/10/25G SFP+) with HA'
     },
     'ftd-4215': {
         'name': 'Cisco Secure Firewall 4215',
@@ -160,6 +180,30 @@ FTD_MODELS = {
         'description': '24-port enterprise firewall with HA'
     }
 }
+
+# =============================================================================
+# OPTIONAL NETWORK MODULES (NM)
+# =============================================================================
+# Models with a network-module slot (module_slots >= 1) can carry an add-on
+# interface module. Its ports are named with the model's module_port_prefix
+# (Ethernet2/1, Ethernet2/2, ... for the first slot) and all run at the module's
+# link speed. Selecting a module adds these ports to the available pool so they
+# can be assigned, bundled into EtherChannels (same-speed rule still applies),
+# or reserved for HA. 'none' is the default (fixed ports only).
+FTD_NETWORK_MODULES = {
+    'none':   {'label': 'None (fixed ports only)', 'ports': 0, 'speed': None},
+    '8x1g':   {'label': '8 x 1G',                  'ports': 8, 'speed': '1G'},
+    '8x10g':  {'label': '8 x 10G SFP+',            'ports': 8, 'speed': '10G'},
+    '8x25g':  {'label': '8 x 25G SFP+',            'ports': 8, 'speed': '25G'},
+    '4x40g':  {'label': '4 x 40G QSFP+',           'ports': 4, 'speed': '40G'},
+    '2x100g': {'label': '2 x 100G QSFP28',         'ports': 2, 'speed': '100G'},
+}
+
+
+def get_network_modules() -> list:
+    """Return the list of supported network-module identifiers."""
+    return list(FTD_NETWORK_MODULES.keys())
+
 
 def get_supported_models() -> list:
     """Return list of supported firewall model names."""
@@ -218,7 +262,7 @@ class InterfaceConverter:
     Use set_target_model() to configure for a specific firewall.
     """
     
-    def __init__(self, fortigate_config: Dict[str, Any], target_model: str = 'ftd-3120', custom_ha_port: str = None) -> None: # pyright: ignore[reportArgumentType]
+    def __init__(self, fortigate_config: Dict[str, Any], target_model: str = 'ftd-3120', custom_ha_port: str = None, network_module: str = 'none') -> None: # pyright: ignore[reportArgumentType]
         """
         Initialize the converter with FortiGate configuration data.
         
@@ -235,9 +279,13 @@ class InterfaceConverter:
                         HA port. Each port must match 'Ethernet1/X' and be a
                         valid port number for the model. All reserved HA ports
                         are excluded from the data-interface conversion.
+            network_module: Optional add-on network module installed in the
+                        model's NM slot (e.g. '8x10g', '4x40g'); see
+                        get_network_modules(). Its ports (Ethernet2/1..N) are
+                        added to the available pool. 'none' = fixed ports only.
         """
         self.fg_config = fortigate_config
-    
+
         # Set target model (this also sets up port mapping)
         self.target_model = None
         self.model_info = None
@@ -245,11 +293,14 @@ class InterfaceConverter:
         self.ha_port = None      # First reserved HA port (back-compat alias)
         self.ha_ports = []       # All reserved HA ports (supports dual-HA links)
         self.custom_ha_port = custom_ha_port  # Custom HA port preference (str or list)
+        self.network_module = (network_module or 'none')  # installed NM, if any
         self.skip_ftd_ports = set()
-        
+        self._port_speed = {}    # full port name -> link-speed label (or None)
+        self._all_ports = []     # every valid port name (fixed + module)
+
         # Port mapping - will be built dynamically
         self.port_mapping = {}
-        
+
         # Set the target model (this builds the port mapping)
         self.set_target_model(target_model)
         
@@ -337,7 +388,12 @@ class InterfaceConverter:
         self.target_model = model
         self.model_info = FTD_MODELS[model]
         self.total_ports = self.model_info['total_ports']
-        
+
+        # Build the full universe of ports (fixed chassis ports + any installed
+        # network-module ports) together with each port's link-speed label. This
+        # runs before HA parsing so HA ports can be validated against it.
+        self._build_port_universe()
+
         # Determine the reserved HA port(s). custom_ha_port may be:
         #   - None              -> use the model default (if any)
         #   - "none"            -> reserve no HA port at all
@@ -364,24 +420,81 @@ class InterfaceConverter:
         # Clear existing mapping
         self.port_mapping = {}
 
-        # Build available ports list (starting from LAST port, going DOWN)
-        # This allows adding interfaces from the end
-        self.available_ftd_ports = []
-        for i in range(self.total_ports, 0, -1):
-            port = f"Ethernet1/{i}"
-            if port not in self.skip_ftd_ports:
-                self.available_ftd_ports.append(port)
+        # Build available ports list from the full universe (fixed ports first,
+        # highest-numbered first, then any network-module ports), skipping the
+        # reserved HA port(s). Assignment pops from the front, so built-in ports
+        # are consumed before module ports.
+        self.available_ftd_ports = [
+            p for p in self._all_ports if p not in self.skip_ftd_ports
+        ]
 
         # Track assigned ports
         self.assigned_ftd_ports = set(self.skip_ftd_ports)
 
         print(f"  Target model: {self.model_info['name']}")
         print(f"  Available ports: Ethernet1/1 - Ethernet1/{self.total_ports}")
+        if self._module_ports:
+            mod = FTD_NETWORK_MODULES.get(self.network_module, {})
+            print(f"  Network module: {mod.get('label', self.network_module)} "
+                  f"({self._module_ports[0]} - {self._module_ports[-1]})")
         if self.ha_ports:
             label = "HA port" if len(self.ha_ports) == 1 else "HA ports"
             print(f"  {label} (skipped): {', '.join(self.ha_ports)}")
         print(f"  Port assignment order: Starting from Ethernet1/{self.total_ports} down to Ethernet1/1")
-    
+
+    def _build_port_universe(self) -> None:
+        """Populate self._all_ports and self._port_speed for the current model.
+
+        Includes the fixed chassis ports plus, if a network module is selected
+        and the model has a slot, that module's ports. Ordered fixed-first
+        (highest-numbered first) then module ports, matching the assignment
+        order (built-in ports are consumed before module ports).
+        """
+        prefix = self.model_info.get('port_prefix', 'Ethernet1/')
+        speed_groups = self.model_info.get('port_speed_groups') or {}
+
+        def fixed_speed(num: int):
+            for label, nums in speed_groups.items():
+                if num in nums:
+                    return label
+            return None
+
+        self._port_speed = {}
+        fixed_ports = []
+        for i in range(self.total_ports, 0, -1):
+            name = f"{prefix}{i}"
+            fixed_ports.append(name)
+            self._port_speed[name] = fixed_speed(i)
+
+        # Optional network-module ports (Ethernet2/1..N at the module's speed).
+        self._module_ports = []
+        module_id = (self.network_module or 'none')
+        if module_id != 'none':
+            mod = FTD_NETWORK_MODULES.get(module_id)
+            if not mod:
+                print(f"  [WARNING] Unknown network module '{module_id}' - ignored")
+            elif not self.model_info.get('module_slots'):
+                print(f"  [WARNING] {self.model_info.get('name', self.target_model)} "
+                      f"has no network-module slot - module '{module_id}' ignored")
+            else:
+                mprefix = self.model_info.get('module_port_prefix', 'Ethernet2/')
+                for i in range(1, int(mod['ports']) + 1):
+                    name = f"{mprefix}{i}"
+                    self._module_ports.append(name)
+                    self._port_speed[name] = mod['speed']
+
+        self._all_ports = fixed_ports + self._module_ports
+
+    def set_network_module(self, network_module: str) -> None:
+        """Select an optional network module and rebuild the port pool.
+
+        Must be called when no ports have been assigned yet (e.g. right after
+        construction). See get_network_modules() for valid identifiers.
+        """
+        self.network_module = (network_module or 'none')
+        self.set_target_model(self.target_model)
+
+
     def _validate_custom_ha_port(self, ha_port: str) -> None:
         """
         Validate that the custom HA port is valid for the target model.
@@ -393,33 +506,31 @@ class InterfaceConverter:
             ValueError: If the HA port format is invalid or port number exceeds model capacity
         
         Notes:
-            - HA port must match format: 'Ethernet1/X' where X is 1-24
-            - Port number must not exceed the model's total_ports
+            - HA port must match format: 'EthernetS/X' (S = slot, e.g.
+              'Ethernet1/5' for a chassis port or 'Ethernet2/1' for a module port)
+            - The port must exist on the model (fixed port or installed module)
             - Management ports cannot be used as HA ports
         """
-        import re
-        
-        # Validate format: Ethernet1/X
-        match = re.match(r'^Ethernet1/(\d+)$', ha_port)
+        # Validate format: EthernetS/X (slot/port)
+        match = re.match(r'^Ethernet(\d+)/(\d+)$', ha_port)
         if not match:
             raise ValueError(
                 f"Invalid HA port format: '{ha_port}'. "
-                f"Must be 'Ethernet1/X' where X is a port number (e.g., 'Ethernet1/5')"
+                f"Must be 'Ethernet<slot>/<port>' (e.g., 'Ethernet1/5')"
             )
-        
-        # Extract port number
-        port_num = int(match.group(1))
-        
-        # Validate port number is within model's range
-        if port_num < 1 or port_num > self.total_ports:
+
+        # Validate the port actually exists on this model (fixed or module)
+        if ha_port not in self._all_ports:
+            valid = f"Ethernet1/1 - Ethernet1/{self.total_ports}"
+            if self._module_ports:
+                valid += f" or {self._module_ports[0]} - {self._module_ports[-1]}"
             raise ValueError(
                 f"Invalid HA port: '{ha_port}'. "
-                f"Model '{self.target_model}' only has ports 1-{self.total_ports}. "
-                f"Specify a port between Ethernet1/1 and Ethernet1/{self.total_ports}."
+                f"Model '{self.target_model}' has ports {valid}."
             )
-    
+
         # Warn if using port 1 (often used for management/uplink)
-        if port_num == 1:
+        if ha_port == "Ethernet1/1":
             print("\nWARNING: Using Ethernet1/1 as HA port. This is typically the first data port.")
             print("         Ensure this doesn't conflict with your network design.\n")
 
@@ -649,17 +760,17 @@ class InterfaceConverter:
         invalid, out of range, reserved, or already assigned to another
         interface. ``context`` only affects the wording of warning messages.
         """
-        match = re.match(r'^Ethernet1/(\d+)$', ftd_hardware)
+        match = re.match(r'^Ethernet(\d+)/(\d+)$', ftd_hardware)
         if not match:
             print(f"      [WARNING] {context} {fg_name}: invalid expansion port "
-                  f"'{ftd_hardware}' (expected 'Ethernet1/X') - skipped")
+                  f"'{ftd_hardware}' (expected 'Ethernet<slot>/<port>') - skipped")
             return False
 
-        port_num = int(match.group(1))
-        if port_num < 1 or port_num > self.total_ports:
+        # Must be a real port on this model (fixed chassis port or module port)
+        if ftd_hardware not in self._all_ports:
             print(f"      [WARNING] {context} {fg_name}: expansion port "
-                  f"'{ftd_hardware}' out of range for {self.target_model} "
-                  f"(1-{self.total_ports}) - skipped")
+                  f"'{ftd_hardware}' is not a valid port for {self.target_model} "
+                  f"- skipped")
             return False
 
         if ftd_hardware in self.skip_ftd_ports:
@@ -686,19 +797,10 @@ class InterfaceConverter:
         same speed (no constraint) or the port can't be classified.
 
         Used to keep EtherChannel (LACP) members within a single speed group -
-        mixing speeds in one channel is invalid on FTD.
+        mixing speeds in one channel is invalid on FTD. Covers both fixed
+        chassis ports and installed network-module ports.
         """
-        groups = self.model_info.get('port_speed_groups') if self.model_info else None
-        if not groups:
-            return None
-        match = re.match(r'^Ethernet1/(\d+)$', str(ftd_hardware))
-        if not match:
-            return None
-        port_num = int(match.group(1))
-        for label, ports in groups.items():
-            if port_num in ports:
-                return label
-        return None
+        return self._port_speed.get(str(ftd_hardware))
 
     def _pop_available_port(self, speed_group: Optional[str] = None) -> Optional[str]:
         """Pop the next free FTD port from the pool, optionally restricted to a
