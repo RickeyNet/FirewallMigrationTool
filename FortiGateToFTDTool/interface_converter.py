@@ -227,9 +227,14 @@ class InterfaceConverter:
                             Expected to have a 'system_interface' key
             target_model: Target FTD firewall model (e.g., 'ftd-1010', 'ftd-3120')
                         Use get_supported_models() to see available models
-            custom_ha_port: Optional custom HA port (e.g., 'Ethernet1/5'). 
-                        If None, uses the model's default HA port.
-                        Must match format: 'Ethernet1/X' where X is a valid port number.
+            custom_ha_port: Optional custom HA port(s). Accepts a single port
+                        (e.g., 'Ethernet1/5'), several ports for dual-HA links
+                        as a comma/space-separated string (e.g.,
+                        'Ethernet1/2, Ethernet1/3') or a list, or 'none' to
+                        reserve no HA port. If None, uses the model's default
+                        HA port. Each port must match 'Ethernet1/X' and be a
+                        valid port number for the model. All reserved HA ports
+                        are excluded from the data-interface conversion.
         """
         self.fg_config = fortigate_config
     
@@ -237,8 +242,9 @@ class InterfaceConverter:
         self.target_model = None
         self.model_info = None
         self.total_ports = 16  # Default
-        self.ha_port = None
-        self.custom_ha_port = custom_ha_port  # NEW: Store custom HA port preference
+        self.ha_port = None      # First reserved HA port (back-compat alias)
+        self.ha_ports = []       # All reserved HA ports (supports dual-HA links)
+        self.custom_ha_port = custom_ha_port  # Custom HA port preference (str or list)
         self.skip_ftd_ports = set()
         
         # Port mapping - will be built dynamically
@@ -332,27 +338,32 @@ class InterfaceConverter:
         self.model_info = FTD_MODELS[model]
         self.total_ports = self.model_info['total_ports']
         
-        # Use custom HA port if specified, otherwise use model default
-        # "none" (case-insensitive) means explicitly no HA port
-        if self.custom_ha_port and self.custom_ha_port.lower() == "none":
-            self.ha_port = None
+        # Determine the reserved HA port(s). custom_ha_port may be:
+        #   - None              -> use the model default (if any)
+        #   - "none"            -> reserve no HA port at all
+        #   - "Eth.. , Eth.."   -> one OR MORE custom ports (comma/space separated),
+        #                          or a list/tuple of port names
+        # HA links are often dual (active + standby control/data links), so more
+        # than one port can be reserved and excluded from the data conversion.
+        if self.custom_ha_port and str(self.custom_ha_port).strip().lower() == "none":
+            self.ha_ports = []
         elif self.custom_ha_port:
-            # Validate custom HA port format and availability
-            self._validate_custom_ha_port(self.custom_ha_port) # pyright: ignore[reportAttributeAccessIssue]
-            self.ha_port = self.custom_ha_port
+            # Validate + normalize custom HA port(s); raises ValueError on bad input
+            self.ha_ports = self._parse_custom_ha_ports(self.custom_ha_port)
         else:
-            self.ha_port = self.model_info['ha_port']
-        
-        # Build skip set for reserved ports
-        self.skip_ftd_ports = set()
-        
-        # HA port is reserved and cannot be used for data interfaces
-        if self.ha_port:
-            self.skip_ftd_ports.add(self.ha_port)
-        
+            default = self.model_info['ha_port']
+            self.ha_ports = [default] if default else []
+
+        # Backward-compatible single-port attribute (first HA port, or None).
+        self.ha_port = self.ha_ports[0] if self.ha_ports else None
+
+        # Build skip set for reserved ports - every HA port is reserved and
+        # cannot be used for data interfaces.
+        self.skip_ftd_ports = set(self.ha_ports)
+
         # Clear existing mapping
         self.port_mapping = {}
-        
+
         # Build available ports list (starting from LAST port, going DOWN)
         # This allows adding interfaces from the end
         self.available_ftd_ports = []
@@ -360,14 +371,15 @@ class InterfaceConverter:
             port = f"Ethernet1/{i}"
             if port not in self.skip_ftd_ports:
                 self.available_ftd_ports.append(port)
-        
+
         # Track assigned ports
         self.assigned_ftd_ports = set(self.skip_ftd_ports)
-        
+
         print(f"  Target model: {self.model_info['name']}")
         print(f"  Available ports: Ethernet1/1 - Ethernet1/{self.total_ports}")
-        if self.ha_port:
-            print(f"  HA port (skipped): {self.ha_port}")
+        if self.ha_ports:
+            label = "HA port" if len(self.ha_ports) == 1 else "HA ports"
+            print(f"  {label} (skipped): {', '.join(self.ha_ports)}")
         print(f"  Port assignment order: Starting from Ethernet1/{self.total_ports} down to Ethernet1/1")
     
     def _validate_custom_ha_port(self, ha_port: str) -> None:
@@ -410,6 +422,35 @@ class InterfaceConverter:
         if port_num == 1:
             print("\nWARNING: Using Ethernet1/1 as HA port. This is typically the first data port.")
             print("         Ensure this doesn't conflict with your network design.\n")
+
+    def _parse_custom_ha_ports(self, spec: Any) -> List[str]:
+        """
+        Parse and validate one or more custom HA ports.
+
+        Accepts either a list/tuple of port names or a single string with ports
+        separated by commas, semicolons, or whitespace
+        (e.g. 'Ethernet1/2, Ethernet1/3'). Each port is validated against the
+        target model via _validate_custom_ha_port(); invalid ports raise
+        ValueError. Duplicates are removed while preserving order.
+
+        Returns:
+            Ordered list of validated HA port hardware names.
+        """
+        if isinstance(spec, (list, tuple, set)):
+            raw_ports = [str(p) for p in spec]
+        else:
+            # Split on commas, semicolons, or whitespace
+            raw_ports = re.split(r'[,;\s]+', str(spec).strip())
+
+        ha_ports: List[str] = []
+        for raw in raw_ports:
+            port = raw.strip()
+            if not port:
+                continue
+            self._validate_custom_ha_port(port)
+            if port not in ha_ports:
+                ha_ports.append(port)
+        return ha_ports
 
     def set_port_mapping(self, mapping: Dict[str, str]) -> None:
         """

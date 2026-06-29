@@ -978,7 +978,7 @@ class App(tk.Tk):
                 self.conv_output_var.set("ftd_config")
             self.conv_ha_entry.configure(state=tk.NORMAL)
             self.conv_ha_label.configure(text="HA Port (optional):", foreground=_FG)
-            self.conv_ha_hint.configure(text="e.g. Ethernet1/5  (leave blank = no HA port)")
+            self.conv_ha_hint.configure(text="e.g. Ethernet1/5 or Ethernet1/2,Ethernet1/3  (blank = no HA port)")
 
             self.imp_host_label.configure(text="FTD Host / IP:")
             if self.imp_base_var.get().strip() in DEFAULT_OUTPUT_BASES:
@@ -1121,9 +1121,9 @@ class App(tk.Tk):
         self.conv_ha_label = ttk.Label(opts, text="HA Port (optional):")
         self.conv_ha_label.grid(row=4, column=0, sticky=tk.W, pady=3)
         self.conv_ha_var = tk.StringVar()
-        self.conv_ha_entry = ttk.Entry(opts, textvariable=self.conv_ha_var, width=20)
+        self.conv_ha_entry = ttk.Entry(opts, textvariable=self.conv_ha_var, width=28)
         self.conv_ha_entry.grid(row=4, column=1, sticky=tk.W, padx=4)
-        self.conv_ha_hint = ttk.Label(opts, text="e.g. Ethernet1/5  (leave blank = no HA port)")
+        self.conv_ha_hint = ttk.Label(opts, text="e.g. Ethernet1/5 or Ethernet1/2,Ethernet1/3  (blank = no HA port)")
         self.conv_ha_hint.grid(row=5, column=1, sticky=tk.W)
 
         # Interface link-aggregation scale-up (Expand/Promote Port-Channels and

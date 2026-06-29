@@ -316,7 +316,10 @@ Supported FTD Models:
                    type=str,
                    default=None,
                    metavar='ETHERNET_PORT',
-                   help="Custom HA port (e.g., 'Ethernet1/5'). Overrides model default. "
+                   help="Custom HA port(s). Overrides model default. Give one port "
+                        "(e.g., 'Ethernet1/5') or several for dual-HA links as a "
+                        "comma-separated list (e.g., 'Ethernet1/2,Ethernet1/3'). "
+                        "All listed ports are reserved and excluded from conversion. "
                         "Use 'none' to disable HA port reservation entirely. "
                         "Format: 'Ethernet1/X' where X is a valid port number for your model.")
 
