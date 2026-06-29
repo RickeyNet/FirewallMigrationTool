@@ -130,6 +130,25 @@ def parse_expansion_specs(specs: Optional[List[str]]) -> dict:
     return expansion
 
 
+def parse_keyvalue_specs(specs: Optional[List[str]], flag: str) -> dict:
+    """Parse repeatable ``KEY=VALUE`` values (e.g. --map-port,
+    --promote-portchannel-vlan) into a dict. Invalid entries are skipped.
+    """
+    parsed: dict = {}
+    for raw in specs or []:
+        if "=" not in raw:
+            print(f"[WARNING] Ignoring {flag} '{raw}': expected KEY=VALUE format")
+            continue
+        key, _, value = raw.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if not key or not value:
+            print(f"[WARNING] Ignoring {flag} '{raw}': empty key or value")
+            continue
+        parsed[key] = value
+    return parsed
+
+
 def build_conversion_metadata(args: argparse.Namespace) -> dict:
     """Build metadata dictionary for downstream tools."""
     return {
@@ -197,6 +216,18 @@ Examples:
     # Interface scale-up flags (mirror FortiGateToFTDTool). Port-channel maps
     # to PAN-OS aggregate-ethernet; bridge-group maps to a Layer-2 VLAN + SVI.
     # ------------------------------------------------------------------
+    parser.add_argument(
+        "--map-port", action="append", default=[], metavar="IFACE=PORT",
+        help="Straight port assignment: pin a FortiGate interface to a specific "
+             "PAN-OS port (no aggregation). IFACE is the FortiGate name/alias, "
+             "PORT is the PAN-OS port (e.g. 'wan1=ethernet1/9'). Repeatable.",
+    )
+    parser.add_argument(
+        "--promote-portchannel-vlan", action="append", default=[], metavar="IFACE=TAG",
+        help="When promoting IFACE to an aggregate-ethernet, place its IP on a "
+             "subinterface (aeN.TAG) using this L3 VLAN tag (e.g. 'wan1=100') "
+             "instead of on the ae directly. Repeatable.",
+    )
     parser.add_argument(
         "--expand-portchannel", action="append", default=[], metavar="AGG=SPEC",
         help="Grow a FortiGate aggregate to MORE aggregate-ethernet members. "
@@ -316,6 +347,13 @@ Examples:
     bg_promotion = parse_expansion_specs(getattr(args, "promote_bridgegroup", []))
     if bg_promotion:
         interface_converter.set_bridgegroup_promotion(bg_promotion)
+    port_map = parse_keyvalue_specs(getattr(args, "map_port", []), "--map-port")
+    if port_map:
+        interface_converter.set_port_mapping(port_map)
+    pc_vlans = parse_keyvalue_specs(
+        getattr(args, "promote_portchannel_vlan", []), "--promote-portchannel-vlan")
+    if pc_vlans:
+        interface_converter.set_promotion_subinterface_vlans(pc_vlans)
 
     zones = interface_converter.convert()
     pa_interfaces = interface_converter.get_interfaces()

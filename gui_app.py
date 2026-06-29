@@ -232,15 +232,17 @@ DEFAULT_TARGET_PLATFORM = PLATFORM_LIST[0]
 #   Promote  + Port-Channel  -> --promote-portchannel
 #   Expand   + Bridge Group  -> --expand-bridgegroup
 #   Promote  + Bridge Group  -> --promote-bridgegroup
+AGG_ACTION_MAP = "Map / Assign"
 AGG_ACTION_EXPAND = "Expand"
 AGG_ACTION_PROMOTE = "Promote"
-AGG_ACTIONS = [AGG_ACTION_EXPAND, AGG_ACTION_PROMOTE]
+AGG_ACTIONS = [AGG_ACTION_MAP, AGG_ACTION_EXPAND, AGG_ACTION_PROMOTE]
 
 AGG_TARGET_PORTCHANNEL = "Port-Channel"
 AGG_TARGET_BRIDGEGROUP = "Bridge Group"
 AGG_TARGETS = [AGG_TARGET_PORTCHANNEL, AGG_TARGET_BRIDGEGROUP]
 
-# (action, target) -> converter flag
+# (action, target) -> converter flag. Map/Assign ignores the target (it's a
+# straight 1:1 port assignment, no aggregation).
 AGG_FLAG_MAP = {
     (AGG_ACTION_EXPAND, AGG_TARGET_PORTCHANNEL): "--expand-portchannel",
     (AGG_ACTION_PROMOTE, AGG_TARGET_PORTCHANNEL): "--promote-portchannel",
@@ -1273,22 +1275,27 @@ class App(tk.Tk):
         self._agg_hint_label = ttk.Label(
             frame,
             text=(
-                "Optional: scale up link aggregation on the FTD side. Add a row "
-                "per interface to grow into a Port-Channel or Bridge Group.\n"
+                "Optional: control how each FortiGate interface lands on the "
+                "target. Add a row per interface.\n"
+                "• Map / Assign = pin the interface to one specific port (no "
+                "aggregation).\n"
+                "• Expand = grow an existing Port-Channel/Bridge Group.  "
+                "• Promote = turn a plain interface into a new one.\n"
                 "Members = a target count (e.g. 4) or an explicit port list "
-                "(e.g. Ethernet1/5,Ethernet1/6) - click \"Pick…\" to choose ports "
-                "instead of typing. Leave empty to migrate 1:1."
+                "(e.g. Ethernet1/5,Ethernet1/6) - click \"Pick…\" to choose ports.  "
+                "L3 VLAN = tag for the subinterface that carries the IP when "
+                "promoting to a Port-Channel.  Leave a row empty to migrate 1:1."
             ),
             justify=tk.LEFT,
         )
-        self._agg_hint_label.grid(row=0, column=0, columnspan=5, sticky=tk.W, pady=(0, 8))
+        self._agg_hint_label.grid(row=0, column=0, columnspan=6, sticky=tk.W, pady=(0, 8))
 
         # Column header
         header = ttk.Frame(frame)
-        header.grid(row=1, column=0, columnspan=5, sticky=tk.EW)
+        header.grid(row=1, column=0, columnspan=6, sticky=tk.EW)
         for col, (text, width) in enumerate((
             ("Interface", 22), ("Action", 12), ("Target", 16),
-            ("Members (count or ports)", 28), ("", 4),
+            ("Members (count or ports)", 28), ("L3 VLAN", 8), ("", 4),
         )):
             ttk.Label(header, text=text, width=width, anchor=tk.W).grid(
                 row=0, column=col, sticky=tk.W, padx=2,
@@ -1296,7 +1303,7 @@ class App(tk.Tk):
 
         # Container that holds the dynamic rows
         self._agg_rows_container = ttk.Frame(frame)
-        self._agg_rows_container.grid(row=2, column=0, columnspan=5, sticky=tk.EW)
+        self._agg_rows_container.grid(row=2, column=0, columnspan=6, sticky=tk.EW)
 
         # Empty-state hint, shown only when there are no rows
         self._agg_empty_label = ttk.Label(
@@ -1304,11 +1311,11 @@ class App(tk.Tk):
             text="No interfaces queued - click \"+ Add Interface\" to scale one up.",
             foreground=_FG_DIM,
         )
-        self._agg_empty_label.grid(row=3, column=0, columnspan=5, sticky=tk.W, pady=(2, 6))
+        self._agg_empty_label.grid(row=3, column=0, columnspan=6, sticky=tk.W, pady=(2, 6))
 
         # Action buttons
         btns = ttk.Frame(frame)
-        btns.grid(row=4, column=0, columnspan=5, sticky=tk.W, pady=(4, 0))
+        btns.grid(row=4, column=0, columnspan=6, sticky=tk.W, pady=(4, 0))
         ttk.Button(btns, text="+ Add Interface", command=lambda: self._agg_add_row()).pack(
             side=tk.LEFT,
         )
@@ -1322,6 +1329,7 @@ class App(tk.Tk):
 
     def _agg_add_row(
         self, iface: str = "", action: str = "", target: str = "", members: str = "",
+        vlan: str = "",
     ) -> None:
         """Append one interface row to the builder."""
         container = self._agg_rows_container
@@ -1354,18 +1362,23 @@ class App(tk.Tk):
         members_entry = ttk.Entry(members_cell, textvariable=members_var, width=20)
         members_entry.pack(side=tk.LEFT)
 
+        vlan_var = tk.StringVar(value=vlan)
+        vlan_entry = ttk.Entry(rf, textvariable=vlan_var, width=8)
+        vlan_entry.grid(row=0, column=4, sticky=tk.W, padx=2)
+
         row: Dict[str, Any] = {
             "frame": rf,
             "iface_var": iface_var,
             "action_var": action_var,
             "target_var": target_var,
             "members_var": members_var,
+            "vlan_var": vlan_var,
         }
 
         # "Pick..." opens a checkbox list of the target model's ports so the
         # user can choose explicit member ports without typing them. It just
         # fills members_var with a comma-separated port list; typing a count
-        # still works.
+        # still works. For Map / Assign only one port may be chosen.
         ttk.Button(
             members_cell, text="Pick…", width=6,
             command=lambda: self._agg_pick_ports(row),
@@ -1374,7 +1387,7 @@ class App(tk.Tk):
         remove_btn = ttk.Button(
             rf, text="✕", width=3, command=lambda: self._agg_remove_row(row),
         )
-        remove_btn.grid(row=0, column=4, sticky=tk.W, padx=2)
+        remove_btn.grid(row=0, column=5, sticky=tk.W, padx=2)
 
         # Auto-detect action/target from the chosen interface's category.
         iface_combo.bind(
@@ -1420,7 +1433,57 @@ class App(tk.Tk):
             row["action_var"].set(AGG_ACTION_EXPAND)
             row["target_var"].set(AGG_TARGET_BRIDGEGROUP)
         elif category == "physical":
-            row["action_var"].set(AGG_ACTION_PROMOTE)
+            # Keep the user's choice if they already picked Map / Assign;
+            # otherwise default a plain interface to Promote.
+            if row["action_var"].get() != AGG_ACTION_MAP:
+                row["action_var"].set(AGG_ACTION_PROMOTE)
+
+    def _agg_row_to_argv(self, row: Dict[str, Any]) -> List[str]:
+        """Translate one builder row into converter CLI args.
+
+        Resolves the flag from the interface's KNOWN category so an existing
+        aggregate/switch is always Expanded (never misrouted to Promote, which
+        the converter would silently ignore). Map / Assign emits --map-port;
+        a Promote-to-Port-Channel with an L3 VLAN also emits
+        --promote-portchannel-vlan so the IP lands on a subinterface.
+        """
+        name = row["iface_var"].get().strip()
+        members = row["members_var"].get().strip()
+        if not name:
+            return []
+
+        action = row["action_var"].get()
+        category = self._agg_iface_index.get(name.lower())
+
+        # Straight 1:1 assignment - one port, no aggregation.
+        if action == AGG_ACTION_MAP and category not in ("aggregate", "switch"):
+            port = next((p.strip() for p in members.split(",") if p.strip()), "")
+            if not port:
+                return []
+            return ["--map-port", f"{name}={port}"]
+
+        if not members:
+            return []
+
+        # Force Expand for things that are already aggregated; otherwise honor
+        # the (action, target) pair the user chose.
+        if category == "aggregate":
+            flag = "--expand-portchannel"
+        elif category == "switch":
+            flag = "--expand-bridgegroup"
+        else:
+            flag = AGG_FLAG_MAP.get((action, row["target_var"].get()))
+        if not flag:
+            return []
+
+        argv = [flag, f"{name}={members}"]
+
+        # Promote -> Port-Channel with an L3 VLAN: carry the IP on a subinterface.
+        if (flag == "--promote-portchannel"):
+            vlan = row.get("vlan_var").get().strip() if row.get("vlan_var") else ""
+            if vlan:
+                argv.extend(["--promote-portchannel-vlan", f"{name}={vlan}"])
+        return argv
 
     def _agg_model_ports(self, mark_ha_reserved: bool = True) -> List[Dict[str, Any]]:
         """Return the data ports of the currently selected target model.
@@ -1508,7 +1571,10 @@ class App(tk.Tk):
 
     def _agg_pick_ports(self, row: Dict[str, Any]) -> None:
         """Open a checkbox picker of the target model's ports and write the
-        chosen ones back into the row's Members field as a comma list."""
+        chosen ones back into the row's Members field as a comma list.
+
+        In Map / Assign mode only ONE port can be chosen (a straight 1:1
+        assignment), so ticking a port clears the others."""
         ports = self._agg_model_ports()
         if not ports:
             self._show_message(
@@ -1519,18 +1585,21 @@ class App(tk.Tk):
             )
             return
 
+        single = row["action_var"].get() == AGG_ACTION_MAP
         current = {
             p.strip() for p in row["members_var"].get().split(",") if p.strip()
         }
 
         win = tk.Toplevel(self)
-        win.title("Select member ports")
+        win.title("Select port" if single else "Select member ports")
         win.transient(self)
         win.configure(bg=_BG)
 
         ttk.Label(
             win,
-            text=("Tick the ports to use as members. Port-Channel (LACP) "
+            text=("Tick the one port to assign this interface to."
+                  if single else
+                  "Tick the ports to use as members. Port-Channel (LACP) "
                   "members must all be the same speed."),
             wraplength=320, justify=tk.LEFT,
         ).pack(anchor=tk.W, padx=10, pady=(10, 4))
@@ -1539,20 +1608,35 @@ class App(tk.Tk):
         container.pack(fill=tk.BOTH, expand=True, padx=10, pady=4)
 
         vars_by_port: Dict[str, tk.BooleanVar] = {}
+
+        def make_single_guard(picked: str):
+            # Radio-like behavior: ticking one port unticks every other.
+            def guard() -> None:
+                if vars_by_port[picked].get():
+                    for name, var in vars_by_port.items():
+                        if name != picked:
+                            var.set(False)
+            return guard
+
         for port in ports:
             var = tk.BooleanVar(value=(port["name"] in current))
-            ttk.Checkbutton(
+            cb = ttk.Checkbutton(
                 inner, text=port["label"], variable=var,
                 state=(tk.DISABLED if port["reserved"] else tk.NORMAL),
-            ).pack(anchor=tk.W, pady=1)
+            )
+            cb.pack(anchor=tk.W, pady=1)
             if not port["reserved"]:
                 vars_by_port[port["name"]] = var
+                if single:
+                    cb.configure(command=make_single_guard(port["name"]))
 
         def apply_selection() -> None:
             chosen = [
                 p["name"] for p in ports
                 if p["name"] in vars_by_port and vars_by_port[p["name"]].get()
             ]
+            if single:
+                chosen = chosen[:1]
             row["members_var"].set(",".join(chosen))
             win.destroy()
 
@@ -2999,28 +3083,47 @@ class App(tk.Tk):
         put("\u21bb Refresh from config", "bold")
         put(" after changing the input file to reload it.\n", "bullet")
         put("\u2022  Action and Target: ", "bullet")
-        put("Auto-detected from the chosen interface - ", "bullet")
+        put("Auto-detected from the chosen interface, but you can override it - ", "bullet")
+        put("Map / Assign", "italic")
+        put(" to pin a plain interface to one specific port (no aggregation), ", "bullet")
         put("Expand", "italic")
-        put(" for an interface that is already an aggregate, ", "bullet")
+        put(" for an interface that is already an aggregate, or ", "bullet")
         put("Promote", "italic")
-        put(" for a plain physical port; ", "bullet")
+        put(" to turn a plain physical port into a new ", "bullet")
         put("Port-Channel", "italic")
-        put(" (Layer 2, no IP) or ", "bullet")
+        put(" or ", "bullet")
         put("Bridge Group", "italic")
-        put(" (BVI, keeps the IP). You can override either dropdown.\n", "bullet")
+        put(". An existing aggregate or virtual switch is always Expanded "
+            "(never accidentally Promoted), so an \"expand to N\" is honored.\n", "bullet")
         put("\u2022  Members: ", "bullet")
         put("Either a target total member count (e.g. ", "bullet")
         put("4", "code")
         put(") or an explicit comma-separated list of FTD ports to add (e.g. ", "bullet")
         put("Ethernet1/5,Ethernet1/6", "code")
-        put("). Leave a row's Members empty to skip it.\n\n", "bullet")
-        put("The four resulting combinations:\n\n", "")
+        put("); for ", "bullet")
+        put("Map / Assign", "italic")
+        put(" it is the single target port. Click ", "bullet")
+        put("Pick\u2026", "bold")
+        put(" to choose ports. Leave a row's Members empty to skip it.\n", "bullet")
+        put("\u2022  L3 VLAN: ", "bullet")
+        put("Only for ", "bullet")
+        put("Promote + Port-Channel", "italic")
+        put(". A port-channel can't hold an IP directly, so the promoted "
+            "interface's IP is placed on a subinterface (", "bullet")
+        put("Port-channelN.tag", "code")
+        put(") using this VLAN tag. Leave it blank to apply the IP directly to "
+            "the routed port-channel instead.\n\n", "bullet")
+        put("The resulting combinations:\n\n", "")
+        put("\u2022  Map / Assign: ", "bullet")
+        put("send a plain interface straight to one chosen port, converting "
+            "normally (no aggregation).\n", "bullet")
         put("\u2022  Expand + Port-Channel: ", "bullet")
         put("grow an existing FortiGate port channel with more 10G member "
             "links.\n", "bullet")
         put("\u2022  Promote + Port-Channel: ", "bullet")
-        put("convert a plain physical interface into a new EtherChannel (the IP "
-            "moves to VLAN subinterfaces on the channel).\n", "bullet")
+        put("convert a plain physical interface into a new EtherChannel; its IP "
+            "moves to a subinterface (set the L3 VLAN tag) or, if no tag is "
+            "given, onto the routed channel.\n", "bullet")
         put("\u2022  Expand + Bridge Group: ", "bullet")
         put("grow a FortiGate virtual switch into a larger FTD bridge group "
             "(BVI).\n", "bullet")
@@ -3865,23 +3968,17 @@ class App(tk.Tk):
                     if module_id and module_id != "none":
                         argv.extend(["--network-module", module_id])
 
-            # Interface link-aggregation scale-up: FortiGate -> FTD and
-            # FortiGate -> Palo Alto both accept the same flags (port-channel
-            # maps to aggregate-ethernet, bridge group to a Layer-2 VLAN on PA).
-            # Each builder row -> one converter flag via AGG_FLAG_MAP.
+            # Interface builder: FortiGate -> FTD and FortiGate -> Palo Alto
+            # both accept the same flags (port-channel maps to aggregate-ethernet,
+            # bridge group to a Layer-2 VLAN on PA). Each row -> one converter
+            # flag. The flag is resolved from the interface's KNOWN category
+            # (not just the Action dropdown) so an existing aggregate/switch is
+            # always Expanded, never accidentally routed to Promote.
             if self._current_source == "FortiGate" and (
                 is_pa or self._current_platform == "Cisco FTD"
             ):
                 for row in self._agg_rows:
-                    name = row["iface_var"].get().strip()
-                    members = row["members_var"].get().strip()
-                    if not name or not members:
-                        continue
-                    flag = AGG_FLAG_MAP.get(
-                        (row["action_var"].get(), row["target_var"].get())
-                    )
-                    if flag:
-                        argv.extend([flag, f"{name}={members}"])
+                    argv.extend(self._agg_row_to_argv(row))
 
             if self.conv_pretty_var.get():
                 argv.append("--pretty")

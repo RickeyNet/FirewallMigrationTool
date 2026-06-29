@@ -368,6 +368,14 @@ class InterfaceConverter:
         # Maps a lowercased physical-interface identifier -> int (total member
         # count, incl. the original port) or list of extra FTD ports to add.
         self.promote_to_bridgegroup = {}
+
+        # Promote-to-port-channel L3 VLAN tags (set via
+        # set_promotion_subinterface_vlans()). When a routed physical interface
+        # is promoted to a port-channel, its IP cannot live on the channel in
+        # the user's design - it is placed on a subinterface (Port-channelN.tag)
+        # using the VLAN tag specified here. Maps a lowercased physical-interface
+        # identifier -> int VLAN tag.
+        self.promotion_pc_vlans = {}
     
     def set_target_model(self, model: str) -> None:
         """
@@ -564,32 +572,101 @@ class InterfaceConverter:
                 ha_ports.append(port)
         return ha_ports
 
+    def _resolve_fg_port(self, key: str) -> Optional[str]:
+        """Resolve a user-supplied interface identifier (FortiGate port name OR
+        alias) to the underlying system_interface key (the port name).
+
+        Returns the port name if found, else None. Lets explicit port mappings
+        be given by the human-facing alias the GUI displays (e.g. 'wan') and
+        still land on the right port (e.g. 'port5')."""
+        if not key:
+            return None
+        target = str(key).strip().lower()
+        for intf_dict in self.fg_config.get('system_interface', []) or []:
+            if not isinstance(intf_dict, dict) or not intf_dict:
+                continue
+            name = next(iter(intf_dict))
+            props = intf_dict[name]
+            if str(name).strip().lower() == target:
+                return str(name)
+            if isinstance(props, dict):
+                alias = str(props.get('alias', '')).strip().lower()
+                if alias and alias == target:
+                    return str(name)
+        return None
+
     def set_port_mapping(self, mapping: Dict[str, str]) -> None:
         """
-        Set explicit port mapping for specific interfaces.
-        
-        Use this to override automatic assignment for specific interfaces.
-        
+        Set explicit (straight) port assignment for specific interfaces.
+
+        Use this to pin a FortiGate interface to a specific FTD port instead of
+        letting it be auto-assigned. The interface still converts as a normal
+        routed physical interface - no aggregation. Keys may be the FortiGate
+        port name OR its alias (the GUI shows the alias).
+
         Args:
-            mapping: Dict of FortiGate port name -> FTD hardware name
+            mapping: Dict of FortiGate port name/alias -> FTD hardware name
         """
-        for fg_port, ftd_port in mapping.items():
-            # Validate the FTD port is within range for this model
+        for key, ftd_port in mapping.items():
+            ftd_port = str(ftd_port).strip()
+
+            # Validate the FTD port is a real port on this model.
+            if self._all_ports and ftd_port not in self._all_ports:
+                print(f"  [WARNING] Map {key} -> {ftd_port}: not a valid port for "
+                      f"{self.target_model} - ignored")
+                continue
+            if ftd_port in self.skip_ftd_ports:
+                print(f"  [WARNING] Map {key} -> {ftd_port}: reserved (HA/skip) - ignored")
+                continue
+
+            # Resolve alias -> port name so _get_ftd_hardware_name() finds it.
+            fg_port = self._resolve_fg_port(key) or str(key).strip()
+
+            # Refuse to double-book a port already mapped to a different interface.
+            existing = self.port_mapping.get(fg_port)
+            if existing and existing != ftd_port:
+                print(f"  [WARNING] Map {key}: already mapped to {existing}; "
+                      f"keeping that and ignoring {ftd_port}")
+                continue
+            for other_fg, other_ftd in self.port_mapping.items():
+                if other_ftd == ftd_port and other_fg != fg_port:
+                    print(f"  [WARNING] Map {key} -> {ftd_port}: port already "
+                          f"assigned to {other_fg} - ignored")
+                    break
+            else:
+                self.port_mapping[fg_port] = ftd_port
+                self.assigned_ftd_ports.add(ftd_port)
+                if ftd_port in self.available_ftd_ports:
+                    self.available_ftd_ports.remove(ftd_port)
+                print(f"  Mapped (straight assignment): {fg_port} -> {ftd_port}")
+
+    def set_promotion_subinterface_vlans(self, vlans: Dict[str, Any]) -> None:
+        """Set the L3 VLAN tag used when a routed interface promoted to a
+        port-channel needs its IP placed on a subinterface (Port-channelN.tag).
+
+        Maps a FortiGate physical-interface name/alias (case-insensitive) to an
+        int VLAN tag. No-op for interfaces with no IP.
+        """
+        normalized: Dict[str, int] = {}
+        for key, tag in (vlans or {}).items():
+            if key is None:
+                continue
             try:
-                port_num = int(ftd_port.split('/')[-1])
-                if port_num > self.total_ports:
-                    print(f"  Warning: {ftd_port} exceeds available ports for {self.target_model} (max: Ethernet1/{self.total_ports})")
-                    continue
-            except (ValueError, AttributeError):
-                # Non-numeric/unparseable port suffix - skip range validation
-                pass
-            
-            self.port_mapping[fg_port] = ftd_port
-            self.assigned_ftd_ports.add(ftd_port)
-            
-            # Remove from available list if present
-            if ftd_port in self.available_ftd_ports:
-                self.available_ftd_ports.remove(ftd_port)
+                normalized[str(key).strip().lower()] = int(tag)
+            except (TypeError, ValueError):
+                print(f"  [WARNING] Ignoring promote VLAN for '{key}': "
+                      f"'{tag}' is not a valid VLAN id")
+        self.promotion_pc_vlans = normalized
+
+    def _get_promotion_pc_vlan(self, fg_name: str, alias: str) -> Optional[int]:
+        """Look up the promote-to-port-channel L3 VLAN tag for an interface by
+        its FortiGate name or alias (case-insensitive), or None."""
+        if not self.promotion_pc_vlans:
+            return None
+        for key in (fg_name, alias):
+            if key and str(key).strip().lower() in self.promotion_pc_vlans:
+                return self.promotion_pc_vlans[str(key).strip().lower()]
+        return None
     
     def set_skip_ports(self, ports: Set[str]) -> None:
         """
@@ -1776,16 +1853,6 @@ class InterfaceConverter:
             "type": "etherchannelinterface"
         }
 
-        # Port-channel interfaces carry NO IP. In this design the L3 addresses
-        # live on the VLAN subinterfaces created on top of the port-channel, not
-        # on the channel itself. If the source interface had a direct IP, note
-        # that it is not applied so it can be placed on a subinterface instead.
-        src_ipv4 = self._build_ipv4_config(properties.get('ip'))
-        if src_ipv4:
-            dropped_ip = src_ipv4['ipAddress']['ipAddress']
-            print(f"      Note: {fg_name} had IP {dropped_ip}; port-channel left "
-                  f"with no IP (configure it on a subinterface)")
-
         # Add MTU if overridden (cap at 9000 - FTD maximum)
         if properties.get('mtu-override') == 'enable':
             mtu = properties.get('mtu', 1500)
@@ -1798,6 +1865,70 @@ class InterfaceConverter:
 
         member_str = ', '.join([m['hardwareName'] for m in ftd_members])
         print(f"    Promoted: {fg_name} -> {ftd_name} (Port-channel{etherchannel_id}) members: [{member_str}]")
+
+        # Preserve the source interface's IP. A port-channel can't keep the IP
+        # on the channel in this design, so:
+        #   - if an L3 VLAN tag was given for this interface, place the IP on a
+        #     subinterface (Port-channelN.tag) - the configured behavior;
+        #   - otherwise apply it directly to the routed port-channel (lossless
+        #     fallback so the address is never silently dropped).
+        src_ipv4 = self._build_ipv4_config(properties.get('ip'))
+        if src_ipv4:
+            vlan = self._get_promotion_pc_vlan(fg_name, alias)
+            if vlan is not None:
+                self._add_promotion_subinterface(
+                    fg_name, alias, properties, ftd_name,
+                    f"Port-channel{etherchannel_id}", vlan, src_ipv4,
+                    parent_class='etherchannel',
+                )
+            else:
+                ftd_interface["ipv4"] = src_ipv4
+                print(f"      Note: {fg_name} IP {src_ipv4['ipAddress']['ipAddress']} "
+                      f"applied directly to Port-channel{etherchannel_id} "
+                      f"(no L3 VLAN tag given for a subinterface)")
+
+    def _add_promotion_subinterface(self, fg_name: str, alias: str,
+                                    properties: Dict, parent_ftd_name: str,
+                                    parent_hardware: str, vlan_id: int,
+                                    ipv4: Dict, parent_class: str) -> None:
+        """Create an FTD subinterface that carries the IP of an interface that
+        was promoted to a port-channel. Routes/policies that referenced the
+        source interface are re-pointed to this subinterface (the L3 endpoint)."""
+        base_name = sanitize_interface_name(f"{alias}_vlan{vlan_id}")
+        ftd_name = base_name
+        counter = 2
+        while ftd_name in self.used_subinterface_names:
+            ftd_name = f"{base_name}_{counter}"
+            counter += 1
+        self.used_subinterface_names.add(ftd_name)
+
+        # Re-point the source interface to the subinterface so its IP-bearing
+        # endpoint is what routes/policies resolve to.
+        self.interface_name_mapping[fg_name] = ftd_name
+        if alias:
+            self.interface_name_mapping[alias] = ftd_name
+
+        subif = {
+            "name": ftd_name,
+            "hardwareName": f"{parent_hardware}.{vlan_id}",
+            "description": properties.get('description', alias),
+            "enabled": properties.get('status', 'up') != 'down',
+            "mode": "ROUTED",
+            "subIntfId": int(vlan_id),
+            "vlanId": int(vlan_id),
+            "ipv4": ipv4,
+            "type": "subinterface",
+            "_vlanParentClass": parent_class,
+        }
+        if properties.get('mtu-override') == 'enable':
+            mtu = properties.get('mtu', 1500)
+            subif["mtu"] = min(mtu, 9000)
+
+        self.subinterfaces.append(subif)
+        self.stats['subinterfaces_created'] += 1
+        print(f"      L3 on subinterface: {fg_name} IP "
+              f"{ipv4['ipAddress']['ipAddress']} -> {ftd_name} "
+              f"({parent_hardware}.{vlan_id})")
 
     def _promote_physical_to_bridgegroup(self, fg_name: str, properties: Dict, spec: Any) -> None:
         """

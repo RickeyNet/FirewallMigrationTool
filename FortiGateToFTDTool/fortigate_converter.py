@@ -156,6 +156,28 @@ def preprocess_yaml_file(input_file: str) -> str:
     print("  [OK] Pre-processing complete")
     return cleaned_yaml
 
+def parse_keyvalue_specs(specs: Optional[List[str]], flag: str) -> dict:
+    """Parse simple 'KEY=VALUE' CLI values into a dict (e.g. --map-port,
+    --promote-portchannel-vlan). Invalid entries are skipped with a warning.
+
+    Returns a dict of KEY (interface name/alias) -> VALUE string. Later
+    duplicates overwrite earlier ones.
+    """
+    parsed: dict = {}
+    for raw in specs or []:
+        if '=' not in raw:
+            print(f"[WARNING] Ignoring {flag} '{raw}': expected KEY=VALUE format")
+            continue
+        key, _, value = raw.partition('=')
+        key = key.strip()
+        value = value.strip()
+        if not key or not value:
+            print(f"[WARNING] Ignoring {flag} '{raw}': empty key or value")
+            continue
+        parsed[key] = value
+    return parsed
+
+
 def parse_expansion_specs(specs: Optional[List[str]]) -> dict:
     """
     Parse --expand-portchannel CLI values into a dict for the InterfaceConverter.
@@ -334,6 +356,25 @@ Supported FTD Models:
                         "Choices: " + ", ".join(get_network_modules()) +
                         ". Default: none (fixed ports only).")
 
+    parser.add_argument('--map-port',
+                   action='append',
+                   default=[],
+                   metavar='IFACE=PORT',
+                   help="Straight port assignment: pin a FortiGate interface to a "
+                        "specific FTD port (no aggregation). IFACE is the FortiGate "
+                        "interface name/alias, PORT is the FTD hardware port "
+                        "(e.g. 'wan1=Ethernet1/9'). The interface converts as a normal "
+                        "routed physical interface. Repeat the flag for multiple ports.")
+
+    parser.add_argument('--promote-portchannel-vlan',
+                   action='append',
+                   default=[],
+                   metavar='IFACE=TAG',
+                   help="When promoting IFACE to a port-channel, place its IP on a "
+                        "subinterface (Port-channelN.TAG) using this L3 VLAN tag "
+                        "(e.g. 'wan1=100'). Without it the IP is applied directly to the "
+                        "routed port-channel. Repeat the flag for multiple interfaces.")
+
     parser.add_argument('--expand-portchannel',
                    action='append',
                    default=[],
@@ -505,6 +546,19 @@ Supported FTD Models:
         custom_ha_port=ha_port_arg,
         network_module=getattr(args, 'network_module', 'none'),
     )
+
+    # Apply straight port assignments (pin an interface to a specific FTD port)
+    map_specs = parse_keyvalue_specs(getattr(args, 'map_port', []), '--map-port')
+    if map_specs:
+        interface_converter.set_port_mapping(map_specs)
+        print(f"  Straight port assignment configured for: {', '.join(map_specs.keys())}")
+
+    # Apply promote-to-port-channel L3 VLAN tags (IP -> subinterface)
+    pc_vlan_specs = parse_keyvalue_specs(
+        getattr(args, 'promote_portchannel_vlan', []), '--promote-portchannel-vlan')
+    if pc_vlan_specs:
+        interface_converter.set_promotion_subinterface_vlans(pc_vlan_specs)
+        print(f"  Promote-to-port-channel L3 VLAN configured for: {', '.join(pc_vlan_specs.keys())}")
 
     # Apply EtherChannel expansion (scale up 10G member links) if requested
     expansion_specs = parse_expansion_specs(getattr(args, 'expand_portchannel', []))

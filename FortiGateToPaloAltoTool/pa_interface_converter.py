@@ -192,6 +192,13 @@ class PAInterfaceConverter:
         self.bridgegroup_expansion: Dict[str, Any] = {}
         # Promote a plain physical port to a NEW Layer-2 segment (VLAN + SVI).
         self.promote_to_bridgegroup: Dict[str, Any] = {}
+        # Straight port assignment: FortiGate name/alias -> PAN-OS port number.
+        # Pins an interface to a specific port (no aggregation).
+        self.port_map: Dict[str, int] = {}
+        # Promote-to-aggregate L3 VLAN tags: FortiGate name/alias -> int tag.
+        # When a routed interface is promoted to an aggregate-ethernet, its IP is
+        # placed on a subinterface (aeN.tag) instead of directly on the ae.
+        self.promotion_pc_vlans: Dict[str, int] = {}
 
         # Statistics
         self._stats = {
@@ -443,6 +450,48 @@ class PAInterfaceConverter:
         """
         self.promote_to_bridgegroup = self._normalize_specs(promotion)
 
+    def set_port_mapping(self, mapping: Dict[str, str]) -> None:
+        """Straight port assignment: pin a FortiGate interface to a specific
+        PAN-OS port (no aggregation). Keys may be the FortiGate name OR alias;
+        values are PAN-OS ports (e.g. 'ethernet1/9'). The interface still
+        converts as a normal layer3 physical interface.
+        """
+        for key, pa_port in (mapping or {}).items():
+            if key is None:
+                continue
+            match = re.match(r"^ethernet1/(\d+)$", str(pa_port).strip().lower())
+            if not match:
+                print(f"  [WARNING] Map {key} -> {pa_port}: expected 'ethernet1/X' "
+                      f"- ignored")
+                continue
+            num = int(match.group(1))
+            if num < 1 or num > self.total_ports:
+                print(f"  [WARNING] Map {key} -> {pa_port}: out of range for "
+                      f"{self.target_model} (1-{self.total_ports}) - ignored")
+                continue
+            if num in self.port_map.values():
+                print(f"  [WARNING] Map {key} -> {pa_port}: port already assigned "
+                      f"to another interface - ignored")
+                continue
+            self.port_map[str(key).strip().lower()] = num
+
+    def set_promotion_subinterface_vlans(self, vlans: Dict[str, Any]) -> None:
+        """Set the L3 VLAN tag used when a routed interface promoted to an
+        aggregate-ethernet needs its IP placed on a subinterface (aeN.tag).
+
+        Maps a FortiGate name/alias (case-insensitive) to an int VLAN tag.
+        """
+        normalized: Dict[str, int] = {}
+        for key, tag in (vlans or {}).items():
+            if key is None:
+                continue
+            try:
+                normalized[str(key).strip().lower()] = int(tag)
+            except (TypeError, ValueError):
+                print(f"  [WARNING] Ignoring promote VLAN for '{key}': "
+                      f"'{tag}' is not a valid VLAN id")
+        self.promotion_pc_vlans = normalized
+
     @staticmethod
     def _lookup_spec(specs: Dict[str, Any], *identifiers: str) -> Any:
         """Return the first matching spec for any of the given identifiers."""
@@ -485,7 +534,8 @@ class PAInterfaceConverter:
         self, fg_name: str, properties: Dict, zone_lookup: Dict[str, str]
     ) -> None:
         """Convert a FortiGate physical interface to PAN-OS layer3 config."""
-        pa_interface = self._assign_pa_port(fg_name)
+        alias = str(properties.get("alias", "")).strip()
+        pa_interface = self._assign_pa_port(fg_name, alias)
         if not pa_interface:
             return
 
@@ -495,7 +545,6 @@ class PAInterfaceConverter:
         self.zone_mapping[fg_name] = zone_name
 
         # Also map alias if present
-        alias = str(properties.get("alias", "")).strip()
         if alias and alias != fg_name:
             self.interface_name_mapping[alias] = pa_interface
             self.zone_mapping[alias] = zone_name
@@ -830,18 +879,28 @@ class PAInterfaceConverter:
                 self._next_ae_id -= 1  # reclaim the unused ae id
                 return
 
-        zone_name = self._determine_zone(fg_name, properties, zone_lookup)
-        self.interface_name_mapping[fg_name] = ae_name
-        self.zone_mapping[fg_name] = zone_name
         alias = str(properties.get("alias", "")).strip()
+        ip_cidr = self._extract_ip_cidr(properties)
+        fg_mode = str(properties.get("mode", "")).strip().lower()
+
+        # If an L3 VLAN tag was given AND the interface has an IP, the address
+        # goes on a subinterface (aeN.tag); the ae itself stays IP-less. The
+        # source interface then resolves to the subinterface (its L3 endpoint).
+        vlan_tag = self._lookup_spec(self.promotion_pc_vlans, fg_name, alias) if ip_cidr else None
+
+        zone_name = self._determine_zone(fg_name, properties, zone_lookup)
+        l3_name = f"{ae_name}.{vlan_tag}" if vlan_tag is not None else ae_name
+        self.interface_name_mapping[fg_name] = l3_name
+        self.zone_mapping[fg_name] = zone_name
         if alias and alias != fg_name:
-            self.interface_name_mapping[alias] = ae_name
+            self.interface_name_mapping[alias] = l3_name
             self.zone_mapping[alias] = zone_name
 
-        self._add_to_zone(zone_name, ae_name)
+        self._add_to_zone(zone_name, l3_name)
         self._stats["aggregate_interfaces"] += 1
         self._stats["mapped_interfaces"] += 1
 
+        desc = properties.get("description") or properties.get("alias") or fg_name
         intf_config: Dict[str, Any] = {
             "name": ae_name,
             "type": "aggregate-ethernet",
@@ -849,18 +908,36 @@ class PAInterfaceConverter:
             "members": member_pa_names,
             "lacp_mode": "active",
             "enabled": properties.get("status", "up") != "down",
+            "comment": str(desc),
         }
-        ip_cidr = self._extract_ip_cidr(properties)
-        if ip_cidr:
-            intf_config["ip_address"] = ip_cidr
-        fg_mode = str(properties.get("mode", "")).strip().lower()
-        if fg_mode == "dhcp":
-            intf_config["dhcp"] = True
-        desc = properties.get("description") or properties.get("alias") or fg_name
-        intf_config["comment"] = str(desc)
         if properties.get("mtu-override") == "enable":
             mtu = self._parse_int(properties.get("mtu"), 1500)
             intf_config["mtu"] = min(mtu, 9216)
+
+        if vlan_tag is not None:
+            # IP lives on the subinterface, not the ae.
+            subif = {
+                "name": l3_name,
+                "type": "subinterface",
+                "parent": ae_name,
+                "tag": int(vlan_tag),
+                "enabled": properties.get("status", "up") != "down",
+                "ip_address": ip_cidr,
+                "comment": str(desc),
+            }
+            self.pa_interfaces.extend(member_configs)
+            self.pa_interfaces.append(intf_config)
+            self.pa_interfaces.append(subif)
+            self._stats["subinterfaces"] += 1
+            print(f"    Promoted: {fg_name} -> {ae_name} (NEW LACP, members: "
+                  f"[{', '.join(member_pa_names)}], IP {ip_cidr} on {l3_name}, "
+                  f"zone: {zone_name})")
+            return
+
+        if ip_cidr:
+            intf_config["ip_address"] = ip_cidr
+        if fg_mode == "dhcp":
+            intf_config["dhcp"] = True
 
         self.pa_interfaces.extend(member_configs)
         self.pa_interfaces.append(intf_config)
@@ -1117,8 +1194,22 @@ class PAInterfaceConverter:
                 return props if isinstance(props, dict) else {}
         return {}
 
-    def _assign_pa_port(self, fg_name: str) -> str:
-        """Assign the next available PAN-OS port to a FortiGate interface."""
+    def _assign_pa_port(self, fg_name: str, alias: str = "") -> str:
+        """Assign a PAN-OS port to a FortiGate interface.
+
+        Honors an explicit straight-assignment mapping first (by name or alias),
+        otherwise takes the next available port.
+        """
+        mapped = None
+        for key in (fg_name, alias):
+            if key and str(key).strip().lower() in self.port_map:
+                mapped = self.port_map[str(key).strip().lower()]
+                break
+        if mapped is not None:
+            self._used_ports.add(mapped)
+            self._held_ports.discard(mapped)
+            return f"{self.model_info['port_prefix']}{mapped}"
+
         port = self._get_next_port()
         if port:
             return f"{self.model_info['port_prefix']}{port}"
@@ -1155,6 +1246,11 @@ class PAInterfaceConverter:
         the owning spec then skips it as 'already assigned elsewhere'.
         """
         self._held_ports = set()
+        # Hold explicitly-mapped (straight-assignment) ports too, so a different
+        # standalone interface can't grab a port the user pinned to an interface.
+        for num in self.port_map.values():
+            if 1 <= num <= self.total_ports and num not in self._used_ports:
+                self._held_ports.add(num)
         spec_dicts = (
             self.aggregate_expansion, self.promote_to_aggregate,
             self.bridgegroup_expansion, self.promote_to_bridgegroup,
