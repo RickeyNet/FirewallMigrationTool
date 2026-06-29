@@ -45,7 +45,7 @@ FTD JSON OUTPUT FORMAT:
 
 from typing import Dict, List, Any, Set
 
-from common import sanitize_name
+from common import sanitize_name, is_default_fortigate_service
 
 # FTD System-Defined Services - these names are reserved and cannot be used
 # If a FortiGate service has the same name, we'll add "_Custom" suffix
@@ -228,6 +228,15 @@ class ServiceConverter:
             service_name = list(service_dict.keys())[0]
             properties = service_dict[service_name]
             sanitized_name = sanitize_name(service_name)
+
+            # Silently ignore FortiGate factory-default services (e.g. "ALL").
+            # These exist on every appliance and are not meaningful to migrate,
+            # so they are not reported as skipped/failed items. They are still
+            # registered as skipped so any group referencing them is cleaned up.
+            if is_default_fortigate_service(service_name):
+                print(f"  Ignored: {service_name} (FortiGate default service)")
+                self.skipped_services.add(sanitized_name)
+                continue
 
             # Deduplicate: if this base name was already used, append _2, _3, etc.
             if sanitized_name in used_names:

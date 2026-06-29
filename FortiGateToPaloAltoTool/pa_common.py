@@ -18,6 +18,42 @@ _PA_SANITIZE_PATTERN = re.compile(r"[^a-zA-Z0-9_.\-]")
 PA_NAME_MAX_LENGTH = 63
 
 
+# ---------------------------------------------------------------------------
+# FortiGate factory-default objects
+# ---------------------------------------------------------------------------
+# These objects ship on every FortiGate appliance regardless of customer
+# configuration. They are not meaningful to migrate to the target firewall, so
+# they are silently ignored during conversion instead of being reported as
+# skipped/failed items that need attention. Names are matched case-insensitively.
+DEFAULT_FORTIGATE_ADDRESS_OBJECTS = frozenset({
+    "all",
+    "none",
+    "fabric_device",
+    "firewall_auth_portal_address",
+    "sslvpn_tunnel_addr1",
+    "sslvpn_tunnel_ipv6_addr1",
+    "ems_all_unmanageable_clients",
+    "ems_all_unknown_clients",
+})
+
+DEFAULT_FORTIGATE_SERVICE_OBJECTS = frozenset({
+    "all",
+    "all_icmp",
+    "all_icmp6",
+    "all_icmp_type",
+})
+
+
+def is_default_fortigate_address(name: str) -> bool:
+    """Return True if *name* is a FortiGate factory-default address object."""
+    return name is not None and str(name).strip().lower() in DEFAULT_FORTIGATE_ADDRESS_OBJECTS
+
+
+def is_default_fortigate_service(name: str) -> bool:
+    """Return True if *name* is a FortiGate factory-default service object."""
+    return name is not None and str(name).strip().lower() in DEFAULT_FORTIGATE_SERVICE_OBJECTS
+
+
 def sanitize_name(name: str) -> str:
     """Return a PAN-OS-safe object name.
 

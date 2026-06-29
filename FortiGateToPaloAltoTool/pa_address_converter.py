@@ -20,7 +20,7 @@ Output JSON (later converted to XML by the importer):
 
 from typing import Any, Dict, List
 
-from pa_common import sanitize_name, netmask_to_cidr
+from pa_common import sanitize_name, netmask_to_cidr, is_default_fortigate_address
 
 
 class PAAddressConverter:
@@ -48,6 +48,13 @@ class PAAddressConverter:
         for addr_dict in addresses:
             object_name = list(addr_dict.keys())[0]
             properties = addr_dict[object_name]
+
+            # Silently ignore FortiGate factory-default objects. These exist on
+            # every appliance and are not meaningful to migrate, so they are not
+            # reported as skipped/failed items.
+            if is_default_fortigate_address(object_name):
+                print(f"  Ignored: {object_name} (FortiGate default object)")
+                continue
 
             # Skip objects named "none"
             if object_name.lower() == "none":

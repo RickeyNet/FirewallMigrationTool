@@ -31,7 +31,7 @@ FTD JSON OUTPUT FORMAT:
 """
 from typing import Dict, List, Any
 
-from common import sanitize_name
+from common import sanitize_name, is_default_fortigate_address
 
 
 class AddressConverter:
@@ -127,6 +127,13 @@ class AddressConverter:
             # ================================================================
             # Skip objects with invalid names
             
+            # Check 0: Silently ignore FortiGate factory-default objects.
+            # These exist on every appliance and are not meaningful to migrate,
+            # so they are not reported as skipped/failed items.
+            if is_default_fortigate_address(object_name):
+                print(f"  Ignored: {object_name} (FortiGate default object)")
+                continue
+
             # Check 1: Skip if name is "none" (case-insensitive)
             if object_name.lower() == 'none':
                 print(f"  Skipped: {object_name} (name is 'none')")

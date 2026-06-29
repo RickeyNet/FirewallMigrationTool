@@ -1807,8 +1807,10 @@ class App(tk.Tk):
         # tall for a stacked layout). The sash is draggable.
         paned = ttk.PanedWindow(tab, orient=tk.HORIZONTAL)
         paned.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
-        left = ttk.Frame(paned)
-        paned.add(left, weight=0)
+        # The settings column is taller than the window, so make it scrollable
+        # to guarantee the action buttons at the bottom are always reachable.
+        left_container, left = self._make_scrollable(paned)
+        paned.add(left_container, weight=0)
         right = ttk.Frame(paned)
         paned.add(right, weight=1)
 
@@ -3088,6 +3090,57 @@ class App(tk.Tk):
     # ------------------------------------------------------------------
     # Shared widgets / helpers
     # ------------------------------------------------------------------
+    def _make_scrollable(self, parent: Any) -> tuple:
+        """Wrap a vertically scrollable area inside *parent*.
+
+        Returns ``(container, inner)``. Add ``container`` to the parent
+        (pack/grid/PanedWindow.add); pack your widgets into ``inner``. A
+        vertical scrollbar appears and the mouse wheel scrolls whenever the
+        content is taller than the visible area, so nothing (e.g. action
+        buttons at the bottom) can be clipped off-screen.
+        """
+        container = ttk.Frame(parent)
+        canvas = tk.Canvas(
+            container, background=_BG, highlightthickness=0, borderwidth=0,
+        )
+        vscroll = ttk.Scrollbar(
+            container, orient=tk.VERTICAL, command=canvas.yview,
+        )
+        canvas.configure(yscrollcommand=vscroll.set)
+        vscroll.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        inner = ttk.Frame(canvas)
+        window_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        def _on_inner_configure(_event: Any) -> None:
+            # Update the scrollable region and keep the canvas as wide as its
+            # content so nothing is clipped horizontally.
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.configure(width=inner.winfo_reqwidth())
+
+        inner.bind("<Configure>", _on_inner_configure)
+
+        def _on_canvas_configure(event: Any) -> None:
+            # Stretch the inner frame to fill the canvas when the canvas is
+            # wider than the content (so fill=X widgets behave as before).
+            if event.width > inner.winfo_reqwidth():
+                canvas.itemconfigure(window_id, width=event.width)
+            else:
+                canvas.itemconfigure(window_id, width=inner.winfo_reqwidth())
+
+        canvas.bind("<Configure>", _on_canvas_configure)
+
+        def _on_mousewheel(event: Any) -> None:
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        # Only scroll while the pointer is over this area; bind/unbind globally
+        # so the wheel still works no matter which child widget is hovered.
+        canvas.bind("<Enter>", lambda _e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
+
+        return container, inner
+
     def _make_output_area(self, parent: Any) -> tk.Text:
         """Create a scrollable text widget for command output."""
         frame = ttk.Frame(parent)

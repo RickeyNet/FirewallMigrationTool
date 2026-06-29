@@ -22,7 +22,7 @@ Output JSON:
 
 from typing import Any, Dict, List, Set, Tuple
 
-from pa_common import sanitize_name
+from pa_common import sanitize_name, is_default_fortigate_service
 
 
 # Protocols we skip (no equivalent PAN-OS service object)
@@ -76,6 +76,14 @@ class PAServiceConverter:
             svc_name = list(svc_dict.keys())[0]
             properties = svc_dict[svc_name]
             protocol = str(properties.get("protocol", "")).strip().lower()
+
+            # Silently ignore FortiGate factory-default services (e.g. "ALL").
+            # These exist on every appliance and are not meaningful to migrate.
+            # Register as skipped so any group referencing them is cleaned up.
+            if is_default_fortigate_service(svc_name):
+                print(f"  Ignored: {svc_name} (FortiGate default service)")
+                self._skipped_services.add(sanitize_name(svc_name))
+                continue
 
             # Skip non-port protocols
             if protocol in _SKIP_PROTOCOLS:
