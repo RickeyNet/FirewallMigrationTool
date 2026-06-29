@@ -98,6 +98,13 @@ FTD_MODELS = {
         'port_prefix': 'Ethernet1/',
         'ha_port': 'Ethernet1/2',  # Typically port 2 for HA
         'management_port': 'Management1/1',
+        # Ethernet1/1-1/8 are 1G RJ45 copper; 1/9-1/16 are 10G SFP+. LACP
+        # members must all be the same speed, so EtherChannel scale-up stays
+        # within one group (see _speed_group_of_port).
+        'port_speed_groups': {
+            '1G': [1, 2, 3, 4, 5, 6, 7, 8],
+            '10G': [9, 10, 11, 12, 13, 14, 15, 16],
+        },
         'description': '16-port firewall (8 RJ45 + 8 SFP) with HA support'
     },
     'ftd-3110': {
@@ -106,6 +113,12 @@ FTD_MODELS = {
         'port_prefix': 'Ethernet1/',
         'ha_port': 'Ethernet1/2',
         'management_port': 'Management1/1',
+        # 1/1-1/8 = 1G RJ45, 1/9-1/16 = 10G SFP+ (EtherChannel members must
+        # share a speed - see _speed_group_of_port).
+        'port_speed_groups': {
+            '1G': [1, 2, 3, 4, 5, 6, 7, 8],
+            '10G': [9, 10, 11, 12, 13, 14, 15, 16],
+        },
         'description': '16-port firewall (8 RJ45 + 8 SFP) with HA'
     },
     'ftd-3120': {
@@ -114,6 +127,12 @@ FTD_MODELS = {
         'port_prefix': 'Ethernet1/',
         'ha_port': 'Ethernet1/2',
         'management_port': 'Management1/1',
+        # 1/1-1/8 = 1G RJ45, 1/9-1/16 = 10G SFP+ (EtherChannel members must
+        # share a speed - see _speed_group_of_port).
+        'port_speed_groups': {
+            '1G': [1, 2, 3, 4, 5, 6, 7, 8],
+            '10G': [9, 10, 11, 12, 13, 14, 15, 16],
+        },
         'description': '16-port firewall (8 RJ45 + 8 SFP) with HA'
     },
     'ftd-3130': {
@@ -620,6 +639,35 @@ class InterfaceConverter:
             self.available_ftd_ports.remove(ftd_hardware)
         return True
 
+    def _speed_group_of_port(self, ftd_hardware: str) -> Optional[str]:
+        """Return the link-speed group label (e.g. '1G', '10G') for an FTD
+        port on the target model, or None if the model's ports are all the
+        same speed (no constraint) or the port can't be classified.
+
+        Used to keep EtherChannel (LACP) members within a single speed group -
+        mixing speeds in one channel is invalid on FTD.
+        """
+        groups = self.model_info.get('port_speed_groups') if self.model_info else None
+        if not groups:
+            return None
+        match = re.match(r'^Ethernet1/(\d+)$', str(ftd_hardware))
+        if not match:
+            return None
+        port_num = int(match.group(1))
+        for label, ports in groups.items():
+            if port_num in ports:
+                return label
+        return None
+
+    def _pop_available_port(self, speed_group: Optional[str] = None) -> Optional[str]:
+        """Pop the next free FTD port from the pool, optionally restricted to a
+        given link-speed group. Returns the hardware name, or None if no
+        matching port is free."""
+        for i, port in enumerate(self.available_ftd_ports):
+            if speed_group is None or self._speed_group_of_port(port) == speed_group:
+                return self.available_ftd_ports.pop(i)
+        return None
+
     def _apply_etherchannel_expansion(self, fg_name: str, spec: Any,
                                       ftd_members: List[Dict]) -> List[str]:
         """
@@ -636,6 +684,14 @@ class InterfaceConverter:
         """
         added = []
 
+        # All EtherChannel members must run at the same link speed (LACP rule).
+        # On mixed-speed models (e.g. the 3120: 1/1-1/8 = 1G, 1/9-1/16 = 10G)
+        # this constrains scale-up to the speed of the existing member(s) so we
+        # never bond a 1G port with a 10G port. Returns None on uniform-speed
+        # models, which disables the constraint.
+        speed_group = (self._speed_group_of_port(ftd_members[0]['hardwareName'])
+                       if ftd_members else None)
+
         if isinstance(spec, int):
             # Target TOTAL member count - auto-assign extra ports from the pool
             target = spec
@@ -644,12 +700,19 @@ class InterfaceConverter:
                       f"{len(ftd_members)} member(s) (target {target}) - no change")
                 return added
             while len(ftd_members) < target:
-                if not self.available_ftd_ports:
-                    print(f"      [WARNING] EtherChannel {fg_name}: not enough free "
-                          f"ports to reach {target} members "
-                          f"(stopped at {len(ftd_members)})")
+                ftd_hardware = self._pop_available_port(speed_group)
+                if not ftd_hardware:
+                    if speed_group:
+                        print(f"      [WARNING] EtherChannel {fg_name}: not enough free "
+                              f"{speed_group} ports to reach {target} members "
+                              f"(stopped at {len(ftd_members)}) - EtherChannel members "
+                              f"must all be the same speed, so faster/slower ports were "
+                              f"not mixed in")
+                    else:
+                        print(f"      [WARNING] EtherChannel {fg_name}: not enough free "
+                              f"ports to reach {target} members "
+                              f"(stopped at {len(ftd_members)})")
                     break
-                ftd_hardware = self.available_ftd_ports.pop(0)
                 self.assigned_ftd_ports.add(ftd_hardware)
                 if self._add_etherchannel_member(fg_name, ftd_hardware, ftd_members):
                     added.append(ftd_hardware)
@@ -659,10 +722,24 @@ class InterfaceConverter:
                 ftd_hardware = str(ftd_hardware).strip()
                 if not ftd_hardware:
                     continue
+                # Refuse a member whose speed doesn't match the channel - this
+                # is checked BEFORE reserving so the port stays in the free pool.
+                if speed_group is not None:
+                    member_group = self._speed_group_of_port(ftd_hardware)
+                    if member_group is not None and member_group != speed_group:
+                        print(f"      [WARNING] EtherChannel {fg_name}: port "
+                              f"'{ftd_hardware}' is a {member_group} port but the channel "
+                              f"uses {speed_group} ports - skipped (LACP members must all "
+                              f"be the same speed)")
+                        continue
                 if not self._reserve_explicit_port(fg_name, ftd_hardware):
                     continue
                 if self._add_etherchannel_member(fg_name, ftd_hardware, ftd_members):
                     added.append(ftd_hardware)
+                    # If the channel had no speed yet (e.g. a uniform base
+                    # member), adopt this member's group for the rest.
+                    if speed_group is None:
+                        speed_group = self._speed_group_of_port(ftd_hardware)
 
         if added:
             print(f"      [EXPAND] EtherChannel {fg_name}: added {len(added)} "
