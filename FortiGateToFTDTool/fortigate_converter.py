@@ -678,6 +678,8 @@ Supported FTD Models:
         print(f"  - Services split due to multiple ports: {service_stats['multi_port_services']}")
     if service_stats.get('icmp_skipped', 0) > 0:
         print(f"  - Skipped (ICMP/non-port protocols): {service_stats['icmp_skipped']}")
+    if service_stats.get('ping_services', 0) > 0:
+        print(f"  - ICMP ping migrated (echo request/reply -> PING group): {service_stats['ping_services']}")
     if service_stats['skipped_services'] > 0:
         print(f"  - Skipped (no ports defined): {service_stats['skipped_services']}")
 
@@ -718,6 +720,14 @@ Supported FTD Models:
 
     # Convert FortiGate service groups to FTD port groups
     port_groups = service_group_converter.convert()
+
+    # Append converter-generated groups not derived from a FortiGate service
+    # group (currently the "PING" group built for migrated ICMP ping services).
+    extra_port_groups = service_converter.get_extra_port_groups()
+    if extra_port_groups:
+        port_groups.extend(extra_port_groups)
+        for grp in extra_port_groups:
+            print(f"  Added: {grp['name']} ({len(grp.get('objects', []))} members)")
 
     print(f"[OK] Converted {len(port_groups)} port groups")
 

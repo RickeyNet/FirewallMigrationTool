@@ -86,6 +86,18 @@ for name in FTD_BUILTIN_UDP_SERVICES.keys():
 for name in FTD_BUILTIN_TCP_SERVICES.keys():
     FTD_BUILTIN_SERVICES.add(sanitize_name(name))
 
+# =============================================================================
+# ICMP "PING" handling
+# =============================================================================
+# FortiGate ICMP "ping" services (the predefined PING service, or any custom
+# ICMP service with icmptype 8 / echo request) cannot become TCP/UDP port
+# objects. Instead of dropping them, we migrate ping to two FTD ICMPv4 port
+# objects -- echo request and echo reply -- grouped into a port object group
+# called "PING". The group is what policies/groups referencing ping resolve to.
+PING_GROUP_NAME = "PING"
+PING_ECHO_REQUEST_NAME = "ICMP_Echo_Request"
+PING_ECHO_REPLY_NAME = "ICMP_Echo_Reply"
+
 class ServiceConverter:
     """
     Converter class for transforming FortiGate service objects to FTD port objects.
@@ -121,6 +133,13 @@ class ServiceConverter:
         self.multi_port_split_count = 0  # Services split due to multiple ports
         self.skipped_count = 0  # Services that couldn't be converted
         self.icmp_skipped_count = 0 # ICMP/non-port services skipped
+        self.ping_service_count = 0 # ICMP ping (echo) services migrated to PING group
+
+        # ICMPv4 port objects (echo request / echo reply) created for ping, plus
+        # the "PING" port object group that holds them. Built once, on demand,
+        # the first time a ping service is encountered.
+        self.icmp_port_objects: List[Dict] = []
+        self.ping_group: Dict = {}
 
         # Mapping of FortiGate service name -> list of FTD object names created
         # Used by ServiceGroupConverter to expand group members correctly
@@ -186,6 +205,87 @@ class ServiceConverter:
         
         return ports
     
+    def _is_ping_service(self, service_name: str, properties: Dict[str, Any],
+                         protocol: str, protocol_number: Any) -> bool:
+        """
+        Decide whether a FortiGate service is an ICMP "ping" (echo) service.
+
+        A service qualifies as ping if it is named PING, or if it is an ICMP
+        (not ICMPv6) service whose icmptype is 8 (echo request). FortiGate stores
+        the predefined PING service as protocol ICMP with icmptype 8.
+
+        Args:
+            service_name: Original FortiGate service name
+            properties: The service's property dict
+            protocol: Uppercased 'protocol' value
+            protocol_number: Raw 'protocol-number' value (if any)
+
+        Returns:
+            True if this service should be migrated as the PING port group.
+        """
+        if sanitize_name(service_name).upper() == PING_GROUP_NAME:
+            return True
+
+        # ICMPv4 only (protocol 1). ICMPv6 (58) is left for the normal skip path.
+        is_icmpv4 = protocol == 'ICMP' or protocol_number in (1, '1')
+        if not is_icmpv4:
+            return False
+
+        # icmptype 8 == echo request == ping. Compare loosely (int or string).
+        icmptype = properties.get('icmptype', properties.get('icmp-type'))
+        return str(icmptype).strip() == '8'
+
+    def _ensure_ping_objects(self) -> List[tuple]:
+        """
+        Build the two ICMPv4 echo port objects and the PING group, once.
+
+        Returns:
+            List of (object name, FTD type) tuples for the echo request/reply
+            objects, suitable for use in service_name_mapping so that groups and
+            policies referencing a ping service expand to these objects.
+        """
+        members = [
+            (PING_ECHO_REQUEST_NAME, "icmpv4portobject"),
+            (PING_ECHO_REPLY_NAME, "icmpv4portobject"),
+        ]
+
+        if not self.icmp_port_objects:
+            self.icmp_port_objects = [
+                {
+                    "name": PING_ECHO_REQUEST_NAME,
+                    "isSystemDefined": False,
+                    "icmpv4Type": "ECHO_REQUEST",
+                    "type": "icmpv4portobject",
+                },
+                {
+                    "name": PING_ECHO_REPLY_NAME,
+                    "isSystemDefined": False,
+                    "icmpv4Type": "ECHO_REPLY",
+                    "type": "icmpv4portobject",
+                },
+            ]
+            self.ping_group = {
+                "name": PING_GROUP_NAME,
+                "isSystemDefined": False,
+                "objects": [
+                    {"name": name, "type": otype} for name, otype in members
+                ],
+                "type": "portobjectgroup",
+            }
+
+        return members
+
+    def get_icmp_port_objects(self) -> List[Dict]:
+        """Return the ICMPv4 echo port objects created for ping (may be empty)."""
+        return self.icmp_port_objects
+
+    def get_extra_port_groups(self) -> List[Dict]:
+        """
+        Return port object groups created by this converter that are not derived
+        from a FortiGate service group -- currently just the "PING" group.
+        """
+        return [self.ping_group] if self.ping_group else []
+
     def convert(self) -> List[Dict]:
         """
         Main conversion method - converts all FortiGate services to FTD port objects.
@@ -249,10 +349,26 @@ class ServiceConverter:
             # STEP 2B: Check the protocol type
             # ================================================================
             protocol = properties.get('protocol', '').upper()
-            
+            protocol_number = properties.get('protocol-number', None)
+
+            # ============================================================
+            # Migrate ICMP "ping" (echo) services to the PING port group
+            # ============================================================
+            # Build two ICMPv4 port objects (echo request + echo reply) and a
+            # "PING" port object group, then map this service to those objects
+            # so any group/policy referencing ping stays valid. This must run
+            # before the ICMP skip blocks below.
+            if self._is_ping_service(service_name, properties, protocol, protocol_number):
+                ping_members = self._ensure_ping_objects()
+                self.service_name_mapping[sanitized_name] = ping_members
+                self.ping_service_count += 1
+                print(f"  Converted: {service_name} -> {PING_GROUP_NAME} group "
+                      f"(ICMP echo request + echo reply)")
+                continue
+
             # List of protocols to skip (not port-based services)
             skip_protocols = ['IP', 'ICMP', 'ICMP6', 'ICMPV6', 'IPIP', 'GRE', 'ESP', 'AH']
-            
+
             if protocol in skip_protocols:
                 print(f"  Skipped: {service_name} (Protocol: {protocol} - not a port-based service)")
                 self.icmp_skipped_count += 1
@@ -269,7 +385,6 @@ class ServiceConverter:
                 continue
             
             # Check if protocol-number field indicates ICMP (protocol 1) or ICMPv6 (protocol 58)
-            protocol_number = properties.get('protocol-number', None)
             if protocol_number in [1, 58, '1', '58']:
                 print(f"  Skipped: {service_name} (ICMP protocol number {protocol_number})")
                 self.icmp_skipped_count += 1
@@ -400,6 +515,9 @@ class ServiceConverter:
         # ====================================================================
         # STEP 3: Store results and return
         # ====================================================================
+        # Include any ICMPv4 echo (ping) objects created during conversion so
+        # they are imported alongside the TCP/UDP port objects.
+        port_objects.extend(self.icmp_port_objects)
         self.ftd_port_objects = port_objects
         return port_objects
     
@@ -417,7 +535,8 @@ class ServiceConverter:
             "split_services": self.split_count,  # Services with both TCP and UDP
             "multi_port_services": self.multi_port_split_count,  # Services with multiple ports
             "skipped_services": self.skipped_count,  # Services with no ports defined
-            "icmp_skipped": self.icmp_skipped_count  # ICMP and other non-port protocols
+            "icmp_skipped": self.icmp_skipped_count,  # ICMP and other non-port protocols
+            "ping_services": self.ping_service_count  # ICMP ping services -> PING group
         }
     
     def get_service_name_mapping(self) -> Dict[str, List[str]]:

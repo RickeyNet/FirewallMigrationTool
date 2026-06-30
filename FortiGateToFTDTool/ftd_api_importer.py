@@ -767,6 +767,10 @@ class FTDAPIClient(FTDBaseClient):
             endpoint = f"{self.base_url}/object/tcpports"
         elif obj_type == "udpportobject":
             endpoint = f"{self.base_url}/object/udpports"
+        elif obj_type == "icmpv4portobject":
+            endpoint = f"{self.base_url}/object/icmpv4ports"
+        elif obj_type == "icmpv6portobject":
+            endpoint = f"{self.base_url}/object/icmpv6ports"
         else:
             if track_stats:
                 self.record_stat("port_objects_failed")
