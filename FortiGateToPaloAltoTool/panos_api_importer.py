@@ -25,7 +25,7 @@ import json
 import argparse
 import sys
 import getpass
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional
 
 from panos_api_base import PANOSBaseClient, XPATHS
 
@@ -647,7 +647,7 @@ class PANOSImporter(PANOSBaseClient):
                 print(f"  - [{item['category']}] {item['name']}: {item['reason']}")
 
 
-def main() -> int:
+def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Import converted FortiGate config to Palo Alto PAN-OS",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -667,7 +667,7 @@ Examples:
     parser.add_argument("--commit", action="store_true", help="Automatically commit after import")
     parser.add_argument("--verify-ssl", action="store_true", help="Verify SSL certificate (default: disabled)")
     parser.add_argument("--debug", action="store_true", help="Enable debug output")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Prompt for password if not provided
     password = args.password

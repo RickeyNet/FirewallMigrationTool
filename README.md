@@ -7,18 +7,24 @@
 3. [Installation](#installation)
 4. [Quick Start Checklist](#quick-start-checklist)
 5. [Phase 1: Converting FortiGate Configuration](#phase-1-converting-fortigate-configuration)
+   - [Advanced Interface Mapping (Map / Promote / Expand)](#step-2c-advanced-interface-mapping-map--promote--expand)
+   - [Palo Alto PAN-OS Conversion](#palo-alto-pan-os-conversion)
 6. [Phase 2: Importing to Target Platform](#phase-2-importing-to-target-platform)
    - [Importing to Cisco FTD](#phase-2a-importing-to-ftd)
    - [Importing to Palo Alto PAN-OS](#phase-2b-importing-to-palo-alto-pan-os)
-7. [Phase 3: Cleanup (Optional)](#phase-3-cleanup-optional)
+7. [Other Migration Paths (Reverse & Cross-Vendor)](#other-migration-paths-reverse--cross-vendor)
+   - [Palo Alto PAN-OS → FortiGate](#palo-alto-pan-os--fortigate)
+   - [Cisco ASA → Palo Alto PAN-OS](#cisco-asa--palo-alto-pan-os)
+   - [Cisco FTD → FortiGate](#cisco-ftd--fortigate)
+8. [Phase 3: Cleanup (Optional)](#phase-3-cleanup-optional)
    - [Cleanup Password Protection](#cleanup-password-protection)
    - [Changing the Built-in Default Password](#changing-the-built-in-default-password)
-8. [SNMPv3 Configuration (FDM-Managed FTD)](#snmpv3-configuration-fdm-managed-ftd)
-9. [Performance and Concurrency](#performance-and-concurrency)
-10. [Troubleshooting](#troubleshooting)
-11. [Best Practices](#best-practices)
-12. [GUI How-To Guide](#gui-how-to-guide)
-13. [Appendix](#appendix)
+9. [SNMPv3 Configuration (FDM-Managed FTD)](#snmpv3-configuration-fdm-managed-ftd)
+10. [Performance and Concurrency](#performance-and-concurrency)
+11. [Troubleshooting](#troubleshooting)
+12. [Best Practices](#best-practices)
+13. [GUI How-To Guide](#gui-how-to-guide)
+14. [Appendix](#appendix)
 
 ---
 
@@ -41,6 +47,7 @@ This toolset converts FortiGate firewall configurations to **Cisco FTD** (Firepo
 | Address Groups       |        | Network object groups                                 |
 | Service Port Objects |        | TCP/UDP ports (auto-splits combined)                  |
 | Service Port Groups  |        | Port object groups                                    |
+| ICMP "ping"          |        | FortiGate→FTD: migrated to two ICMPv4 port objects (echo request + echo reply) grouped as `PING` |
 | Interfaces           |        | Physical, subinterfaces, etherchannels, bridge groups |
 | Security Zones       |        | Auto-created from interface aliases                   |
 | Static Routes        |        | IPv4 routes with gateway references                   |
@@ -49,9 +56,12 @@ This toolset converts FortiGate firewall configurations to **Cisco FTD** (Firepo
 ### Additional Features
 
 - Automatic name sanitization (spaces → underscores)
-- **Multi-platform support** - Convert to Cisco FTD or Palo Alto PAN-OS from the same FortiGate source
+- **Multi-platform support** - Convert to Cisco FTD or Palo Alto PAN-OS from the same FortiGate source, plus reverse/cross-vendor paths (Palo Alto → FortiGate, Cisco ASA → Palo Alto, Cisco FTD → FortiGate)
 - Model-aware interface port mapping with customizable HA port assignment (FTD)
-- Flexible HA port configuration (override model defaults)
+- **Advanced interface mapping** - pin interfaces to specific ports (`--map-port`), promote a physical port into a new EtherChannel/bridge group, or expand an existing one with extra members (`--promote-*` / `--expand-*`); see [Advanced Interface Mapping](#step-2c-advanced-interface-mapping-map--promote--expand)
+- **Network module support (FTD)** - add expansion-module ports (Ethernet2/x) to the available pool with `--network-module`
+- Flexible HA port configuration (override model defaults; supports dual-HA links via a comma-separated list)
+- ICMP "ping" migrated to an FTD `PING` port object group (echo request + echo reply)
 - Automatic VLAN ID conflict resolution (FTD requires device-wide unique VLAN IDs; conflicting subinterfaces are remapped automatically)
 - Metadata file for seamless import workflow
 - Bulk cleanup/delete script for rollback
@@ -459,6 +469,83 @@ The metadata file stores your model selection for the import process.
 
 💡 **Tip**: If you're migrating multiple FTD devices in an HA pair, use the same custom HA port on both devices for consistency.
 
+### Step 2c: Advanced Interface Mapping (Map / Promote / Expand)
+
+By default the converter maps FortiGate interfaces to FTD ports greedily in order. The flags below give you explicit control over how individual interfaces land on the target hardware. All of them are **repeatable** (pass the flag once per interface) and all are available on **both** `fortigate_converter.py` (FTD) and `pa_converter.py` (PAN-OS) - only the port-name syntax differs (`Ethernet1/9` for FTD, `ethernet1/9` for PAN-OS).
+
+The `SPEC` for promote/expand flags is one of two forms:
+- **A target total count** - e.g. `wan1=2` means "end up with 2 member ports" (the converter auto-assigns the extras from the free pool).
+- **An explicit port list** - e.g. `wan1=Ethernet1/6,Ethernet1/7` means "use exactly these ports as the added members."
+
+#### `--map-port IFACE=PORT` - straight port assignment
+
+Pin a FortiGate interface to a specific FTD port with no aggregation. The interface converts as a normal routed physical interface.
+
+```bash
+python FortiGateToFTDTool/fortigate_converter.py fortigate_config.yaml --target-model ftd-3120 \
+    --map-port wan1=Ethernet1/9 --map-port lan1=Ethernet1/10 --pretty
+```
+
+#### `--promote-portchannel IFACE=SPEC` - physical port → new EtherChannel
+
+Promote a plain FortiGate physical interface into a **new** FTD EtherChannel so it can carry multiple 10G links. The interface's MTU moves onto the port-channel. A routed port-channel cannot hold an IP directly, so pair this with `--promote-portchannel-vlan` if the interface had an IP.
+
+```bash
+# Promote wan1 into a 2-member port-channel and place its IP on Port-channelN.100
+python FortiGateToFTDTool/fortigate_converter.py fortigate_config.yaml --target-model ftd-3120 \
+    --promote-portchannel wan1=2 --promote-portchannel-vlan wan1=100 --pretty
+
+# Promote using explicit extra ports
+python FortiGateToFTDTool/fortigate_converter.py fortigate_config.yaml --target-model ftd-3120 \
+    --promote-portchannel wan1=Ethernet1/6 --pretty
+```
+
+#### `--expand-portchannel PC=SPEC` - grow an existing EtherChannel
+
+Increase the member count of an EtherChannel that already exists in the FortiGate config (a FortiGate aggregate/802.3ad interface).
+
+```bash
+# Take WAN_LAG up to 4 total members
+python FortiGateToFTDTool/fortigate_converter.py fortigate_config.yaml --target-model ftd-3120 \
+    --expand-portchannel WAN_LAG=4 --pretty
+
+# Add two specific ports to SRV_LAG
+python FortiGateToFTDTool/fortigate_converter.py fortigate_config.yaml --target-model ftd-3120 \
+    --expand-portchannel SRV_LAG=Ethernet1/5,Ethernet1/6 --pretty
+```
+
+#### `--promote-bridgegroup IFACE=SPEC` - physical port → new bridge group (BVI)
+
+Promote a plain FortiGate physical interface into a **new** FTD bridge group so its subnet can span several bridged ports. The interface's IP and MTU move onto the BVI.
+
+```bash
+python FortiGateToFTDTool/fortigate_converter.py fortigate_config.yaml --target-model ftd-3120 \
+    --promote-bridgegroup lan1=2 --pretty
+```
+
+#### `--expand-bridgegroup SWITCH=SPEC` - grow a bridge group
+
+Increase the member count of a bridge group built from a FortiGate virtual switch (`system_switch-interface`). `SWITCH` is the virtual-switch name.
+
+```bash
+python FortiGateToFTDTool/fortigate_converter.py fortigate_config.yaml --target-model ftd-3120 \
+    --expand-bridgegroup lan_switch=4 --pretty
+```
+
+#### `--network-module MODULE` - add expansion-module ports
+
+Models with a network-module slot (3110/3120/3130/3140, 4215) can take an add-on card. Declaring it adds the module's ports (`Ethernet2/1..N`) to the available pool so the mapping/promote/expand flags can target them.
+
+```bash
+# 8x10G module on an FTD-3120; now Ethernet2/1..8 are available
+python FortiGateToFTDTool/fortigate_converter.py fortigate_config.yaml --target-model ftd-3120 \
+    --network-module 8x10g --map-port wan2=Ethernet2/1 --pretty
+```
+
+Choices: `none` (default), `8x1g`, `8x10g`, `8x25g`, `4x40g`, `2x100g`.
+
+> **PAN-OS note:** the same flags work with `pa_converter.py`, where promote/expand build PAN-OS `aggregate-ethernet` interfaces and Layer-2 segments (VLAN + `vlan.N` SVI) instead of EtherChannels/bridge groups. PAN-OS has no `--network-module` flag.
+
 ### Step 3: Run the Conversion
 
 **Basic conversion (uses default ftd-3120):**
@@ -482,10 +569,20 @@ python FortiGateToFTDTool/fortigate_converter.py fortigate_config.yaml -o prod_f
 |------------------|-----------------------------------|--------------|
 | `input_file`     | FortiGate YAML configuration file | Required     |
 | `-o, --output`   | Output base name for JSON files   | `ftd_config` |
-| `--pretty`       | Format JSON with indentation      | Off          |
-| `--target-model` | Target FTD firewall model         | `ftd-3120`   |
+| `-p, --pretty`   | Format JSON with indentation      | Off          |
+| `-m, --target-model` | Target FTD firewall model     | `ftd-3120`   |
 | `--list-models`  | Display supported models and exit | -            |
-| `--ha-port`      | Custom HA port (`Ethernet1/X`) or `none` to disable | Model default (see table above) |
+| `--ha-port`      | Custom HA port(s) (`Ethernet1/X`, comma-separate for dual-HA) or `none` to disable | Model default (see table above) |
+| `--network-module` | Add an expansion module's ports to the pool: `none`, `8x1g`, `8x10g`, `8x25g`, `4x40g`, `2x100g` (slot models: 3110/3120/3130/3140, 4215) | `none` |
+| `--map-port`     | Pin a FortiGate interface to a specific FTD port, no aggregation: `IFACE=Ethernet1/X`. Repeatable | - |
+| `--promote-portchannel` | Promote a physical interface into a NEW EtherChannel: `IFACE=COUNT` or `IFACE=Ethernet1/X,...`. Repeatable | - |
+| `--expand-portchannel`  | Add members to an existing EtherChannel: `PC=COUNT` or `PC=Ethernet1/X,...`. Repeatable | - |
+| `--promote-portchannel-vlan` | When promoting to a port-channel, put the IP on a subinterface `Port-channelN.TAG`: `IFACE=TAG`. Repeatable | - |
+| `--promote-bridgegroup` | Promote a physical interface into a NEW bridge group (BVI): `IFACE=COUNT` or `IFACE=Ethernet1/X,...`. Repeatable | - |
+| `--expand-bridgegroup`  | Add members to a bridge group built from a virtual switch: `SWITCH=COUNT` or `SWITCH=Ethernet1/X,...`. Repeatable | - |
+
+See [Step 2c: Advanced Interface Mapping](#step-2c-advanced-interface-mapping-map--promote--expand) for detailed explanations and examples of the mapping flags.
+
 ### Step 4: Review Generated Files
 
 The converter creates 13 JSON files:
@@ -621,6 +718,13 @@ python FortiGateToPaloAltoTool/pa_converter.py --list-models
 
 The PA converter generates 10 JSON files (addresses, address groups, services, service groups, security rules, static routes, zones, interfaces, metadata, and summary).
 
+**Advanced interface mapping:** `pa_converter.py` supports the same `--map-port`, `--promote-portchannel`, `--expand-portchannel`, `--promote-portchannel-vlan`, `--promote-bridgegroup`, and `--expand-bridgegroup` flags as the FTD converter (see [Step 2c: Advanced Interface Mapping](#step-2c-advanced-interface-mapping-map--promote--expand)). On PAN-OS, promote/expand build `aggregate-ethernet` interfaces and Layer-2 segments (VLAN + `vlan.N` SVI). Use lowercase PAN-OS port names (`ethernet1/9`). There is no `--network-module` flag for PAN-OS.
+
+```bash
+python FortiGateToPaloAltoTool/pa_converter.py fortigate_config.yaml --target-model pa-3220 \
+    --map-port wan1=ethernet1/9 --promote-portchannel lan1=2 --pretty
+```
+
 **Key differences from FTD conversion:**
 - Services with both TCP and UDP are automatically split into two separate objects (PAN-OS requires one protocol per service)
 - Routes use CIDR notation directly instead of separate gateway network objects
@@ -720,13 +824,17 @@ python FortiGateToFTDTool/ftd_api_importer.py --host 192.168.1.1 -u admin --depl
 | `--deploy`        | Deploy changes after import                                  |
 | `--skip-verify`   | Skip SSL certificate verification (default: true)            |
 | `--debug`         | Enable debug output showing API payloads                     |
-| `--workers`       | Max concurrent threads for address/service imports (default: 6) |
+| `--workers`       | Max concurrent threads for address/service imports (1-32, default: 6) |
 | `--json-report`   | Write run summary to a JSON file                             |
 | `--validate-only` | Authenticate and probe endpoints without importing           |
 | `--skip-existing` | Skip objects that already exist (default: update existing)   |
+| `--max-attempts`  | Max retry attempts for transient API errors (default: 4)     |
+| `--base-backoff`  | Initial retry backoff in seconds (default: 0.3)              |
+| `--max-jitter`    | Max random jitter added to backoff, seconds (default: 0.25)  |
+| `--delay`         | Delay between sequential API calls, seconds (default: 0.2)   |
 | `--only-*`        | Import only specific object types                            |
 | `--file`          | Import specific JSON file                                    |
-| `--type`          | Object type for `--file`                                     |
+| `--type`          | Object type for `--file` (required with `--file`)           |
 
 ### Selective Import Options
 
@@ -813,6 +921,99 @@ python FortiGateToPaloAltoTool/panos_api_cleanup.py --host 10.0.0.1 --username a
 
 ---
 
+## Other Migration Paths (Reverse & Cross-Vendor)
+
+Besides FortiGate → FTD/PAN-OS, the toolset includes three more converters. Each is a standalone script you run from the **repository root**. These are **offline converters** - they produce a config file you import or restore yourself; there is no dedicated API importer for them (the ASA path reuses the PAN-OS importer).
+
+| Source → Target            | Script                                          | Output                  | How to apply the output                                  |
+|----------------------------|-------------------------------------------------|-------------------------|----------------------------------------------------------|
+| Palo Alto PAN-OS → FortiGate | `PaloAltoToFortiGateTool/fg_converter.py`     | FortiGate CLI `.conf`   | Restore on FortiGate (System → Configuration → Restore)  |
+| Cisco ASA → Palo Alto PAN-OS | `CiscoASAToPaloAltoTool/asa_converter.py`     | PAN-OS JSON files       | Import with `panos_api_importer.py` (see [Phase 2b](#phase-2b-importing-to-palo-alto-pan-os)) |
+| Cisco FTD → FortiGate        | `CiscoFTDToFortiGateTool/fg_ftd_converter.py` | FortiGate CLI `.conf`   | Restore on FortiGate (System → Configuration → Restore)  |
+
+### Palo Alto PAN-OS → FortiGate
+
+Converts an exported PAN-OS running-config XML into a FortiGate CLI `.conf` file.
+
+```bash
+# Basic conversion (writes fg_config.conf)
+python PaloAltoToFortiGateTool/fg_converter.py panos_running.xml
+
+# Custom output base name
+python PaloAltoToFortiGateTool/fg_converter.py panos_running.xml -o fg_migration
+
+# Convert a specific virtual system (vsys)
+python PaloAltoToFortiGateTool/fg_converter.py panos_running.xml --vsys vsys2
+```
+
+| Option         | Description                                   | Default     |
+|----------------|-----------------------------------------------|-------------|
+| `input_file`   | Path to the PAN-OS XML configuration file     | Required    |
+| `-o, --output` | Base name for the output `.conf` file         | `fg_config` |
+| `--vsys`       | Which virtual system to parse                 | `vsys1`     |
+
+**To get the PAN-OS XML:** in the PAN-OS web UI, Device → Setup → Operations → **Export named configuration snapshot** (or export the running config), then point the converter at the downloaded `.xml`.
+
+### Cisco ASA → Palo Alto PAN-OS
+
+Converts a Cisco ASA running-config text file into PAN-OS JSON files, using the same JSON format the FortiGate → PAN-OS path produces. The output is imported with the standard PAN-OS importer.
+
+```bash
+# Basic conversion (writes pa_config_*.json)
+python CiscoASAToPaloAltoTool/asa_converter.py Cisco_ASA_config.txt
+
+# Pretty-printed output with a custom base name
+python CiscoASAToPaloAltoTool/asa_converter.py Cisco_ASA_config.txt -o pa_config --pretty
+
+# Target a specific Palo Alto model
+python CiscoASAToPaloAltoTool/asa_converter.py Cisco_ASA_config.txt --target-model pa-3220 --pretty
+
+# List supported Palo Alto models
+python CiscoASAToPaloAltoTool/asa_converter.py --list-models
+```
+
+| Option               | Description                                      | Default     |
+|----------------------|--------------------------------------------------|-------------|
+| `input_file`         | Path to the Cisco ASA config (`.txt` / `.cfg`)   | Required    |
+| `-o, --output`       | Base name for output JSON files                  | `pa_config` |
+| `-p, --pretty`       | Format JSON with indentation                     | Off         |
+| `-m, --target-model` | Target Palo Alto model                           | `pa-440`    |
+| `--list-models`      | List supported Palo Alto models and exit         | -           |
+
+**Then import the generated JSON** to your Palo Alto firewall:
+
+```bash
+python FortiGateToPaloAltoTool/panos_api_importer.py --host 10.0.0.1 --username admin --input pa_config --commit
+```
+
+### Cisco FTD → FortiGate
+
+Converts a Cisco FTD (FDM-managed) configuration into a FortiGate CLI `.conf` file. It can read the config **live from the FDM API** or from a **JSON snapshot** exported from that API.
+
+```bash
+# Live FDM API mode (pulls the running config, then converts)
+python CiscoFTDToFortiGateTool/fg_ftd_converter.py --host 192.168.1.1 --username admin --password 'P@ss'
+
+# Live mode against a self-signed cert, custom output name
+python CiscoFTDToFortiGateTool/fg_ftd_converter.py --host 192.168.1.1 -o fg_migration --no-ssl-verify
+
+# Offline mode from a previously exported JSON snapshot (no device connection)
+python CiscoFTDToFortiGateTool/fg_ftd_converter.py --input-file ftd_snapshot.json -o fg_migration
+```
+
+| Option           | Description                                                              | Default     |
+|------------------|-------------------------------------------------------------------------|-------------|
+| `--input-file`   | Path to a JSON config exported from the FDM API (skips live connection) | -           |
+| `--host`         | FTD management IP/hostname (required unless `--input-file` is used)      | -           |
+| `--username`     | FDM username (live mode only)                                           | `admin`     |
+| `--password`     | FDM password (required for live mode)                                   | -           |
+| `-o, --output`   | Base name for the output `.conf` file                                   | `fg_config` |
+| `--no-ssl-verify`| Disable SSL verification for self-signed certs (live mode only)         | Off         |
+
+> Provide **either** `--input-file` (offline) **or** `--host` + `--password` (live). The two FortiGate-CLI outputs above are restored on the FortiGate appliance, not pushed via API.
+
+---
+
 ## Phase 3: Cleanup (Optional)
 
 Run these commands from the **repository root** using the `FortiGateToFTDTool/` paths below (or `cd FortiGateToFTDTool` and drop the prefix).
@@ -872,7 +1073,22 @@ python FortiGateToFTDTool/ftd_api_cleanup.py --host 192.168.1.1 -u admin --delet
 python FortiGateToFTDTool/ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-etherchannels
 python FortiGateToFTDTool/ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-snmp
 python FortiGateToFTDTool/ftd_api_cleanup.py --host 192.168.1.1 -u admin --reset-physical-interfaces
+
+# Delete/reset ALL interface configs in one shot (subinterfaces, etherchannels, bridge groups, reset physical)
+python FortiGateToFTDTool/ftd_api_cleanup.py --host 192.168.1.1 -u admin --delete-all-interfaces
 ```
+
+**Additional cleanup flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--delete-all-interfaces` | Delete/reset all interface configs (subinterfaces, etherchannels, bridge groups, physical reset) |
+| `--yes` | Skip the confirmation prompt (for unattended/scripted runs) |
+| `--appliance-model` | Target FTD model (e.g. `ftd-3120`); auto-detected from metadata if omitted |
+| `--validate-only` | Authenticate and probe endpoints without deleting anything |
+| `--json-report` | Write the cleanup summary to a JSON file |
+| `--workers` | Concurrent threads for object/route deletion (1-32, default: 6) |
+| `--max-attempts` / `--base-backoff` / `--max-jitter` / `--delay` | Retry/backoff tuning (same defaults as the importer) |
 
 ### Cleanup Password Protection
 
@@ -1335,7 +1551,7 @@ python gui_app.py
 ```
 
 **From compiled executable:**
-Double-click `Firewall-Migration-Tool-v1.5.1.exe` (no Python installation required).
+Double-click `Firewall-Migration-Tool-v1.6.0.exe` (no Python installation required).
 
 The application opens at 960x720 and is resizable (minimum 800x600).
 
@@ -1726,8 +1942,49 @@ python FortiGateToFTDTool/fortigate_converter.py config.yaml -o prod_ftd --targe
 # List supported models
 python FortiGateToFTDTool/fortigate_converter.py --list-models
 
+# Custom / multiple HA ports (dual-HA)
+python FortiGateToFTDTool/fortigate_converter.py config.yaml --ha-port Ethernet1/2,Ethernet1/3 --pretty
+
+# Advanced interface mapping
+python FortiGateToFTDTool/fortigate_converter.py config.yaml --map-port wan1=Ethernet1/9 --pretty
+python FortiGateToFTDTool/fortigate_converter.py config.yaml --promote-portchannel wan1=2 --promote-portchannel-vlan wan1=100 --pretty
+python FortiGateToFTDTool/fortigate_converter.py config.yaml --expand-portchannel WAN_LAG=4 --pretty
+python FortiGateToFTDTool/fortigate_converter.py config.yaml --promote-bridgegroup lan1=2 --pretty
+python FortiGateToFTDTool/fortigate_converter.py config.yaml --expand-bridgegroup lan_switch=4 --pretty
+python FortiGateToFTDTool/fortigate_converter.py config.yaml --network-module 8x10g --map-port wan2=Ethernet2/1 --pretty
+
 # Help
 python FortiGateToFTDTool/fortigate_converter.py --help
+```
+
+**Palo Alto Conversion Commands:**
+```bash
+# Basic / model-specific conversion
+python FortiGateToPaloAltoTool/pa_converter.py config.yaml --pretty
+python FortiGateToPaloAltoTool/pa_converter.py config.yaml --target-model pa-3220 --pretty
+
+# Advanced interface mapping (same flags as FTD; lowercase PAN-OS port names)
+python FortiGateToPaloAltoTool/pa_converter.py config.yaml --map-port wan1=ethernet1/9 --pretty
+python FortiGateToPaloAltoTool/pa_converter.py config.yaml --promote-portchannel lan1=2 --pretty
+
+# List models / help
+python FortiGateToPaloAltoTool/pa_converter.py --list-models
+python FortiGateToPaloAltoTool/pa_converter.py --help
+```
+
+**Other Migration Paths:**
+```bash
+# Palo Alto PAN-OS -> FortiGate CLI (.conf)
+python PaloAltoToFortiGateTool/fg_converter.py panos_running.xml -o fg_migration
+python PaloAltoToFortiGateTool/fg_converter.py panos_running.xml --vsys vsys2
+
+# Cisco ASA -> Palo Alto JSON (then import with panos_api_importer.py)
+python CiscoASAToPaloAltoTool/asa_converter.py Cisco_ASA_config.txt -o pa_config --pretty
+python CiscoASAToPaloAltoTool/asa_converter.py Cisco_ASA_config.txt --target-model pa-3220 --pretty
+
+# Cisco FTD -> FortiGate CLI (.conf), live API or offline snapshot
+python CiscoFTDToFortiGateTool/fg_ftd_converter.py --host 192.168.1.1 --username admin --password 'P@ss' --no-ssl-verify
+python CiscoFTDToFortiGateTool/fg_ftd_converter.py --input-file ftd_snapshot.json -o fg_migration
 ```
 
 **Import Commands:**
@@ -1850,6 +2107,6 @@ python FortiGateToFTDTool/ftd_snmp_config.py --help
 
 ---
 
-**Document Version:** 3.1
+**Document Version:** 3.2
 **Last Updated:** June 2026
 **Compatible With:** FTD 7.4.x with FDM, PAN-OS 10.1+, Python 3.9+

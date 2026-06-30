@@ -30,7 +30,7 @@ import argparse
 import sys
 import getpass
 import xml.etree.ElementTree as ET
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from panos_api_base import PANOSBaseClient, XPATHS
 
@@ -265,7 +265,7 @@ class PANOSBulkDelete(PANOSBaseClient):
         print(f"{'=' * 60}")
 
 
-def main() -> int:
+def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Bulk delete objects from Palo Alto PAN-OS",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -298,7 +298,7 @@ Examples:
     parser.add_argument("--delete-interfaces", action="store_true",
                         help="Reset ethernet interfaces and delete aggregate-ethernet configs")
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Validate at least one delete flag
     has_delete = (
