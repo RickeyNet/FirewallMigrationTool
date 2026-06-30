@@ -85,10 +85,20 @@ def _profile_feature(name: str, default: bool = True) -> bool:
 
 _CLEANUP_ENABLED = _profile_feature("cleanup", True)
 
-for _name in _ENABLED_TOOL_DIR_NAMES:
-    _d = _TOOL_DIRS.get(_name)
-    if _d and os.path.isdir(_d) and _d not in sys.path:
-        sys.path.insert(0, _d)
+# Add the on-disk tool directories to sys.path ONLY when running from source.
+#
+# In a frozen (PyInstaller) build, every tool module is bundled inside the
+# executable. APP_DIR then points at the folder the .exe lives in, so inserting
+# APP_DIR-relative tool dirs would let a stale copy of the source that happens
+# to sit next to the .exe (e.g. on a file share) shadow the bundled modules.
+# That causes version-mismatch crashes like "main() takes 0 positional
+# arguments but 1 was given" when the bundled GUI calls an old on-disk main().
+# When frozen we rely solely on the bundled modules (via _PKG_DIR / _MEIPASS).
+if not getattr(sys, "frozen", False):
+    for _name in _ENABLED_TOOL_DIR_NAMES:
+        _d = _TOOL_DIRS.get(_name)
+        if _d and os.path.isdir(_d) and _d not in sys.path:
+            sys.path.insert(0, _d)
 if _PKG_DIR not in sys.path:
     sys.path.insert(0, _PKG_DIR)
 
