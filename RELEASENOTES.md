@@ -1,6 +1,6 @@
 # Release Notes
 
-## v1.7.0 - Interface Scale-Up for FortiGate -> Palo Alto
+## v1.6.0 - Interface Scale-Up for FortiGate -> Palo Alto
 
 ### Overview
 
