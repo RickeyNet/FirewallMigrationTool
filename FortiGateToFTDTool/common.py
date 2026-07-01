@@ -27,6 +27,7 @@ DEFAULT_FORTIGATE_ADDRESS_OBJECTS = frozenset({
 
 DEFAULT_FORTIGATE_SERVICE_OBJECTS = frozenset({
     "all",
+    "none",
     "all_icmp",
     "all_icmp6",
     "all_icmp_type",
